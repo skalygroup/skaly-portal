@@ -1,0 +1,14 @@
+version: '3.9'
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: skaly_dev, POSTGRES_USER: skaly, POSTGRES_PASSWORD: localdev }
+    ports: ["5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "skaly"], interval: 5s, retries: 5 }
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+volumes:
+  postgres_data:
