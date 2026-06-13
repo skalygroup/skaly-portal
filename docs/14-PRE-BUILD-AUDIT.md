@@ -1,5 +1,5 @@
 # 14 — PRE-BUILD AUDIT (FINAL)
-## Scaly Business Portal — Document Suite V2.1 → Build Readiness Review
+## Skaly Business Portal — Document Suite V2.1 → Build Readiness Review
 **Version:** 2.2 | **Date:** June 2026 | **Status:** Final — Build Gate
 **Auditor scope:** All 13 V2.1 documents (PRD, TRD, UI/UX, APPFLOW, BACKEND-SCHEMA, IMPLEMENTATION-PLAN, API-CONTRACT, AUTH-MATRIX, ERROR-HANDLING, INFRA-DEPLOYMENT, THIRD-PARTY-INTEGRATIONS, TESTING-STRATEGY, NFRS)
 **Cross-refs:** All thirteen V2.1 source documents
@@ -368,7 +368,7 @@ These won't block launch but should land within the 14-sprint window.
 |---|---|
 | **Where** | `13-NFRS.md` §6.1 ("Below 768px, the web app is not supported — use the mobile app (Phase 2)") |
 | **What** | Mobile app is Phase 2. So at MVP launch, a user opening portal.skaly.in on their phone sees… what? Unspecified. |
-| **Action** | Render a polite, branded fallback page: Skaly logo, "Scaly Business Portal requires a desktop browser. Mobile app coming Q3 2026." Implement as a Next.js media query gate at app layout level. |
+| **Action** | Render a polite, branded fallback page: Skaly logo, "Skaly Business Portal requires a desktop browser. Mobile app coming Q3 2026." Implement as a Next.js media query gate at app layout level. |
 | **Owner** | D1 |
 | **Sprint** | Sprint 0 (build the gate) |
 
@@ -743,7 +743,7 @@ Additions and changes to `06-IMPLEMENTATION-PLAN.md` §17:
 
 ## 14. FINAL VERDICT
 
-**The Scaly Business Portal V2.1 document suite is build-ready conditional on Sprint 0 resolving 3 blockers and 6 criticals.**
+**The Skaly Business Portal V2.1 document suite is build-ready conditional on Sprint 0 resolving 3 blockers and 6 criticals.**
 
 These 9 items are concentrated in Sprint 0 and total an estimated 3–5 developer-days of work (most are doc patches, one is a migration, two are reference implementations). The Sprint 0 timeline already has slack for foundation work — these absorb cleanly.
 

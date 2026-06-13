@@ -1,5 +1,5 @@
 # 09 — ERROR HANDLING SPECIFICATION
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** TRD §5.2, API-CONTRACT §1.2, TESTING-STRATEGY §5
 

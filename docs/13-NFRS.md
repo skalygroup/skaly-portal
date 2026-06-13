@@ -1,5 +1,5 @@
 # 13 — NON-FUNCTIONAL REQUIREMENTS (NFRs)
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** TRD §14, IMPL-PLAN §16, TESTING-STRATEGY §7, INFRA §8
 

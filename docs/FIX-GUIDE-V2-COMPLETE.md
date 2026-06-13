@@ -1,4 +1,4 @@
-# SCALY PORTAL — COMPLETE FIX GUIDE V2
+# SKALY PORTAL — COMPLETE FIX GUIDE V2
 ## For Mohammed Arslaan — Every Pending Item Solved
 **Plain English. No jargon. Exact file paths. Copy-paste prompts.**
 
@@ -697,7 +697,7 @@ Your portal requires at least 1280px wide screen. On a phone, the layout breaks 
 >
 > Before that div, add a new div with class `flex md:hidden` (shows on small screens, hidden on 768px+). This div should display a centered, full-screen message with:
 > - Background: `--bg-base` color (`#0D0D0F`)
-> - 'Scaly Business Portal' heading in Big Shoulders Display font, gold color (`#FDC257`), centered
+> - 'Skaly Business Portal' heading in Big Shoulders Display font, gold color (`#FDC257`), centered
 > - Text below: 'This portal requires a desktop browser.' in DM Sans, secondary text color
 > - Text below that: 'Mobile app coming soon.' in smaller, muted text
 >
@@ -895,7 +895,7 @@ If anyone new joins the project — or if you come back to it after a month away
 **🤖 AI PROMPT 1 — Create the README:**
 > "Create a `README.md` file in the root of my monorepo (not inside any app folder — at the top level). Include these sections:
 >
-> **# Scaly Business Portal**
+> **# Skaly Business Portal**
 > Brief description: 'Internal operations platform for Skaly Group. Replaces Google Sheets + WhatsApp coordination with a unified, role-aware portal for content production management.'
 >
 > **## Quick Start**
@@ -947,7 +947,7 @@ Your API Contract document (the markdown file) describes every endpoint. But dev
 >
 > First, register `@fastify/swagger` with:
 > - openapi version: `'3.0.0'`
-> - info.title: `'Scaly Business Portal API'`
+> - info.title: `'Skaly Business Portal API'`
 > - info.description: `'Internal portal API — requires JWT authentication on all protected routes'`
 > - info.version: `'1.0.0'`
 > - servers: `[{ url: 'https://api.skaly.in/v1' }]`

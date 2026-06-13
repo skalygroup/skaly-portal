@@ -1,5 +1,5 @@
 # 04 — APPLICATION FLOW SPECIFICATION (APPFLOW)
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** PRD §3-4, TRD §7-9, UI/UX §5-21, AUTH-MATRIX §3-5
 

@@ -1,5 +1,5 @@
 # 10 — INFRASTRUCTURE & DEPLOYMENT SPECIFICATION
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** TRD §2.4, IMPL-PLAN §3, THIRD-PARTY §1-7
 

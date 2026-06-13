@@ -1,5 +1,5 @@
 # 12 — TESTING STRATEGY
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** TRD §5.2, ERROR-HANDLING §4-5, IMPL-PLAN §3-5, NFR §1
 

@@ -1,5 +1,5 @@
 # 03 — UI/UX DESIGN SPECIFICATION
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** PRD §3, TRD §2.5, APPFLOW §1-20, AUTH-MATRIX §3
 

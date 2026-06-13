@@ -1,5 +1,5 @@
 # CRITICAL-PATCHES.md
-## Scaly Business Portal — Drop-In Fixes for Pre-Build Audit Findings
+## Skaly Business Portal — Drop-In Fixes for Pre-Build Audit Findings
 **Companion to:** `14-PRE-BUILD-AUDIT.md` (V2.2)
 **Status:** Final — Ready to apply
 
@@ -995,7 +995,7 @@ export async function handleBotMessage(params: HandleParams): Promise<void> {
 function buildSystemPrompt({ role, period, staffId }: { role: string; period: string; staffId: string }): string {
   const istNow = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'full', timeStyle: 'short' }).format(new Date());
 
-  return `You are the Scaly Business Portal AI assistant. The current IST date and time is ${istNow}. The current operational period is ${period} (YYYY-MM format).
+  return `You are the Skaly Business Portal AI assistant. The current IST date and time is ${istNow}. The current operational period is ${period} (YYYY-MM format).
 
 The user's role is "${role}". You only have access to the tools listed in this request. If a requested action is not in your tool list, you do not have permission for it — say so without revealing which roles do have access.
 

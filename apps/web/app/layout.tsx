@@ -26,7 +26,7 @@ const dmMono = DM_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Scaly Business Portal',
+  title: 'Skaly Business Portal',
   description: 'Internal operations platform for Skaly Group',
 };
 

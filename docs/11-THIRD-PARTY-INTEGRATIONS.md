@@ -1,5 +1,5 @@
 # 11 — THIRD-PARTY INTEGRATION SPECIFICATION
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** TRD §2.3-2.4, TRD §12-13, INFRA §6, AUTH-MATRIX §10
 

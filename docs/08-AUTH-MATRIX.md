@@ -1,5 +1,5 @@
 # 08 — AUTH & AUTHORIZATION MATRIX
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** TRD §7, PRD §4, API-CONTRACT §3-5
 

@@ -1,5 +1,5 @@
 # 01 — PRODUCT REQUIREMENTS DOCUMENT (PRD)
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** TRD §2, UI/UX §4-18, APPFLOW §2-20, AUTH-MATRIX §3, NFR §1-5
 
@@ -8,7 +8,7 @@
 ## 1. PRODUCT OVERVIEW
 
 ### 1.1 Purpose
-The Scaly Business Portal is Skaly Group's private internal operations platform. It replaces the current fragmented stack (Google Sheets, WhatsApp, verbal coordination) with a unified, role-aware, real-time system for managing the agency's complete monthly content production cycle.
+The Skaly Business Portal is Skaly Group's private internal operations platform. It replaces the current fragmented stack (Google Sheets, WhatsApp, verbal coordination) with a unified, role-aware, real-time system for managing the agency's complete monthly content production cycle.
 
 ### 1.2 Problem Statement
 Skaly Group currently coordinates operations across multiple clients using:

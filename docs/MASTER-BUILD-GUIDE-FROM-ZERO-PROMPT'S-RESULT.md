@@ -1,4 +1,4 @@
-# SCALY BUSINESS PORTAL — COMPLETE MASTER BUILD GUIDE
+# SKALY BUSINESS PORTAL — COMPLETE MASTER BUILD GUIDE
 ## Starting From Zero: No Code, No Accounts, No Git, Nothing
 **Written for Mohammed Arslaan — Plain English, Every Step**
 
@@ -405,7 +405,7 @@ Sprint 0 is not about building features. It's about setting up the project skele
 
 **Give this prompt to Claude Code:**
 
-> "I'm building the Scaly Business Portal — an internal operations platform. Read `docs/02-TRD.md` Section 3 for the exact folder structure required.
+> "I'm building the Skaly Business Portal — an internal operations platform. Read `docs/02-TRD.md` Section 3 for the exact folder structure required.
 >
 > Create the complete monorepo structure at the root of this project:
 >
@@ -1205,7 +1205,7 @@ Send the `portal.skaly.in` URL to your team.
 ### Starting a New Claude Code Session
 
 Always begin with:
-> "I'm building the Scaly Business Portal. My spec documents are in the `docs/` folder of this project. I'm currently on Sprint [X], building [feature]. Read these documents before starting: [list the relevant docs]."
+> "I'm building the Skaly Business Portal. My spec documents are in the `docs/` folder of this project. I'm currently on Sprint [X], building [feature]. Read these documents before starting: [list the relevant docs]."
 
 ### The "Where Am I" Check
 

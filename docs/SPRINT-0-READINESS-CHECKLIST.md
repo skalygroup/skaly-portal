@@ -1,5 +1,5 @@
 # SPRINT-0-READINESS-CHECKLIST.md
-## Scaly Business Portal — Sprint 0 Close-Out Gate
+## Skaly Business Portal — Sprint 0 Close-Out Gate
 **Companion to:** `14-PRE-BUILD-AUDIT.md`, `CRITICAL-PATCHES.md`
 **Use:** Tick each item as it lands. Do not start Sprint 1 with any unticked blocker or critical.
 

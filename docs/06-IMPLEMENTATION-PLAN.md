@@ -1,5 +1,5 @@
 # 06 — IMPLEMENTATION PLAN
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** PRD §3-4, TRD §3, BACKEND-SCHEMA §2, INFRA §3
 

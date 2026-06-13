@@ -7,7 +7,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
         <div className="text-center">
           <h1 style={{ fontFamily: 'var(--font-display)', color: 'var(--accent-gold)' }}
               className="text-3xl font-bold">
-            Scaly Business Portal
+            Skaly Business Portal
           </h1>
           <p style={{ fontFamily: 'var(--font-body)', color: 'var(--text-secondary)' }}
              className="mt-4">

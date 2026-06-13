@@ -1,5 +1,5 @@
 # 05 — BACKEND SCHEMA
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** TRD §6, API-CONTRACT §2, AUTH-MATRIX §2, IMPLEMENTATION-PLAN §3
 

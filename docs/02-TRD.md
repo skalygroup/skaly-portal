@@ -1,5 +1,5 @@
 # 02 — TECHNICAL REQUIREMENTS DOCUMENT (TRD)
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** PRD §4, BACKEND-SCHEMA §1-9, AUTH-MATRIX §2-5, API-CONTRACT §1-3, INFRA §1-6
 
@@ -7,7 +7,7 @@
 
 ## 1. SYSTEM ARCHITECTURE OVERVIEW
 
-The Scaly Business Portal is a three-tier web application: Next.js 15 frontend on Vercel, Fastify 5 API on Railway, and PostgreSQL 16 on Railway as the primary data store. Supabase provides JWT issuance and OAuth only — it is not used for direct database operations.
+The Skaly Business Portal is a three-tier web application: Next.js 15 frontend on Vercel, Fastify 5 API on Railway, and PostgreSQL 16 on Railway as the primary data store. Supabase provides JWT issuance and OAuth only — it is not used for direct database operations.
 
 ```
 Browser (portal.skaly.in)

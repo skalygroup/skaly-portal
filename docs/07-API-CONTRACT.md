@@ -1,5 +1,5 @@
 # 07 — API CONTRACT / ENDPOINT SPECIFICATION
-## Scaly Business Portal
+## Skaly Business Portal
 **Version:** 2.1 | **Date:** June 2026 | **Status:** Final — Locked
 **Cross-refs:** TRD §5, AUTH-MATRIX §3, ERROR-HANDLING §2-3, BACKEND-SCHEMA §3-5
 
