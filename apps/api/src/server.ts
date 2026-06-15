@@ -15,6 +15,8 @@ import { Redis } from 'ioredis';
 import { logger } from './lib/logger.js';
 import { pool } from './lib/db.js';
 import { redis } from './lib/redis.js';
+import internalAuthPlugin from './middleware/internalAuth.plugin.js';
+import { setupSocketTokenWatcher } from './middleware/socketTokenWatcher.plugin.js';
 
 // ── Fastify instance ───────────────────────────────────────────────
 const app = Fastify({
@@ -47,6 +49,9 @@ await app.register(rateLimit, {
 await app.register(sensible);
 await app.register(multipart);
 
+// ── Internal auth (B-03: timing-safe CRON_SECRET) ──────────────────
+await app.register(internalAuthPlugin);
+
 // ── Socket.io with Redis adapter (TRD §8) ──────────────────────────
 const io = new Server(app.server, {
   cors: {
@@ -61,6 +66,9 @@ const pubClient = new Redis(
 );
 const subClient = pubClient.duplicate();
 io.adapter(createAdapter(pubClient, subClient));
+
+// ── Socket.io JWT refresh watcher (C-05) ───────────────────────────
+setupSocketTokenWatcher(io);
 
 // ── Health route ───────────────────────────────────────────────────
 app.get('/v1/health', async (_request, reply) => {

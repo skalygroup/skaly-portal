@@ -10,7 +10,10 @@ declare module 'fastify' {
   }
   interface FastifyInstance {
     verifyJwt: any; // populated by auth.plugin.ts in Sprint 1
-    verifyInternalSecret: any; // populated by internalAuth.plugin.ts in STEP 7
+    verifyInternalSecret: (
+      request: FastifyRequest,
+      reply: FastifyReply,
+    ) => Promise<void>; // populated by internalAuth.plugin.ts
   }
 }
 export {};
