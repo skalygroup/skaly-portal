@@ -5,10 +5,10 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "dependencies": {
-    "zod": "latest"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "typescript": "latest",
-    "@types/node": "latest"
+    "typescript": "^5.9.3",
+    "@types/node": "^22.19.21"
   }
 }

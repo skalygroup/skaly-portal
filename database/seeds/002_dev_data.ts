@@ -1,11 +1,14 @@
-if (process.env.NODE_ENV === 'production') { 
-  console.log('Skipping dev seed — production'); 
-  process.exit(0); 
-}
-
 import { Kysely } from 'kysely';
 
 export async function seedDevData(db: Kysely<any>) {
+  // Function-level guard (not module top-level): seed.ts imports this
+  // module, so a top-level process.exit() would abort the whole seed —
+  // including the production-safe system actor — before it runs.
+  if (process.env.NODE_ENV === 'production') {
+    console.log('Skipping dev seed — production');
+    return;
+  }
+
   const now = new Date();
   const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const label = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });

@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
-import { Big_Shoulders, DM_Sans, DM_Mono, Geist } from 'next/font/google';
+// Google renamed "Big Shoulders Display" to "Big Shoulders"; this Next
+// version exports it as `Big_Shoulders` (NOT `Big_Shoulders_Display`).
+import { Big_Shoulders, DM_Sans, DM_Mono } from 'next/font/google';
 import './globals.css';
 import { cn } from "@/lib/utils";
-
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 const bigShoulders = Big_Shoulders({
   subsets: ['latin'],
@@ -32,7 +32,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={cn(bigShoulders.variable, dmSans.variable, dmMono.variable, "font-sans", geist.variable)}>
+    <html lang="en" className={cn(bigShoulders.variable, dmSans.variable, dmMono.variable, "font-sans")}>
       <body>{children}</body>
     </html>
   );

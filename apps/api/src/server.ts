@@ -8,6 +8,7 @@ import multipart from '@fastify/multipart';
 import {
   serializerCompiler,
   validatorCompiler,
+  jsonSchemaTransform,
 } from 'fastify-type-provider-zod';
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
@@ -17,15 +18,33 @@ import { pool } from './lib/db.js';
 import { redis } from './lib/redis.js';
 import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import { setupSocketTokenWatcher } from './middleware/socketTokenWatcher.plugin.js';
+import { healthRoutes } from './routes/health.js';
 
 // ── Fastify instance ───────────────────────────────────────────────
+// Fastify 5 split logger config: a pre-built logger INSTANCE must be passed
+// as `loggerInstance` (the `logger` option only accepts a config object/bool).
 const app = Fastify({
-  logger: logger as any,
+  loggerInstance: logger,
 });
 
 // Zod type provider
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
+
+// ── Swagger / OpenAPI (dev only, audit M-12) ───────────────────────
+if (env.NODE_ENV !== 'production') {
+  await app.register(import('@fastify/swagger'), {
+    openapi: {
+      info: { title: 'Skaly Portal API', version: '0.1.0' },
+      servers: [{ url: `http://localhost:${env.PORT}` }],
+    },
+    transform: jsonSchemaTransform,
+  });
+  await app.register(import('@fastify/swagger-ui'), {
+    routePrefix: '/docs',
+  });
+  logger.info('Swagger UI available at /docs (dev only)');
+}
 
 // ── Core plugins ───────────────────────────────────────────────────
 await app.register(helmet);
@@ -71,30 +90,7 @@ io.adapter(createAdapter(pubClient, subClient));
 setupSocketTokenWatcher(io);
 
 // ── Health route ───────────────────────────────────────────────────
-app.get('/v1/health', async (_request, reply) => {
-  const [dbCheck, redisCheck] = await Promise.allSettled([
-    pool.query('SELECT 1'),
-    redis.ping(),
-  ]);
-
-  const dbOk = dbCheck.status === 'fulfilled';
-  const redisOk = redisCheck.status === 'fulfilled';
-  const ok = dbOk && redisOk;
-
-  return reply.status(ok ? 200 : 503).send({
-    status: ok ? 'ok' : 'degraded',
-    services: {
-      database: dbOk ? 'ok' : 'error',
-      redis: redisOk ? 'ok' : 'error',
-    },
-    pool: {
-      total: pool.totalCount,
-      idle: pool.idleCount,
-      waiting: pool.waitingCount,
-    },
-    timestamp: new Date().toISOString(),
-  });
-});
+await app.register(healthRoutes);
 
 // ── Start ──────────────────────────────────────────────────────────
 const start = async () => {
