@@ -2,7 +2,7 @@
 
 Internal operations platform for Skaly Group. Performance marketing, content production, attendance, and reporting in one place.
 
-**Status:** in development. Targeting first production launch end of Sprint 13.
+**Status:** in development — targeting first production launch at the end of Sprint 13.
 
 ---
 
@@ -139,7 +139,68 @@ All in `docs/`:
 Proprietary — internal Skaly Group software. All rights reserved.
 `UPDATE`/`DELETE` revoked (migration `026_database_roles`).
 
+## Development rules
+
+These are project conventions, not yet all enforced in code — follow them as the
+relevant services are built out. Each cites where it is specified.
+
+- **Soft delete only** for user-facing entities. Set `deleted_at`; never `DELETE FROM`
+  directly. (Fix Guide V2 H-02.)
+- **`audit_log` is append-only.** The `skaly_app` role is granted `INSERT` but has
+  `UPDATE`/`DELETE` revoked (migration `026_database_roles`). Route all writes through
+  the audit service.
+- **Optimistic locking** via a `version` column on editable rows — read the version,
+  write with a `WHERE version = ?` guard, bump on success. (Audit C-02.)
+- **System actor for automated writes.** Audit/system rows reference the seeded System
+  staff row `00000000-0000-0000-0000-000000000000`; never NULL the actor.
+  (See [`database/seeds/001_system_actor.ts`](database/seeds/001_system_actor.ts); Audit C-04.)
+- **Bot tokens stream over WebSocket only.** HTTP `POST /v1/bot/message` returns `202`;
+  tokens arrive on the socket. (Audit C-01.)
+- **Branch strategy:** `main` → production deploy. Feature branches → preview deploys.
+
+## Sprint progress
+
+- [x] Sprint 0 — Foundation, migrations, security plugins, CI/CD
+- [ ] Sprint 1 — Auth + Signup
+- [ ] Sprint 2 — Database schema + API scaffold
+- [ ] Sprint 3 — Staff Attendance
+- [ ] Sprint 4 — Tasks
+- [ ] Sprint 5 — Shoot Planner
+- [ ] Sprint 6 — Content Dropper + Trigger 1
+- [ ] Sprint 7 — Content Calendar + Trigger 2
+- [ ] Sprint 8 — AI Bot (query tools)
+- [ ] Sprint 9 — AI Bot (mutations) + Search
+- [ ] Sprint 10 — Chat + Notifications
+- [ ] Sprint 11 — Dashboard + Settings
+- [ ] Sprint 12 — Rollover + Reports + Comments
+- [ ] Sprint 13 — QA + Performance + Launch
+
 ## Documentation
 
-See [`docs/`](docs/) — notably `MASTER-BUILD-GUIDE-V2-FINAL.md` (the build guide),
-`02-TRD.md`, `05-BACKEND-SCHEMA.md`, `07-API-CONTRACT.md`, and `14-PRE-BUILD-AUDIT.md`.
+All specs live in [`docs/`](docs/). `MASTER-BUILD-GUIDE-V2-FINAL.md` is the canonical,
+from-zero-to-launch build guide.
+
+| File | Purpose |
+|------|---------|
+| [`01-PRD.md`](docs/01-PRD.md) | Product requirements |
+| [`02-TRD.md`](docs/02-TRD.md) | Technical requirements, stack, infra |
+| [`03-UIUX.md`](docs/03-UIUX.md) | UI/UX system, design tokens, components |
+| [`04-APPFLOW.md`](docs/04-APPFLOW.md) | Every user flow, end-to-end |
+| [`05-BACKEND-SCHEMA.md`](docs/05-BACKEND-SCHEMA.md) | Database schema (26 migrations) |
+| [`06-IMPLEMENTATION-PLAN.md`](docs/06-IMPLEMENTATION-PLAN.md) | 14-sprint plan |
+| [`07-API-CONTRACT.md`](docs/07-API-CONTRACT.md) | REST + WebSocket contract |
+| [`08-AUTH-MATRIX.md`](docs/08-AUTH-MATRIX.md) | RBAC model + permission matrix |
+| [`09-ERROR-HANDLING.md`](docs/09-ERROR-HANDLING.md) | Error response format, codes |
+| [`10-INFRA-DEPLOYMENT.md`](docs/10-INFRA-DEPLOYMENT.md) | Infra topology, docker compose |
+| [`11-THIRD-PARTY-INTEGRATIONS.md`](docs/11-THIRD-PARTY-INTEGRATIONS.md) | Anthropic, Supabase, R2, etc. |
+| [`12-TESTING-STRATEGY.md`](docs/12-TESTING-STRATEGY.md) | Unit, integration, E2E, k6 |
+| [`13-NFRS.md`](docs/13-NFRS.md) | Non-functional requirements |
+| [`14-PRE-BUILD-AUDIT.md`](docs/14-PRE-BUILD-AUDIT.md) | Pre-build audit findings |
+| [`CRITICAL-PATCHES.md`](docs/CRITICAL-PATCHES.md) | Drop-in patches for blockers + criticals |
+| [`FIX-GUIDE-V2-COMPLETE.md`](docs/FIX-GUIDE-V2-COMPLETE.md) | The audit-driven fixes |
+| [`MASTER-BUILD-GUIDE-V2-FINAL.md`](docs/MASTER-BUILD-GUIDE-V2-FINAL.md) | Canonical from-zero-to-launch build guide |
+| [`SPRINT-0-READINESS-CHECKLIST.md`](docs/SPRINT-0-READINESS-CHECKLIST.md) | Sprint 0 close-out |
+
+## License
+
+Proprietary — internal Skaly Group software. All rights reserved.
