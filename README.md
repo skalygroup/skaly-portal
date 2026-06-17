@@ -1,120 +1,142 @@
-# Skaly Business Portal
+# Scaly Portal
 
-Internal operations platform for Skaly Group — attendance, tasks, shoot planning,
-content pipeline, calendar, reporting, and an AI assistant. A pnpm monorepo with a
-Next.js 15 web app and a Fastify 5 API, backed by PostgreSQL and Redis.
+Internal operations platform for Skaly Group. Performance marketing, content production, attendance, and reporting in one place.
 
-## Tech stack
+**Status:** in development. Targeting first production launch end of Sprint 13.
 
-| Layer    | Tech |
-|----------|------|
-| Web      | Next.js 15 (App Router), React 19, Tailwind CSS 4, shadcn/ui, TanStack Query/Table/Virtual, Zustand, Framer Motion |
-| API      | Fastify 5, Kysely + node-postgres, Socket.io (+ Redis adapter), Zod, Pino |
-| Data     | PostgreSQL 16, Redis 7 |
-| Auth     | Supabase (JWT) |
-| AI       | Anthropic Claude (deferred until Sprint 8) |
-| Storage  | Cloudflare R2 (deferred until Sprint 1) |
-| Tooling  | pnpm workspaces, TypeScript, Vitest, ESLint, Prettier |
+---
 
-## Prerequisites
+## Stack
 
-- **Node.js 20.x** (see [`.nvmrc`](.nvmrc))
-- **pnpm 9.x** — `corepack enable` or `npm i -g pnpm@9`
-- **Docker Desktop** — for local Postgres + Redis
+**Frontend** — Next.js 15, TypeScript 5, Tailwind 4, shadcn/ui, TanStack Query/Table/Virtual, Zustand 5, Framer Motion 11
 
-## Repository layout
+**Backend** — Fastify 5, Kysely (Postgres), Socket.io v4 with @socket.io/redis-adapter, @anthropic-ai/sdk, Pino
 
-```
-apps/
-  api/         Fastify 5 backend (REST + Socket.io)   @skaly/api
-  web/         Next.js 15 frontend                    @skaly/web
-packages/
-  shared/      Shared Zod schemas & types             @skaly/shared
-  config/      Shared tsconfig / eslint / prettier    @skaly/config
-database/
-  migrations/  Kysely migrations (001–026)            @skaly/database
-  seeds/       Seed scripts (system actor + dev data)
-docs/          Specs, build guide, audits
-```
+**Infra** — Postgres 16 on Railway · Upstash Redis · Cloudflare R2 · Supabase Auth · Vercel (web) · Railway (api)
 
-## Local setup
+**AI** — `claude-sonnet-4-6` in production, `claude-haiku-4-5-20251001` in dev/test
 
-```bash
-# 1. Install dependencies
+---
+
+## Local development
+
+### Prerequisites
+
+- Node 20.18.0 (`.nvmrc` is in the repo — `nvm use` picks it up)
+- pnpm 9.x (`npm install -g pnpm@9`)
+- Docker Desktop running
+
+### Setup
+
+\`\`\`bash
 pnpm install
+cp apps/api/.env.example apps/api/.env       # then fill in real values
+cp apps/web/.env.example apps/web/.env.local # then fill in real values
+docker compose up -d                          # Postgres + Redis on :5432 and :6379
+pnpm db:migrate                               # apply all migrations
+pnpm db:seed                                  # dev seed data
+pnpm db:refresh-views                         # materialized views
+pnpm dev                                       # both apps in parallel
+\`\`\`
 
-# 2. Start Postgres + Redis (detached)
-docker compose up -d
+- Web: http://localhost:3000
+- API: http://localhost:3001 (health: `/v1/health`)
+- Swagger (dev only): http://localhost:3001/docs
 
-# 3. Create env files from templates
-cp apps/api/.env.example       apps/api/.env
-cp apps/web/.env.local.example apps/web/.env.local
-#   DATABASE_URL and REDIS_URL already target local Docker.
-#   Fill in Supabase / Anthropic / R2 values as you reach the sprints that need them.
+### Common commands
 
-# 4. Apply database migrations (all 26)
-pnpm --filter @skaly/api db:migrate
+\`\`\`bash
+pnpm typecheck       # all packages
+pnpm lint            # all packages
+pnpm test            # all packages
+pnpm db:migrate      # apply pending migrations
+pnpm db:rollback     # roll back the latest migration
+pnpm db:status       # show applied + pending
+pnpm db:refresh-views # refresh mv_dashboard_*
+\`\`\`
 
-# 5. (Optional) Seed dev data
-pnpm --filter @skaly/api db:seed
+---
 
-# 6. Start the dev servers
-pnpm --filter @skaly/api dev    # http://localhost:3001  (health: /v1/health · API docs: /docs)
-pnpm --filter @skaly/web dev    # http://localhost:3000
-```
+## Repository structure
 
-Run everything in parallel from the repo root instead:
+\`\`\`
+apps/
+  web/             Next.js 15 frontend
+  api/             Fastify 5 backend
+packages/
+  shared/          Zod schemas, Kysely DB types, shared types
+  config/          tsconfig, eslint, prettier shared configs
+database/
+  migrations/      Kysely migrations 001–026
+  seeds/           Dev data + system actor seed
+docs/              Specifications, audits, runbooks
+.github/workflows/ ci.yml + deploy-api.yml
+\`\`\`
 
-```bash
-pnpm dev
-```
+---
 
-## Environment variables
+## Specification documents
 
-- **`apps/api/.env`** (see [`apps/api/.env.example`](apps/api/.env.example)):
-  `DATABASE_URL`, `REDIS_URL`, `SUPABASE_URL`, `SUPABASE_JWT_SECRET`,
-  `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL_PROD/DEV`,
-  `R2_ENDPOINT`/`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY`/`R2_BUCKET_NAME`,
-  `CRON_SECRET`, `LOG_LEVEL`.
-- **`apps/web/.env.local`** (see [`apps/web/.env.local.example`](apps/web/.env.local.example)):
-  `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL`, `NEXT_PUBLIC_SUPABASE_URL`,
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+All in `docs/`:
 
-> `.env` and `.env.local` are gitignored — **never commit secrets.**
+| File | Purpose |
+|---|---|
+| `01-PRD.md` | Product requirements |
+| `02-TRD.md` | Technical requirements, stack, infra |
+| `03-UIUX.md` | UI/UX system, design tokens, components |
+| `04-APPFLOW.md` | Every user flow, end-to-end |
+| `05-BACKEND-SCHEMA.md` | Database schema (26 migrations) |
+| `06-IMPLEMENTATION-PLAN.md` | 14-sprint plan |
+| `07-API-CONTRACT.md` | REST + WebSocket contract |
+| `08-AUTH-MATRIX.md` | RBAC model + permission matrix |
+| `09-ERROR-HANDLING.md` | Error response format, codes |
+| `10-INFRA-DEPLOYMENT.md` | Infra topology, docker compose |
+| `11-THIRD-PARTY-INTEGRATIONS.md` | Anthropic, Supabase, R2, etc. |
+| `12-TESTING-STRATEGY.md` | Unit, integration, E2E, k6 |
+| `13-NFRS.md` | Non-functional requirements |
+| `14-PRE-BUILD-AUDIT.md` | 39-finding pre-build audit |
+| `CRITICAL-PATCHES.md` | Drop-in code patches for blockers + criticals |
+| `FIX-GUIDE-V2-COMPLETE.md` | The 21 audit-driven fixes |
+| `MASTER-BUILD-GUIDE-V2-FINAL.md` | From-zero-to-launch build guide |
+| `AUDIT-OF-MASTER-BUILD-GUIDE.md` | Audit of the build guide |
+| `SPRINT-0-READINESS-CHECKLIST.md` | Sprint 0 close-out |
+| `POST-SPRINT-0-CLEANUP-RUNBOOK.md` | Credential rotation + env cleanup |
 
-## Scripts
+---
 
-**Root** (run across all packages):
+## Development rules
 
-| Command          | Action |
-|------------------|--------|
-| `pnpm dev`       | Run all packages in dev (parallel) |
-| `pnpm build`     | Build all packages |
-| `pnpm test`      | Test all packages |
-| `pnpm typecheck` | Type-check all packages |
-| `pnpm lint`      | Lint all packages |
+- **Soft delete only** for user-facing entities (`deleted_at` column). Never `DELETE FROM` directly. (Fix Guide V2 H-02.)
+- **Audit log is immutable.** All writes go through `AuditService.log()`. Migration 026 revokes direct write permissions on `audit_log` from the application role.
+- **Optimistic locking** via `version` column on every editable row. Use `BaseService.optimisticUpdate`. (Audit C-02.)
+- **System Actor UUID** for automated writes to audit_log: `00000000-0000-0000-0000-000000000000`. Never NULL `staff_id`. (Audit C-04.)
+- **Bot tokens stream via WebSocket only.** HTTP `POST /v1/bot/message` returns 202. (Audit C-01.)
+- **Branch strategy:** main → production deploy. Feature branches → preview deploys.
 
-**API** — `pnpm --filter @skaly/api <script>`:
+---
 
-| Command            | Action |
-|--------------------|--------|
-| `dev`              | Start API with hot reload (tsx watch) |
-| `build` / `start`  | Compile to `dist/` / run the compiled server |
-| `test`             | Run Vitest |
-| `db:migrate`       | Apply pending migrations |
-| `db:rollback`      | Roll back the last migration |
-| `db:status`        | Show applied/pending migrations |
-| `db:seed`          | Run seeds (system actor + dev data) |
-| `db:refresh-views` | Refresh dashboard materialized views |
+## Sprint progress
 
-**Web** — `pnpm --filter @skaly/web <script>`: `dev`, `build`, `start`, `lint`, `typecheck`, `test`.
+- [x] Sprint 0 — Foundation, migrations, security plugins, CI/CD
+- [ ] Sprint 1 — Auth + Signup
+- [ ] Sprint 2 — Database schema + API scaffold
+- [ ] Sprint 3 — Staff Attendance
+- [ ] Sprint 4 — Tasks
+- [ ] Sprint 5 — Shoot Planner
+- [ ] Sprint 6 — Content Dropper + Trigger 1
+- [ ] Sprint 7 — Content Calendar + Trigger 2
+- [ ] Sprint 8 — AI Bot (query tools)
+- [ ] Sprint 9 — AI Bot (mutations) + Search
+- [ ] Sprint 10 — Chat + Notifications
+- [ ] Sprint 11 — Dashboard + Settings
+- [ ] Sprint 12 — Rollover + Reports + Comments
+- [ ] Sprint 13 — QA + Performance + Launch
 
-## Database
+---
 
-Migrations live in [`database/migrations/`](database/migrations/) and run through Kysely.
-Local connection string: `postgresql://skaly:localdev@localhost:5432/skaly_dev`.
+## License
 
-`audit_log` is **append-only**: the `skaly_app` role is granted `INSERT` but has
+Proprietary — internal Skaly Group software. All rights reserved.
 `UPDATE`/`DELETE` revoked (migration `026_database_roles`).
 
 ## Documentation
