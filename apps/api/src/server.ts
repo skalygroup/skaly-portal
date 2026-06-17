@@ -84,6 +84,10 @@ const pubClient = new Redis(
   env.REDIS_URL.startsWith('rediss://') ? { tls: {} } : {},
 );
 const subClient = pubClient.duplicate();
+// Attach error handlers so transient Upstash/connection blips are logged
+// instead of emitting "missing 'error' handler" warnings or crashing.
+pubClient.on('error', (err) => logger.error({ err }, 'Redis pub client error'));
+subClient.on('error', (err) => logger.error({ err }, 'Redis sub client error'));
 io.adapter(createAdapter(pubClient, subClient));
 
 // ── Socket.io JWT refresh watcher (C-05) ───────────────────────────
