@@ -53,6 +53,7 @@ logger.info({ allowedOrigins: env.CORS_ALLOWED_ORIGINS }, 'CORS allowlist loaded
 await app.register(cors, {
   origin: env.CORS_ALLOWED_ORIGINS,
   credentials: true,
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 });
 
 await app.register(rateLimit, {
