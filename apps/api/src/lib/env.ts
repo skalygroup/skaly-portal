@@ -6,6 +6,13 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().default(3001),
   TZ: z.string().default('Asia/Kolkata'),
 
+  // Comma-separated allowlist of browser origins for CORS + Socket.io.
+  // Parsed into a trimmed string[]. Default covers local dev + prod web.
+  CORS_ALLOWED_ORIGINS: z
+    .string()
+    .default('http://localhost:3000,https://portal.skaly.in')
+    .transform((s) => s.split(',').map((o) => o.trim()).filter(Boolean)),
+
   DATABASE_URL: z.string().url(),
   DATABASE_POOL_MIN: z.coerce.number().default(2),
   DATABASE_POOL_MAX: z.coerce.number().default(20),

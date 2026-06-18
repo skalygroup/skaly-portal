@@ -49,8 +49,9 @@ if (env.NODE_ENV !== 'production') {
 // ── Core plugins ───────────────────────────────────────────────────
 await app.register(helmet);
 
+logger.info({ allowedOrigins: env.CORS_ALLOWED_ORIGINS }, 'CORS allowlist loaded');
 await app.register(cors, {
-  origin: ['http://localhost:3000', 'https://portal.skaly.in'],
+  origin: env.CORS_ALLOWED_ORIGINS,
   credentials: true,
 });
 
@@ -74,7 +75,7 @@ await app.register(internalAuthPlugin);
 // ── Socket.io with Redis adapter (TRD §8) ──────────────────────────
 const io = new Server(app.server, {
   cors: {
-    origin: ['http://localhost:3000', 'https://portal.skaly.in'],
+    origin: env.CORS_ALLOWED_ORIGINS,
     credentials: true,
   },
 });
