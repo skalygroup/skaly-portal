@@ -5,6 +5,7 @@
   "type": "module",
   "main": "index.js",
   "devDependencies": {
+    "eslint": "^9",
     "eslint-plugin-import": "^2.32.0",
     "globals": "^17.6.0",
     "typescript-eslint": "^8.61.0"

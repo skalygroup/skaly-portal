@@ -16,6 +16,7 @@ export interface HandleBotStreamArgs {
   io: Server;
   redisClient: Redis;
   redisSessionKey: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- DB schema types generated in Sprint 8; `any` until then
   db: Kysely<any>;
   anthropic: Anthropic;
   model: string;
@@ -60,7 +61,7 @@ export async function handleBotStream({
       (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
     );
 
-    let updatedHistory: Anthropic.MessageParam[] = [
+    const updatedHistory: Anthropic.MessageParam[] = [
       ...sessionMessages,
       { role: 'assistant', content: firstResponse.content },
     ];

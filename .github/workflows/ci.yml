@@ -9,11 +9,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
-        with: { version: 9 }
       - uses: actions/setup-node@v5
-        with: { node-version: 20, cache: pnpm }
+        with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -r exec tsc --noEmit
+      - run: pnpm -r typecheck
       - run: pnpm -r exec eslint .
       - run: pnpm --filter @skaly/api db:migrate
         env: { DATABASE_URL: postgresql://test:test@localhost:5432/test }

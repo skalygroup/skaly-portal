@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
@@ -16,7 +17,7 @@ import { logger } from '../lib/logger.js';
 
 const INTERNAL_HEADER = 'x-internal-secret';
 
-export default async function internalAuthPlugin(fastify: FastifyInstance) {
+async function internalAuthPlugin(fastify: FastifyInstance) {
   const expectedSecret = env.CRON_SECRET;
 
   const verifyInternalSecret = async (
@@ -69,3 +70,8 @@ export default async function internalAuthPlugin(fastify: FastifyInstance) {
 
   fastify.decorate('verifyInternalSecret', verifyInternalSecret);
 }
+
+// Wrapped with fastify-plugin so the `verifyInternalSecret` decorator is
+// exposed on the parent instance (not encapsulated in the plugin's scope),
+// making it available to route preHandlers across the app.
+export default fp(internalAuthPlugin, { name: 'internal-auth' });
