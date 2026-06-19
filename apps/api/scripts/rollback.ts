@@ -1,5 +1,7 @@
 import 'dotenv/config';
-import { Kysely, PostgresDialect, Migrator, type Migration, type MigrationProvider } from 'kysely';
+import { Kysely, PostgresDialect } from 'kysely';
+// kysely 0.29 moved the migration API out of the main entry into `kysely/migration`.
+import { Migrator, type Migration, type MigrationProvider } from 'kysely/migration';
 import pg from 'pg';
 import { promises as fs } from 'fs';
 import path from 'path';
