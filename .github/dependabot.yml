@@ -4,23 +4,49 @@
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 
 version: 2
-   updates:
-     - package-ecosystem: "npm"
-       directory: "/"
-       schedule:
-         interval: "weekly"
-         day: "monday"
-       open-pull-requests-limit: 5
-       groups:
-         types:
-           patterns:
-             - "@types/*"
-         eslint:
-           patterns:
-             - "eslint*"
-             - "@typescript-eslint/*"
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
 
-     - package-ecosystem: "github-actions"
-       directory: "/"
-       schedule:
-         interval: "weekly"
+    # Hold major and minor bumps for load-bearing deps —
+    # manual upgrade only, with changelog review.
+    # Patch updates (0.27.6 -> 0.27.7) still come through automatically.
+    ignore:
+      - dependency-name: "kysely"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "kysely-codegen"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "fastify"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@anthropic-ai/sdk"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "socket.io"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "socket.io-client"
+        update-types: ["version-update:semver-major"]
+
+    groups:
+      types:
+        patterns:
+          - "@types/*"
+      eslint:
+        patterns:
+          - "eslint*"
+          - "@typescript-eslint/*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
