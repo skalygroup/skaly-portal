@@ -46,7 +46,7 @@
     "zod": "^3"
   },
   "devDependencies": {
-    "@types/node": "^22",
+    "@types/node": "^26",
     "kysely-codegen": "^0.20",
     "tsx": "^4",
     "typescript": "^5",
