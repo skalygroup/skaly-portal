@@ -1,207 +1,99 @@
-# Scaly Portal
+# Skaly Business Portal
 
-Internal operations platform for Skaly Group. Performance marketing, content production, attendance, and reporting in one place.
-
-**Status:** in development — targeting first production launch at the end of Sprint 13.
-
----
+> Internal operations platform for Skaly Group — staff attendance, work
+> allocation, shoot planning, content pipeline, AI bot, chat, notifications.
+> Built on Next.js 15 + Fastify 5 + Postgres 16. MVP for 50 concurrent users.
 
 ## Stack
 
-**Frontend** — Next.js 15, TypeScript 5, Tailwind 4, shadcn/ui, TanStack Query/Table/Virtual, Zustand 5, Framer Motion 11
+- **Frontend** — Next.js 15 (App Router), React 19, Tailwind 4 @theme, shadcn/ui,
+  TanStack Query/Table/Virtual, Zustand 5, Framer Motion 11
+- **Backend** — Fastify 5, Kysely, Socket.io v4 + @socket.io/redis-adapter,
+  @anthropic-ai/sdk, Pino, Zod
+- **Database & infra** — Postgres 16 (Railway), Upstash Redis (TLS),
+  Cloudflare R2, Supabase Auth (JWT-only)
+- **Deploys** — Vercel (web), Railway (api)
+- **Models** — claude-sonnet-4-6 (production), claude-haiku-4-5-20251001 (dev)
+- **Mobile (Phase 2)** — React Native + Expo
 
-**Backend** — Fastify 5, Kysely (Postgres), Socket.io v4 with @socket.io/redis-adapter, @anthropic-ai/sdk, Pino
+## Local Setup
 
-**Infra** — Postgres 16 on Railway · Upstash Redis · Cloudflare R2 · Supabase Auth · Vercel (web) · Railway (api)
+Prerequisites: Node 20 LTS, pnpm 9, Docker Desktop, Git, openssl.
 
-**AI** — `claude-sonnet-4-6` in production, `claude-haiku-4-5-20251001` in dev/test
+1. Clone and install:
+   ```
+   git clone git@github.com:<org>/skaly-portal.git
+   cd skaly-portal
+   pnpm install
+   ```
 
----
+2. Copy environment file:
+   ```
+   cp .env.example .env.local
+   ```
+   Fill values from your Supabase project, Upstash instance, Cloudflare R2,
+   and Anthropic console. See docs/10-INFRA-DEPLOYMENT.md §2 for keys.
 
-## Local development
+3. Start local Postgres + Redis:
+   ```
+   docker compose up -d
+   ```
 
-### Prerequisites
+4. Apply migrations + seeds + materialised views:
+   ```
+   pnpm db:migrate
+   NODE_ENV=development pnpm db:seed
+   pnpm db:refresh-views
+   ```
 
-- Node 20.18.0 (`.nvmrc` is in the repo — `nvm use` picks it up)
-- pnpm 9.x (`npm install -g pnpm@9`)
-- Docker Desktop running
+5. Run dev servers (two terminals):
+   ```
+   pnpm --filter @skaly/api dev   # api on :3001
+   pnpm --filter @skaly/web dev   # web on :3000
+   ```
 
-### Setup
+6. Open http://localhost:3000.
 
-\`\`\`bash
-pnpm install
-cp apps/api/.env.example apps/api/.env       # then fill in real values
-cp apps/web/.env.example apps/web/.env.local # then fill in real values
-docker compose up -d                          # Postgres + Redis on :5432 and :6379
-pnpm db:migrate                               # apply all migrations
-pnpm db:seed                                  # dev seed data
-pnpm db:refresh-views                         # materialized views
-pnpm dev                                       # both apps in parallel
-\`\`\`
+## Common Commands
 
-- Web: http://localhost:3000
-- API: http://localhost:3001 (health: `/v1/health`)
-- Swagger (dev only): http://localhost:3001/docs
-
-### Common commands
-
-\`\`\`bash
-pnpm typecheck       # all packages
-pnpm lint            # all packages
-pnpm test            # all packages
-pnpm db:migrate      # apply pending migrations
-pnpm db:rollback     # roll back the latest migration
-pnpm db:status       # show applied + pending
-pnpm db:refresh-views # refresh mv_dashboard_*
-\`\`\`
-
----
-
-## Repository structure
-
-\`\`\`
-apps/
-  web/             Next.js 15 frontend
-  api/             Fastify 5 backend
-packages/
-  shared/          Zod schemas, Kysely DB types, shared types
-  config/          tsconfig, eslint, prettier shared configs
-database/
-  migrations/      Kysely migrations 001–026
-  seeds/           Dev data + system actor seed
-docs/              Specifications, audits, runbooks
-.github/workflows/ ci.yml + deploy-api.yml
-\`\`\`
-
----
-
-## Specification documents
-
-All in `docs/`:
-
-| File | Purpose |
+| Task | Command |
 |---|---|
-| `01-PRD.md` | Product requirements |
-| `02-TRD.md` | Technical requirements, stack, infra |
-| `03-UIUX.md` | UI/UX system, design tokens, components |
-| `04-APPFLOW.md` | Every user flow, end-to-end |
-| `05-BACKEND-SCHEMA.md` | Database schema (26 migrations) |
-| `06-IMPLEMENTATION-PLAN.md` | 14-sprint plan |
-| `07-API-CONTRACT.md` | REST + WebSocket contract |
-| `08-AUTH-MATRIX.md` | RBAC model + permission matrix |
-| `09-ERROR-HANDLING.md` | Error response format, codes |
-| `10-INFRA-DEPLOYMENT.md` | Infra topology, docker compose |
-| `11-THIRD-PARTY-INTEGRATIONS.md` | Anthropic, Supabase, R2, etc. |
-| `12-TESTING-STRATEGY.md` | Unit, integration, E2E, k6 |
-| `13-NFRS.md` | Non-functional requirements |
-| `14-PRE-BUILD-AUDIT.md` | 39-finding pre-build audit |
-| `CRITICAL-PATCHES.md` | Drop-in code patches for blockers + criticals |
-| `FIX-GUIDE-V2-COMPLETE.md` | The 21 audit-driven fixes |
-| `MASTER-BUILD-GUIDE-V2-FINAL.md` | From-zero-to-launch build guide |
-| `AUDIT-OF-MASTER-BUILD-GUIDE.md` | Audit of the build guide |
-| `SPRINT-0-READINESS-CHECKLIST.md` | Sprint 0 close-out |
-| `POST-SPRINT-0-CLEANUP-RUNBOOK.md` | Credential rotation + env cleanup |
+| Install dependencies | `pnpm install` |
+| Run both apps in dev | `pnpm dev` |
+| Run one app | `pnpm --filter @skaly/api dev` or `pnpm --filter @skaly/web dev` |
+| Typecheck monorepo | `pnpm typecheck` |
+| Lint monorepo | `pnpm lint` (or `pnpm lint --fix`) |
+| Test monorepo | `pnpm test` |
+| Apply migrations | `pnpm db:migrate` |
+| Rollback last migration | `pnpm db:rollback` |
+| Migration status | `pnpm db:status` |
+| Run seeds | `NODE_ENV=development pnpm db:seed` |
+| Refresh materialised views | `pnpm db:refresh-views` |
+| Regenerate Kysely types | `pnpm --filter @skaly/api db:codegen` |
+| Start local Docker services | `docker compose up -d` |
+| Stop + wipe local volumes | `docker compose down -v` |
+| psql into local Postgres | `docker exec -it $(docker compose ps -q postgres) psql -U skaly -d skaly_dev` |
 
----
+## Specification
 
-## Development rules
+All product, technical, and operational specs live in `docs/`:
 
-- **Soft delete only** for user-facing entities (`deleted_at` column). Never `DELETE FROM` directly. (Fix Guide V2 H-02.)
-- **Audit log is immutable.** All writes go through `AuditService.log()`. Migration 026 revokes direct write permissions on `audit_log` from the application role.
-- **Optimistic locking** via `version` column on every editable row. Use `BaseService.optimisticUpdate`. (Audit C-02.)
-- **System Actor UUID** for automated writes to audit_log: `00000000-0000-0000-0000-000000000000`. Never NULL `staff_id`. (Audit C-04.)
-- **Bot tokens stream via WebSocket only.** HTTP `POST /v1/bot/message` returns 202. (Audit C-01.)
-- **Branch strategy:** main → production deploy. Feature branches → preview deploys.
+- **Master Build Guide** — `docs/MASTER-BUILD-GUIDE-V2-FINAL.md` (the day-to-day reference)
+- **Specs (13 docs)** — 01-PRD through 13-NFRS
+- **Audit & patches** — 14-PRE-BUILD-AUDIT.md, CRITICAL-PATCHES.md, FIX-GUIDE-V2-COMPLETE.md
+- **Readiness checklist** — SPRINT-0-READINESS-CHECKLIST.md
 
----
+When in doubt about a feature behaviour: the spec is the source of truth.
+When in doubt about a file path or sprint sequence: the master build guide is.
 
-## Sprint progress
+## Sprint Progress
 
-- [x] Sprint 0 — Foundation, migrations, security plugins, CI/CD
-- [ ] Sprint 1 — Auth + Signup
-- [ ] Sprint 2 — Database schema + API scaffold
-- [ ] Sprint 3 — Staff Attendance
-- [ ] Sprint 4 — Tasks
-- [ ] Sprint 5 — Shoot Planner
-- [ ] Sprint 6 — Content Dropper + Trigger 1
-- [ ] Sprint 7 — Content Calendar + Trigger 2
-- [ ] Sprint 8 — AI Bot (query tools)
-- [ ] Sprint 9 — AI Bot (mutations) + Search
-- [ ] Sprint 10 — Chat + Notifications
-- [ ] Sprint 11 — Dashboard + Settings
-- [ ] Sprint 12 — Rollover + Reports + Comments
-- [ ] Sprint 13 — QA + Performance + Launch
-
----
-
-## License
-
-Proprietary — internal Skaly Group software. All rights reserved.
-`UPDATE`/`DELETE` revoked (migration `026_database_roles`).
-
-## Development rules
-
-These are project conventions, not yet all enforced in code — follow them as the
-relevant services are built out. Each cites where it is specified.
-
-- **Soft delete only** for user-facing entities. Set `deleted_at`; never `DELETE FROM`
-  directly. (Fix Guide V2 H-02.)
-- **`audit_log` is append-only.** The `skaly_app` role is granted `INSERT` but has
-  `UPDATE`/`DELETE` revoked (migration `026_database_roles`). Route all writes through
-  the audit service.
-- **Optimistic locking** via a `version` column on editable rows — read the version,
-  write with a `WHERE version = ?` guard, bump on success. (Audit C-02.)
-- **System actor for automated writes.** Audit/system rows reference the seeded System
-  staff row `00000000-0000-0000-0000-000000000000`; never NULL the actor.
-  (See [`database/seeds/001_system_actor.ts`](database/seeds/001_system_actor.ts); Audit C-04.)
-- **Bot tokens stream over WebSocket only.** HTTP `POST /v1/bot/message` returns `202`;
-  tokens arrive on the socket. (Audit C-01.)
-- **Branch strategy:** `main` → production deploy. Feature branches → preview deploys.
-
-## Sprint progress
-
-- [x] Sprint 0 — Foundation, migrations, security plugins, CI/CD
-- [ ] Sprint 1 — Auth + Signup
-- [ ] Sprint 2 — Database schema + API scaffold
-- [ ] Sprint 3 — Staff Attendance
-- [ ] Sprint 4 — Tasks
-- [ ] Sprint 5 — Shoot Planner
-- [ ] Sprint 6 — Content Dropper + Trigger 1
-- [ ] Sprint 7 — Content Calendar + Trigger 2
-- [ ] Sprint 8 — AI Bot (query tools)
-- [ ] Sprint 9 — AI Bot (mutations) + Search
-- [ ] Sprint 10 — Chat + Notifications
-- [ ] Sprint 11 — Dashboard + Settings
-- [ ] Sprint 12 — Rollover + Reports + Comments
-- [ ] Sprint 13 — QA + Performance + Launch
-
-## Documentation
-
-All specs live in [`docs/`](docs/). `MASTER-BUILD-GUIDE-V2-FINAL.md` is the canonical,
-from-zero-to-launch build guide.
-
-| File | Purpose |
-|------|---------|
-| [`01-PRD.md`](docs/01-PRD.md) | Product requirements |
-| [`02-TRD.md`](docs/02-TRD.md) | Technical requirements, stack, infra |
-| [`03-UIUX.md`](docs/03-UIUX.md) | UI/UX system, design tokens, components |
-| [`04-APPFLOW.md`](docs/04-APPFLOW.md) | Every user flow, end-to-end |
-| [`05-BACKEND-SCHEMA.md`](docs/05-BACKEND-SCHEMA.md) | Database schema (26 migrations) |
-| [`06-IMPLEMENTATION-PLAN.md`](docs/06-IMPLEMENTATION-PLAN.md) | 14-sprint plan |
-| [`07-API-CONTRACT.md`](docs/07-API-CONTRACT.md) | REST + WebSocket contract |
-| [`08-AUTH-MATRIX.md`](docs/08-AUTH-MATRIX.md) | RBAC model + permission matrix |
-| [`09-ERROR-HANDLING.md`](docs/09-ERROR-HANDLING.md) | Error response format, codes |
-| [`10-INFRA-DEPLOYMENT.md`](docs/10-INFRA-DEPLOYMENT.md) | Infra topology, docker compose |
-| [`11-THIRD-PARTY-INTEGRATIONS.md`](docs/11-THIRD-PARTY-INTEGRATIONS.md) | Anthropic, Supabase, R2, etc. |
-| [`12-TESTING-STRATEGY.md`](docs/12-TESTING-STRATEGY.md) | Unit, integration, E2E, k6 |
-| [`13-NFRS.md`](docs/13-NFRS.md) | Non-functional requirements |
-| [`14-PRE-BUILD-AUDIT.md`](docs/14-PRE-BUILD-AUDIT.md) | Pre-build audit findings |
-| [`CRITICAL-PATCHES.md`](docs/CRITICAL-PATCHES.md) | Drop-in patches for blockers + criticals |
-| [`FIX-GUIDE-V2-COMPLETE.md`](docs/FIX-GUIDE-V2-COMPLETE.md) | The audit-driven fixes |
-| [`MASTER-BUILD-GUIDE-V2-FINAL.md`](docs/MASTER-BUILD-GUIDE-V2-FINAL.md) | Canonical from-zero-to-launch build guide |
-| [`SPRINT-0-READINESS-CHECKLIST.md`](docs/SPRINT-0-READINESS-CHECKLIST.md) | Sprint 0 close-out |
-
-## License
-
-Proprietary — internal Skaly Group software. All rights reserved.
-
+- [x] **Sprint 0** (Week 1) — Foundation: monorepo, infra, migrations 001-027,
+      security plugins (B-01, B-03, C-05), bot stream handler reference (H-04),
+      Sentry/CSP/pool-monitoring skeletons (H-07/H-08/H-09), email templates
+      (B-02), CI/CD, staging deploys.
+- [ ] **Sprint 1** (Week 2) — Auth + signup (Supabase JWT plugin, all auth
+      endpoints, MFA, password reset, frontend pages).
+- [ ] **Sprint 2** (Week 3) — DB types + base service + AuditService (calls
+      audit_log_insert via SECURITY DEFINER per B-01) + Socket.io scaffold.
+- [ ] **Sprint 3-13** — see master build guide PART 9.

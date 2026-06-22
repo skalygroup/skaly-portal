@@ -8,16 +8,17 @@
 ## 🔴 BLOCKER ITEMS (3) — Sprint 1 cannot begin without these
 
 ```
-[ ]  B-01  Migration 026_database_roles applied
-            └─  Applied on local Docker, staging, production
-            └─  Verification test passes: UPDATE on audit_log throws permission denied
-            └─  Verification test passes: DELETE on audit_log throws permission denied
+[x]  B-01  audit_log writes locked down via SECURITY DEFINER function
+            └─  Migration 026 revokes UPDATE/DELETE; migration 027 revokes INSERT
+                and exposes audit_log_insert() as the sole write path
+            └─  Verified 2026-06-22: direct INSERT/UPDATE/DELETE from skaly_app
+                returns "permission denied for table audit_log"; function call succeeds
             └─  Owner: TL
 
-[ ]  B-02  T1–T4 templates: decision made and documented
-            └─  Either: templates delivered AND committed to repo at apps/web/components/templates/
-            └─  Or: fallback path documented in IMPL-PLAN §17 (per CRITICAL-PATCHES B-02)
-            └─  Sprint 1 unblocked
+[x]  B-02  Templates: T1 (invite), T2 (signup-pending), T3 (signup-approved),
+            T4 (signup-rejected) committed to apps/api/src/templates/email/.
+            └─  Sprint 1 will wire these into AuthService via the email transport layer
+            └─  T4 renders publicMessage only — never rejection_note (APPFLOW §2.6)
             └─  Owner: TL + Design Lead
 
 [ ]  B-03  internalAuthPlugin uses crypto.timingSafeEqual
@@ -142,6 +143,28 @@
             └─  Listed in apps/api/package.json scripts
             └─  Documented in README
 ```
+
+---
+
+## 🔧 FIXES APPLIED (Sprint 0 close-out)
+
+- **027_audit_log_security_definer** — applied 2026-06-22; closes B-01.
+- **Migration 002 `months_period_format` CHECK** — replaced `'^\d{4}-\d{2}$'`
+  regex with `'^[0-9]{4}-[0-9]{2}$'` character-class form (JS template literal
+  was eating the backslash escape, breaking the constraint at the DB layer).
+
+---
+
+## 🏗️ STRUCTURE / LAYOUT
+
+- Project structure aligned to V2 master guide spec on 2026-06-22:
+  - `apps/web` wrapped in `src/`
+  - `apps/api` split into `app.ts` (buildApp) + `server.ts` (entrypoint)
+  - `apps/api/src/lib/bot/stream-handler.ts` (kebab-case)
+  - `db.types.ts` moved to `packages/shared/src/`
+  - tests moved to `apps/api/test/`
+  - **vercel.json kept at `apps/web/`** (Vercel Root Directory contract — the
+    repo-root move from the original B-5 plan was reversed)
 
 ---
 
