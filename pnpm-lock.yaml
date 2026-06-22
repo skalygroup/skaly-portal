@@ -65,8 +65,8 @@ importers:
         specifier: ^8
         version: 8.20.0
       dotenv:
-        specifier: ^16.6.1
-        version: 16.6.1
+        specifier: ^17.4.2
+        version: 17.4.2
       fastify:
         specifier: ^5
         version: 5.8.5
