@@ -12,9 +12,10 @@
     "typecheck": "tsc --noEmit",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:rollback": "tsx scripts/rollback.ts",
-    "db:status": "tsx scripts/migrate-status.ts",
+    "db:status": "tsx scripts/status.ts",
     "db:seed": "tsx scripts/seed.ts",
-    "db:refresh-views": "tsx scripts/refresh-views.ts"
+    "db:refresh-views": "tsx scripts/refresh-views.ts",
+    "db:codegen": "kysely-codegen --dialect postgres --out-file ../../packages/shared/src/db.types.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39",

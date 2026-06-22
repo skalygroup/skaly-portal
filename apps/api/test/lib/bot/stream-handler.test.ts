@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { handleBotStream } from './streamHandler.js';
+import { handleBotStream } from '../../../src/lib/bot/stream-handler.js';
 
 // Mock dependencies
 const mockIoEmit = vi.fn();
@@ -28,7 +28,7 @@ function createMockStream(textTokens: string[], finalContent: any[]) {
   return stream;
 }
 
-describe('streamHandler', () => {
+describe('stream-handler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

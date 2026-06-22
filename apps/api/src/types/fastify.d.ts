@@ -1,3 +1,8 @@
+import type { Kysely } from 'kysely';
+import type { Pool } from 'pg';
+import type { Redis } from 'ioredis';
+import type { DB } from '@skaly/shared';
+
 declare module 'fastify' {
   interface FastifyRequest {
     user?: {
@@ -14,6 +19,10 @@ declare module 'fastify' {
       request: FastifyRequest,
       reply: FastifyReply,
     ) => Promise<void>; // populated by internalAuth.plugin.ts
+    // Shared resources decorated in src/app.ts (buildApp).
+    db: Kysely<DB>;
+    pool: Pool;
+    redis: Redis;
   }
 }
 export {};

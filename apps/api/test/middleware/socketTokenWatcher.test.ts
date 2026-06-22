@@ -5,7 +5,7 @@ import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 // contracts and will be expanded in Sprint 10 (chat sprint) when the
 // WebSocket infrastructure is fully wired.
 
-vi.mock('../lib/logger.js', () => ({
+vi.mock('../../src/lib/logger.js', () => ({
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -40,7 +40,7 @@ describe('socketTokenWatcher', () => {
       }),
     };
 
-    const { setupSocketTokenWatcher } = await import('./socketTokenWatcher.plugin.js');
+    const { setupSocketTokenWatcher } = await import('../../src/middleware/socketTokenWatcher.plugin.js');
     setupSocketTokenWatcher(mockIo as any);
 
     expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
@@ -62,7 +62,7 @@ describe('socketTokenWatcher', () => {
       }),
     };
 
-    const { setupSocketTokenWatcher } = await import('./socketTokenWatcher.plugin.js');
+    const { setupSocketTokenWatcher } = await import('../../src/middleware/socketTokenWatcher.plugin.js');
     setupSocketTokenWatcher(mockIo as any);
 
     expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
@@ -84,7 +84,7 @@ describe('socketTokenWatcher', () => {
       }),
     };
 
-    const { setupSocketTokenWatcher } = await import('./socketTokenWatcher.plugin.js');
+    const { setupSocketTokenWatcher } = await import('../../src/middleware/socketTokenWatcher.plugin.js');
     setupSocketTokenWatcher(mockIo as any);
 
     // Should NOT be disconnected immediately
@@ -110,7 +110,7 @@ describe('socketTokenWatcher', () => {
       }),
     };
 
-    const { setupSocketTokenWatcher } = await import('./socketTokenWatcher.plugin.js');
+    const { setupSocketTokenWatcher } = await import('../../src/middleware/socketTokenWatcher.plugin.js');
     setupSocketTokenWatcher(mockIo as any);
 
     // Fast-forward past warning (exp - 60s = 60s from now)

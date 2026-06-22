@@ -1,9 +1,9 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import Fastify from 'fastify';
-import internalAuthPlugin from './internalAuth.plugin.js';
+import internalAuthPlugin from '../../src/middleware/internalAuth.plugin.js';
 
 // Mock env with a known CRON_SECRET (32+ chars)
-vi.mock('../lib/env.js', () => ({
+vi.mock('../../src/lib/env.js', () => ({
   env: {
     CRON_SECRET: 'test-cron-secret-that-is-at-least-32-characters-long!!',
     LOG_LEVEL: 'silent',
@@ -11,7 +11,7 @@ vi.mock('../lib/env.js', () => ({
   },
 }));
 
-vi.mock('../lib/logger.js', () => ({
+vi.mock('../../src/lib/logger.js', () => ({
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
