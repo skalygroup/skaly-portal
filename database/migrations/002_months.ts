@@ -13,7 +13,7 @@ export async function up(db: Kysely<any>): Promise<void> {
       unlock_reason TEXT,
       created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
       CONSTRAINT months_pkey PRIMARY KEY (period),
-      CONSTRAINT months_period_format CHECK (period ~ '^\d{4}-\d{2}$')
+      CONSTRAINT months_period_format CHECK (period ~ '^[0-9]{4}-[0-9]{2}$')
     )
   `.execute(db);
 }
