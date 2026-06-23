@@ -17,7 +17,12 @@ import { logger } from './lib/logger.js';
 import { pool, db } from './lib/db.js';
 import { redis } from './lib/redis.js';
 import internalAuthPlugin from './middleware/internalAuth.plugin.js';
+import authPlugin from './middleware/auth.plugin.js';
 import { healthRoutes } from './routes/health.js';
+import { inviteRoutes } from './routes/auth/invite.js';
+import { signupRequestRoutes } from './routes/auth/signup-request.js';
+import { signupReviewRoutes } from './routes/auth/signup-review.js';
+import { signupStatusRoutes } from './routes/auth/signup-status.js';
 
 /**
  * Builds and fully configures the Fastify instance — WITHOUT calling listen().
@@ -80,7 +85,10 @@ export async function buildApp(
   });
 
   await app.register(sensible);
-  await app.register(multipart);
+  // CV upload (signup): 5MB cap, one file per request. Oversized → HTTP 413.
+  await app.register(multipart, {
+    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  });
 
   // ── Internal auth (B-03: timing-safe CRON_SECRET) ──────────────────
   await app.register(internalAuthPlugin);
@@ -92,8 +100,17 @@ export async function buildApp(
   app.decorate('pool', pool);
   app.decorate('redis', redis);
 
+  // ── User auth (Sprint 1 STEP 4: Supabase RS256 JWT + staff lookup) ──
+  // After db/redis are available; before any route plugin so route
+  // preHandlers can reference app.verifyJwt / app.requireRole.
+  await app.register(authPlugin);
+
   // ── Routes ─────────────────────────────────────────────────────────
   await app.register(healthRoutes);
+  await app.register(inviteRoutes);
+  await app.register(signupRequestRoutes);
+  await app.register(signupReviewRoutes);
+  await app.register(signupStatusRoutes);
 
   return app;
 }

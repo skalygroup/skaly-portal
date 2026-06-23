@@ -147,6 +147,7 @@ export interface InviteLinks {
   expires_at: Generated<Timestamp>;
   id: Generated<string>;
   role: string;
+  supabase_uid: string | null;
   token: Generated<string>;
   used_at: Timestamp | null;
   used_by: string | null;

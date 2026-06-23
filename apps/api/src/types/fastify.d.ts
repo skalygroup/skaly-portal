@@ -5,16 +5,16 @@ import type { DB } from '@skaly/shared';
 
 declare module 'fastify' {
   interface FastifyRequest {
-    user?: {
-      staffId: string;
-      supabaseUid: string;
-      role: 'admin' | 'manager' | 'team_member' | 'freelancer';
-      email: string;
-      mfaEnrolled: boolean;
-    };
+    // Populated by verifyJwt (auth.plugin.ts) on protected routes. Non-optional
+    // by contract: the middleware guarantees it before any protected handler
+    // runs (audit C-04). Reading it on an unauthenticated route is a bug.
+    user: import('../middleware/auth.plugin.js').AuthUser;
   }
   interface FastifyInstance {
-    verifyJwt: any; // populated by auth.plugin.ts in Sprint 1
+    verifyJwt: import('fastify').preHandlerHookHandler; // auth.plugin.ts
+    requireRole: (
+      ...roles: import('@skaly/shared/schemas/auth').Role[]
+    ) => import('fastify').preHandlerHookHandler; // auth.plugin.ts
     verifyInternalSecret: (
       request: FastifyRequest,
       reply: FastifyReply,

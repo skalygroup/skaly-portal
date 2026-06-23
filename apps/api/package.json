@@ -19,8 +19,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39",
-    "@aws-sdk/client-s3": "^3",
-    "@aws-sdk/s3-request-presigner": "^3",
+    "@aws-sdk/client-s3": "^3.1075.0",
+    "@aws-sdk/lib-storage": "^3.1075.0",
+    "@aws-sdk/s3-request-presigner": "^3.1075.0",
     "@fastify/cors": "^11",
     "@fastify/helmet": "^13",
     "@fastify/multipart": "^9",
@@ -37,6 +38,7 @@
     "fastify-plugin": "^5",
     "fastify-type-provider-zod": "^4",
     "ioredis": "^5",
+    "jose": "^6.2.3",
     "kysely": "^0.29",
     "node-cron": "^3",
     "pg": "^8.21.0",
@@ -47,6 +49,7 @@
   },
   "devDependencies": {
     "@types/node": "^22",
+    "aws-sdk-client-mock": "^4.1.0",
     "kysely-codegen": "^0.20",
     "tsx": "^4",
     "typescript": "^5",

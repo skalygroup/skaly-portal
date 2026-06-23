@@ -22,6 +22,8 @@ const EnvSchema = z.object({
   SUPABASE_URL: z.string().url(),
   SUPABASE_JWT_SECRET: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+  // JWKS endpoint for RS256 access-token verification (createRemoteJWKSet).
+  SUPABASE_JWKS_URL: z.string().url(),
 
   // Anthropic — deferred until Sprint 8. Optional now; required
   // before any bot route is exercised.

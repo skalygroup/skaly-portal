@@ -1,12 +1,17 @@
 services:
   postgres:
     image: postgres:16-alpine
+    # Auto-recover when the Docker engine restarts (e.g. after Docker Desktop
+    # auto-pauses on idle or the machine wakes from sleep). Without this the
+    # container stays stopped until a manual `docker compose up -d`.
+    restart: unless-stopped
     environment: { POSTGRES_DB: skaly_dev, POSTGRES_USER: skaly, POSTGRES_PASSWORD: localdev }
     ports: ["5432:5432"]
     volumes: ["postgres_data:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD", "pg_isready", "-U", "skaly"], interval: 5s, retries: 5 }
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports: ["6379:6379"]
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
 volumes:
