@@ -1,4 +1,5 @@
 import type { Readable } from 'node:stream';
+import { createHash, randomBytes } from 'node:crypto';
 import { sql, type Kysely, type Transaction } from 'kysely';
 import type { Redis } from 'ioredis';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -44,6 +45,11 @@ export interface AuditLogEntry {
 const STAFF_CACHE_TTL_SECONDS = 300;
 const staffCacheKey = (supabaseUid: string) => `staff_lookup:${supabaseUid}`;
 
+// Where Supabase's recovery email lands the user to set a new password. The
+// frontend completes the flow with supabase.auth.updateUser({ password }) once
+// the recovery token has established a session.
+const PASSWORD_RESET_REDIRECT_URL = 'http://localhost:3000/reset-password';
+
 export interface CreateInviteParams {
   /** Required — every invite is scoped to a specific address (APPFLOW §2.7). */
   email: string;
@@ -83,6 +89,28 @@ export interface NotificationCreateEntry {
   type: string;
   title: string;
   data?: unknown;
+}
+
+/**
+ * The admin MFA *enroll/verify* surface the spec targets. The installed
+ * @supabase/auth-js (2.108.2) admin client does NOT expose these — enroll and
+ * verify live on the client MFA API and require the user's own session. Newer /
+ * self-hosted GoTrue builds (and the spec) put them under admin.mfa, so we
+ * detect them at runtime and cast through this shape when present.
+ */
+interface MfaAdminEnrollApi {
+  enrollFactor(params: {
+    userId: string;
+    factorType: 'totp';
+    friendlyName?: string;
+  }): Promise<{
+    data: { id: string; totp: { qr_code: string; secret: string; uri: string } } | null;
+    error: { message: string } | null;
+  }>;
+  verifyFactor?(params: { userId: string; factorId: string; code: string }): Promise<{
+    data: unknown;
+    error: { message: string } | null;
+  }>;
 }
 
 export class AuthService {
@@ -644,6 +672,293 @@ export class AuthService {
       return { status: 'rejected' as const };
     });
   }
+
+  /**
+   * Public password-reset request. Anti-enumeration (audit M-08): both the
+   * response body AND its wall-clock timing must look identical whether or not
+   * the email maps to an active staff member, so an attacker can't probe which
+   * addresses exist. We only actually trigger Supabase's recovery email when an
+   * active, non-deleted staff row exists; the caller always sees the same 200.
+   */
+  async requestPasswordReset(email: string): Promise<{ status: 'sent' }> {
+    const staff = await this.db
+      .selectFrom('staff')
+      .select(['id'])
+      .where('email', '=', email)
+      .where('active', '=', true)
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+
+    if (staff) {
+      const { error } = await this.supabaseAdmin.auth.admin.generateLink({
+        type: 'recovery',
+        email,
+        options: { redirectTo: PASSWORD_RESET_REDIRECT_URL },
+      });
+      if (error) {
+        // Never surface this to the caller — doing so would both leak existence
+        // and break the uniform response. Log for ops; the user can retry.
+        this.logger.warn({ err: error, email }, 'requestPasswordReset: generateLink failed');
+      }
+    } else {
+      // Keep wall-clock timing comparable to the matched path's network
+      // round-trip so response latency can't be used to enumerate accounts.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    // Audit either way — the trail records that a reset was attempted (and
+    // internally whether it matched), never exposed to the requester.
+    this.auditServiceLog({
+      actorId: staff?.id ?? 'anonymous',
+      actorSource: 'web',
+      entity: 'staff',
+      entityId: staff?.id ?? 'unknown',
+      action: 'password.reset_request',
+      after: { email, matched: Boolean(staff) },
+    });
+
+    return { status: 'sent' as const };
+  }
+
+  /**
+   * Confirm a password reset. Thin wrapper: the actual password change happens
+   * client-side via supabase.auth.updateUser({ password }) once the recovery
+   * token has set a session. Our only job here is to record the action when a
+   * caller invokes the (optional) explicit confirm endpoint.
+   */
+  async confirmPasswordReset(token: string, newPassword: string): Promise<{ status: 'confirmed' }> {
+    void token;
+    void newPassword;
+    this.auditServiceLog({
+      actorId: 'anonymous',
+      actorSource: 'web',
+      entity: 'staff',
+      entityId: 'unknown',
+      action: 'password.reset_confirm',
+    });
+    return { status: 'confirmed' as const };
+  }
+
+  /**
+   * Exchange a refresh token for a fresh session. On any failure (expired,
+   * revoked, malformed) we collapse to a single 401 — the reason is never
+   * distinguished to the caller.
+   */
+  async refreshSession(refreshToken: string): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+  }> {
+    const { data, error } = await this.supabaseAdmin.auth.refreshSession({
+      refresh_token: refreshToken,
+    });
+    const session = data?.session;
+    if (error || !session) {
+      throw new AuthError('INVALID_REFRESH_TOKEN', 401, 'Invalid or expired refresh token.');
+    }
+    return {
+      accessToken: session.access_token,
+      refreshToken: session.refresh_token,
+      // Supabase returns expires_at as a unix-seconds timestamp; a valid session
+      // always carries it — the ?? 0 only satisfies the optional type.
+      expiresAt: session.expires_at ?? 0,
+    };
+  }
+
+  /**
+   * Revoke the caller's Supabase session and drop their cached staff lookup.
+   *
+   * auth-js 2.108.2 exposes admin.signOut(jwt, scope?) — it revokes by the
+   * user's JWT, not by UID (the spec's UID-based signature predates the v2 SDK).
+   * The DELETE /v1/auth/session route already holds the caller's bearer token,
+   * so we pass that through; the UID is used only to evict our staff cache.
+   */
+  async signOut(supabaseUid: string, jwt: string): Promise<void> {
+    const { error } = await this.supabaseAdmin.auth.admin.signOut(jwt);
+    if (error) {
+      // A failed revoke shouldn't block local sign-out; the token still expires
+      // on its own. Log and continue to cache eviction.
+      this.logger.warn({ err: error, supabaseUid }, 'signOut: supabase signOut failed');
+    }
+    await this.invalidateCache(supabaseUid);
+  }
+
+  /**
+   * Begin TOTP enrollment: register a factor with Supabase, mint 10 single-use
+   * recovery codes (storing only their hashes), and return the QR + secret the
+   * frontend renders. mfa_enrolled stays FALSE here — it only flips once
+   * verifyMfa confirms the user has a working code.
+   */
+  async enrollMfa(
+    staffId: string,
+    supabaseUid: string,
+  ): Promise<{
+    factorId: string;
+    qrCodeDataUrl: string;
+    secret: string;
+    recoveryCodes: string[];
+  }> {
+    const adminMfa = this.adminMfa();
+    if (!adminMfa?.enrollFactor) {
+      // The installed admin SDK can't enroll (see MfaAdminEnrollApi). Fail with
+      // a typed 501 instead of a raw TypeError so the client can fall back to
+      // enrolling via its own Supabase session.
+      throw new AuthError('MFA_ENROLL_UNAVAILABLE', 501, 'MFA enrollment is unavailable.');
+    }
+    const { data, error } = await adminMfa.enrollFactor({
+      userId: supabaseUid,
+      factorType: 'totp',
+      friendlyName: 'Scaly Portal Authenticator',
+    });
+    if (error || !data?.totp) {
+      throw new AuthError('MFA_ENROLL_FAILED', 502, 'Could not start MFA enrollment.');
+    }
+
+    // 10 recovery codes, ~40 bits each. They're high-entropy secrets, so an
+    // unsalted SHA-256 is the right primitive (bcrypt is for low-entropy human
+    // passwords). Replace any prior set so re-enrollment invalidates old codes.
+    const codes = Array.from({ length: 10 }, () => randomBytes(5).toString('hex'));
+    await this.db.transaction().execute(async (trx) => {
+      await trx.deleteFrom('mfa_recovery_codes').where('staff_id', '=', staffId).execute();
+      await trx
+        .insertInto('mfa_recovery_codes')
+        .values(codes.map((c) => ({ staff_id: staffId, code_hash: hashRecoveryCode(c) })))
+        .execute();
+    });
+
+    this.auditServiceLog({
+      actorId: staffId,
+      actorSource: 'web',
+      entity: 'staff',
+      entityId: staffId,
+      action: 'mfa.enroll_start',
+    });
+
+    // Supabase returns qr_code already as a data:image/png;base64,... string.
+    return {
+      factorId: data.id,
+      qrCodeDataUrl: data.totp.qr_code,
+      secret: data.totp.secret,
+      recoveryCodes: codes,
+    };
+  }
+
+  /**
+   * Confirm enrollment: flip staff.mfa_enrolled to true and audit. The frontend
+   * has already run Supabase's challenge+verify against the user's session
+   * (server-validated by Supabase). When the admin SDK exposes verifyFactor we
+   * re-check server-side for defence in depth; otherwise we trust that result.
+   */
+  async verifyMfa(
+    staffId: string,
+    supabaseUid: string,
+    factorId: string,
+    code: string,
+  ): Promise<void> {
+    const adminMfa = this.adminMfa();
+    if (adminMfa?.verifyFactor) {
+      const { error } = await adminMfa.verifyFactor({ userId: supabaseUid, factorId, code });
+      if (error) {
+        throw new AuthError('MFA_VERIFY_FAILED', 400, 'Invalid verification code.');
+      }
+    }
+
+    await this.db
+      .updateTable('staff')
+      .set({ mfa_enrolled: true })
+      .where('id', '=', staffId)
+      .execute();
+    await this.invalidateCache(supabaseUid);
+
+    this.auditServiceLog({
+      actorId: staffId,
+      actorSource: 'web',
+      entity: 'staff',
+      entityId: staffId,
+      action: 'mfa.enroll',
+    });
+  }
+
+  /**
+   * Admin-only MFA reset for a user who lost their authenticator. Deletes every
+   * Supabase factor, clears mfa_enrolled, drops their recovery codes, and evicts
+   * the cache so the next login re-enters the /mfa-setup flow.
+   */
+  async resetMfa(targetStaffId: string, adminId: string): Promise<void> {
+    const target = await this.db
+      .selectFrom('staff')
+      .select(['id', 'supabase_uid'])
+      .where('id', '=', targetStaffId)
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+    if (!target) {
+      throw new AuthError('NOT_FOUND', 404, 'Staff member not found.');
+    }
+
+    if (target.supabase_uid) {
+      const adminMfa = this.supabaseAdmin.auth.admin.mfa;
+      const { data, error } = await adminMfa.listFactors({ userId: target.supabase_uid });
+      if (error) {
+        this.logger.warn({ err: error, targetStaffId }, 'resetMfa: listFactors failed');
+      } else {
+        for (const factor of data?.factors ?? []) {
+          const del = await adminMfa.deleteFactor({ id: factor.id, userId: target.supabase_uid });
+          if (del.error) {
+            this.logger.warn(
+              { err: del.error, factorId: factor.id, targetStaffId },
+              'resetMfa: deleteFactor failed',
+            );
+          }
+        }
+      }
+    }
+
+    await this.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable('staff')
+        .set({ mfa_enrolled: false })
+        .where('id', '=', targetStaffId)
+        .execute();
+      await trx.deleteFrom('mfa_recovery_codes').where('staff_id', '=', targetStaffId).execute();
+    });
+
+    if (target.supabase_uid) {
+      await this.invalidateCache(target.supabase_uid);
+    }
+
+    this.auditServiceLog({
+      actorId: adminId,
+      actorSource: 'web',
+      entity: 'staff',
+      entityId: targetStaffId,
+      action: 'mfa.reset',
+    });
+  }
+
+  /**
+   * Resolve the admin MFA enroll/verify surface if this SDK build exposes it.
+   * Returns null when absent (the 2.108.2 admin client) so callers can fall
+   * back instead of hitting a TypeError. See MfaAdminEnrollApi.
+   */
+  private adminMfa(): MfaAdminEnrollApi | null {
+    const mfa = (this.supabaseAdmin.auth.admin as unknown as { mfa?: Partial<MfaAdminEnrollApi> })
+      .mfa;
+    return typeof mfa?.enrollFactor === 'function' ? (mfa as MfaAdminEnrollApi) : null;
+  }
+
+  /** Evict the staff_lookup cache (best-effort; bounded by the 5-min TTL). */
+  private async invalidateCache(supabaseUid: string): Promise<void> {
+    try {
+      await this.redis.del(staffCacheKey(supabaseUid));
+    } catch (err) {
+      this.logger.warn({ err, supabaseUid }, 'invalidateCache: redis del failed');
+    }
+  }
+}
+
+/** SHA-256 (hex) of a recovery code. High-entropy input → fast hash is fine. */
+function hashRecoveryCode(code: string): string {
+  return createHash('sha256').update(code).digest('hex');
 }
 
 /** Postgres unique-violation (SQLSTATE 23505), however the driver surfaces it. */

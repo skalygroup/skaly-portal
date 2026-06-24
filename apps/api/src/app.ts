@@ -19,10 +19,9 @@ import { redis } from './lib/redis.js';
 import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import authPlugin from './middleware/auth.plugin.js';
 import { healthRoutes } from './routes/health.js';
-import { inviteRoutes } from './routes/auth/invite.js';
-import { signupRequestRoutes } from './routes/auth/signup-request.js';
-import { signupReviewRoutes } from './routes/auth/signup-review.js';
-import { signupStatusRoutes } from './routes/auth/signup-status.js';
+import authRoutes from './routes/auth/index.js';
+import staffRoutes from './routes/staff/index.js';
+import settingsRoutes from './routes/settings/index.js';
 
 /**
  * Builds and fully configures the Fastify instance — WITHOUT calling listen().
@@ -106,11 +105,13 @@ export async function buildApp(
   await app.register(authPlugin);
 
   // ── Routes ─────────────────────────────────────────────────────────
+  // Each area is a barrel (routes/<area>/index.ts) that registers its sibling
+  // route files; the /v1 version prefix is applied once here, not repeated in
+  // every route path. Health stays unversioned-by-convention at /v1/health.
   await app.register(healthRoutes);
-  await app.register(inviteRoutes);
-  await app.register(signupRequestRoutes);
-  await app.register(signupReviewRoutes);
-  await app.register(signupStatusRoutes);
+  await app.register(authRoutes, { prefix: '/v1' });
+  await app.register(staffRoutes, { prefix: '/v1' });
+  await app.register(settingsRoutes, { prefix: '/v1' });
 
   return app;
 }

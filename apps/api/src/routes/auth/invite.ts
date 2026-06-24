@@ -25,7 +25,7 @@ export async function inviteRoutes(app: FastifyInstance) {
 
   // Admin only — create an invite link and trigger the Supabase invite email.
   r.post(
-    '/v1/auth/invite',
+    '/auth/invite',
     {
       preHandler: [app.verifyJwt, app.requireRole('admin')],
       schema: { body: InviteCreateSchema },
@@ -50,7 +50,7 @@ export async function inviteRoutes(app: FastifyInstance) {
   // Public — redeem an invite token. The frontend follows with a password
   // grant against Supabase to obtain a session.
   r.post(
-    '/v1/auth/signup/invite',
+    '/auth/signup/invite',
     { schema: { body: SignupViaInviteSchema } },
     async (request, reply) => {
       try {

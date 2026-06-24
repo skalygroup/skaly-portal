@@ -14,12 +14,10 @@ function sendAuthError(err: unknown, reply: FastifyReply): never | FastifyReply 
   throw err;
 }
 
-function toIso(d: unknown): string | null {
-  return d ? new Date(d as string).toISOString() : null;
-}
-
 /**
- * Admin-only signup review routes: approve, reject, list, and CV download.
+ * Admin-only signup review routes: approve, reject, and CV download. (The admin
+ * LIST view lives in routes/settings/signup-requests.ts.) Paths are area-
+ * relative; the /v1 prefix is applied by the auth barrel in app.ts.
  */
 export async function signupReviewRoutes(app: FastifyInstance) {
   const authService = new AuthService(
@@ -35,7 +33,7 @@ export async function signupReviewRoutes(app: FastifyInstance) {
 
   // ── Approve ─────────────────────────────────────────────────────────
   r.post(
-    '/v1/auth/signup-requests/:id/approve',
+    '/auth/signup-requests/:id/approve',
     {
       ...adminOnly,
       schema: { params: z.object({ id: z.string().uuid() }), body: SignupApproveSchema },
@@ -58,7 +56,7 @@ export async function signupReviewRoutes(app: FastifyInstance) {
 
   // ── Reject ──────────────────────────────────────────────────────────
   r.post(
-    '/v1/auth/signup-requests/:id/reject',
+    '/auth/signup-requests/:id/reject',
     {
       ...adminOnly,
       schema: { params: z.object({ id: z.string().uuid() }), body: SignupRejectSchema },
@@ -79,66 +77,9 @@ export async function signupReviewRoutes(app: FastifyInstance) {
     },
   );
 
-  // ── Admin list ──────────────────────────────────────────────────────
-  // Admins CAN see rejectionNote here (their own internal note). The privacy
-  // rule only bars the applicant's public poll endpoint from seeing it.
-  r.get(
-    '/v1/settings/signup-requests',
-    {
-      ...adminOnly,
-      schema: {
-        querystring: z.object({
-          status: z.enum(['pending', 'approved', 'rejected', 'all']).default('pending'),
-        }),
-      },
-    },
-    async (request) => {
-      const { status } = request.query;
-      let q = app.db
-        .selectFrom('signup_requests as sr')
-        .leftJoin('staff as rv', 'rv.id', 'sr.reviewed_by')
-        .select([
-          'sr.id',
-          'sr.name',
-          'sr.email',
-          'sr.date_of_birth',
-          'sr.mobile_number',
-          'sr.role_requested',
-          'sr.message',
-          'sr.cv_file_key',
-          'sr.status',
-          'sr.created_at',
-          'sr.reviewed_at',
-          'sr.rejection_note',
-          'sr.public_rejection_message',
-          'rv.id as reviewer_id',
-          'rv.name as reviewer_name',
-        ]);
-      if (status !== 'all') q = q.where('sr.status', '=', status);
-      const rows = await q.orderBy('sr.created_at', 'desc').execute();
-
-      return rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        email: row.email,
-        dateOfBirth: toIso(row.date_of_birth)?.slice(0, 10) ?? null,
-        mobileNumber: row.mobile_number,
-        roleRequested: row.role_requested,
-        message: row.message,
-        cvFileKey: row.cv_file_key,
-        status: row.status,
-        createdAt: toIso(row.created_at),
-        reviewedAt: toIso(row.reviewed_at),
-        reviewedBy: row.reviewer_id ? { id: row.reviewer_id, name: row.reviewer_name } : null,
-        rejectionNote: row.rejection_note,
-        publicRejectionMessage: row.public_rejection_message,
-      }));
-    },
-  );
-
   // ── CV download (presigned, 1-hour TTL) ─────────────────────────────
   r.get(
-    '/v1/auth/signup-requests/:id/cv',
+    '/auth/signup-requests/:id/cv',
     { ...adminOnly, schema: { params: z.object({ id: z.string().uuid() }) } },
     async (request, reply) => {
       const row = await app.db

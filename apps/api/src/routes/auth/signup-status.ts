@@ -19,7 +19,7 @@ export async function signupStatusRoutes(app: FastifyInstance) {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
   r.get(
-    '/v1/auth/signup-requests/me/status',
+    '/auth/signup-requests/me/status',
     {
       config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
       schema: {

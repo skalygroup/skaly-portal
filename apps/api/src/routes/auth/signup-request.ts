@@ -23,7 +23,7 @@ export async function signupRequestRoutes(app: FastifyInstance) {
     getR2Bucket(),
   );
 
-  app.post('/v1/auth/signup/request', async (request, reply) => {
+  app.post('/auth/signup/request', async (request, reply) => {
     if (!request.isMultipart()) {
       return reply.status(415).send({
         error: { code: 'UNSUPPORTED_MEDIA_TYPE', message: 'Expected multipart/form-data.' },

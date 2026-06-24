@@ -287,7 +287,7 @@ describe('rejection privacy contract (linchpin)', () => {
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
     app.decorate('db', db);
-    await app.register(signupStatusRoutes);
+    await app.register(signupStatusRoutes, { prefix: '/v1' });
     await app.ready();
 
     const res = await app.inject({

@@ -172,6 +172,14 @@ export interface Messages {
   sender_type: Generated<string>;
 }
 
+export interface MfaRecoveryCodes {
+  code_hash: string;
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  staff_id: string;
+  used_at: Timestamp | null;
+}
+
 export interface Months {
   created_at: Generated<Timestamp>;
   label: string;
@@ -375,6 +383,7 @@ export interface DB {
   invite_links: InviteLinks;
   message_mentions: MessageMentions;
   messages: Messages;
+  mfa_recovery_codes: MfaRecoveryCodes;
   months: Months;
   notifications: Notifications;
   pg_stat_statements: PgStatStatements;
