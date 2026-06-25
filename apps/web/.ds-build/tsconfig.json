@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../src/*"],
+      "next/image": ["./shims/next-image.tsx"],
+      "next/link": ["./shims/next-link.tsx"]
+    }
+  }
+}

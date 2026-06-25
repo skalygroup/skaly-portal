@@ -1,0 +1,22 @@
+{
+  "projectId": "9d27f4b4-22e3-48ae-93cf-cca25f01d284",
+  "pkg": "@skaly/web",
+  "globalName": "SkalyUI",
+  "shape": "package",
+  "srcDir": "src/components",
+  "tsconfig": ".ds-build/tsconfig.json",
+  "cssEntry": ".ds-build/styles.compiled.css",
+  "readmeHeader": ".design-sync/conventions.md",
+  "runtimeFontPrefixes": ["Big Shoulders", "DM Sans", "DM Mono"],
+  "overrides": {
+    "BrandPanel": { "cardMode": "single", "primaryStory": "Default", "viewport": "560x620" }
+  },
+  "componentSrcMap": {
+    "Alert": "src/components/ui/alert.tsx",
+    "Button": "src/components/ui/button.tsx",
+    "Input": "src/components/ui/input.tsx",
+    "Label": "src/components/ui/label.tsx",
+    "Form": "src/components/ui/form.tsx",
+    "BrandPanel": "src/components/auth/brand-panel.tsx"
+  }
+}

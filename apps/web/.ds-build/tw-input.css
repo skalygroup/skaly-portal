@@ -1,0 +1,231 @@
+/* design-sync Tailwind v4 input — mirrors apps/web/src/app/globals.css, plus:
+   (1) Google Fonts @import + --font-* var definitions that next/font injects at
+       runtime in the real app (so previews render in the real brand fonts), and
+   (2) @source directives so Tailwind scans the scoped components for classes.
+   Compiled by .ds-sync/compile-css.mjs into .ds-build/styles.compiled.css,
+   which cfg.cssEntry feeds into _ds_bundle.css. */
+@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@400;600;700;800&family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap');
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+/* Scan the whole app so the shipped (static) stylesheet covers the real
+   design-language utility usage, not just the 6 components. */
+@source '../src';
+/* Safelist the full brand colour families (bg/text/border × every brand
+   token) so the design agent can compose with them even where the app doesn't
+   yet use a given combination — the shipped CSS is static, not JIT. */
+@source inline("{bg,text,border}-{bg-base,bg-surface,bg-elevated,bg-hover,bg-selected,border-subtle,border-default,border-strong,text-primary,text-secondary,text-muted,text-disabled,accent-gold,accent-gold-hover,status-green,status-blue,status-amber,status-red,status-teal,status-grey,status-gold}");
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --font-family-display: var(--font-big-shoulders);
+  --font-family-body: var(--font-dm-sans);
+  --font-family-mono: var(--font-dm-mono);
+
+  --color-bg-base: var(--bg-base);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-selected: var(--bg-selected);
+
+  --color-border-subtle: var(--border-subtle);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-disabled: var(--text-disabled);
+
+  --color-accent-gold: var(--accent-gold);
+  --color-accent-gold-hover: var(--accent-gold-hover);
+
+  --color-status-green: var(--status-green);
+  --color-status-blue: var(--status-blue);
+  --color-status-amber: var(--status-amber);
+  --color-status-red: var(--status-red);
+  --color-status-teal: var(--status-teal);
+  --color-status-grey: var(--status-grey);
+  --color-status-gold: var(--status-gold);
+}
+
+:root {
+  /* Brand fonts — defined here for the bundle; next/font sets these at runtime in-app */
+  --font-big-shoulders: 'Big Shoulders Display', 'Arial Narrow', sans-serif;
+  --font-dm-sans: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-dm-mono: 'DM Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  /* Backgrounds — 60% black family */
+  --bg-base:           #0D0D0F;
+  --bg-surface:        #141417;
+  --bg-elevated:       #1E1E23;
+  --bg-hover:          #252529;
+  --bg-selected:       #2A2A30;
+
+  /* Borders */
+  --border-subtle:     #2C2C33;
+  --border-default:    #3A3A43;
+  --border-strong:     #52525E;
+
+  /* Text — 30% white family */
+  --text-primary:      #F4F4F5;
+  --text-secondary:    #A1A1AA;
+  --text-muted:        #71717A;
+  --text-disabled:     #3F3F46;
+
+  /* Gold — 10% accent */
+  --accent-gold:          #FDC257;
+  --accent-gold-hover:    #FFD07A;
+  --accent-gold-dim:      rgba(253, 194, 87, 0.12);
+  --accent-gold-border:   rgba(253, 194, 87, 0.60);
+  --accent-gold-06:       rgba(253, 194, 87, 0.06);
+
+  /* Status colours */
+  --status-green:  #22C55E;
+  --status-blue:   #3B82F6;
+  --status-amber:  #F59E0B;
+  --status-red:    #EF4444;
+  --status-teal:   #14B8A6;
+  --status-grey:   #6B7280;
+  --status-gold:   #FDC257;
+
+  /* shadcn/ui raw channel format */
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --border: oklch(0.922 0 0);
+  --radius: 0.625rem;
+
+  /* Typography */
+  --font-display: var(--font-big-shoulders);
+  --font-body:    var(--font-dm-sans);
+  --font-mono:    var(--font-dm-mono);
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@layer base {
+  *:focus-visible {
+    outline: 2px solid var(--accent-gold);
+    outline-offset: 2px;
+  }
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
