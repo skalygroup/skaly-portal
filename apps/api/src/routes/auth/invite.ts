@@ -1,6 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { InviteCreateSchema, SignupViaInviteSchema } from '@skaly/shared/schemas/auth';
+import { z } from 'zod';
+import {
+  InviteCreateSchema,
+  InviteCheckResponseSchema,
+  SignupViaInviteSchema,
+} from '@skaly/shared/schemas/auth';
 import { AuthService, AuthError } from '../../services/AuthService.js';
 import { supabaseAdmin } from '../../lib/supabase.js';
 import { logger } from '../../lib/logger.js';
@@ -44,6 +49,37 @@ export async function inviteRoutes(app: FastifyInstance) {
         email: invite.email,
         role: invite.role,
       });
+    },
+  );
+
+  // Public — pre-validate a token so the redemption page can show the scoped
+  // email/role and auto-login after redeem. Rate-limited to deter enumeration.
+  r.get(
+    '/auth/invite/:token/check',
+    {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+      schema: {
+        params: z.object({ token: z.string().min(1) }),
+        response: {
+          200: InviteCheckResponseSchema,
+          404: z.object({ error: z.object({ code: z.string(), message: z.string() }) }),
+          409: z.object({ error: z.object({ code: z.string(), message: z.string() }) }),
+          410: z.object({ error: z.object({ code: z.string(), message: z.string() }) }),
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const { email, role } = await authService.checkInvite(request.params.token);
+        return reply.status(200).send({ email, role: role as never });
+      } catch (err) {
+        if (err instanceof AuthError) {
+          return reply
+            .status(err.statusCode as 404 | 409 | 410)
+            .send({ error: { code: err.code, message: err.message } });
+        }
+        throw err;
+      }
     },
   );
 

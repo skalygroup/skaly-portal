@@ -207,6 +207,31 @@ export class AuthService {
   }
 
   /**
+   * Pre-validate an invite token for the redemption page (read-only). Returns
+   * the scoped email + role so the form can show them and the client can
+   * auto-login after redeeming. Throws the same AuthErrors as
+   * consumeInviteSignup so the frontend handles both with one code switch.
+   */
+  async checkInvite(token: string): Promise<{ email: string; role: string }> {
+    const invite = await this.db
+      .selectFrom('invite_links')
+      .select(['email', 'role', 'used_at', 'expires_at'])
+      .where('token', '=', token)
+      .executeTakeFirst();
+
+    if (!invite) {
+      throw new AuthError('INVITE_NOT_FOUND', 404, 'Invite not found.');
+    }
+    if (invite.used_at !== null) {
+      throw new AuthError('INVITE_ALREADY_USED', 409, 'This invite has already been used.');
+    }
+    if (new Date(invite.expires_at as unknown as string).getTime() < Date.now()) {
+      throw new AuthError('INVITE_EXPIRED', 410, 'This invite has expired.');
+    }
+    return { email: invite.email ?? '', role: invite.role };
+  }
+
+  /**
    * Consume an invite token: validate it, set the password on the Supabase user
    * that was created at invite time, create the staff row, and mark the token
    * used — all in one transaction.

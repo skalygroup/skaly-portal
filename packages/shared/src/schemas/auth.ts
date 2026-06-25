@@ -52,6 +52,17 @@ export const InviteCreateSchema = z.object({
   role: RoleSchema,
 });
 
+/**
+ * Response of GET /v1/auth/invite/:token/check — pre-validates an invite for the
+ * redemption page so it can show the scoped email/role and auto-login after
+ * redeeming. Invalid tokens return the same error codes as the redeem endpoint
+ * (404 NOT_FOUND / 409 ALREADY_USED / 410 EXPIRED).
+ */
+export const InviteCheckResponseSchema = z.object({
+  email: z.string().email(),
+  role: RoleSchema,
+});
+
 /** Body of POST /v1/auth/signup/invite (accepting an invite link). */
 export const SignupViaInviteSchema = z.object({
   token: z.string().min(32),
@@ -154,6 +165,7 @@ export const StaffMeResponseSchema = z.object({
 export type LoginEmailInput = z.infer<typeof LoginEmailSchema>;
 export type InviteCreateInput = z.infer<typeof InviteCreateSchema>;
 export type SignupViaInviteInput = z.infer<typeof SignupViaInviteSchema>;
+export type InviteCheckResponse = z.infer<typeof InviteCheckResponseSchema>;
 export type SignupRequestInput = z.infer<typeof SignupRequestSchema>;
 export type SignupApproveInput = z.infer<typeof SignupApproveSchema>;
 export type SignupRejectInput = z.infer<typeof SignupRejectSchema>;
