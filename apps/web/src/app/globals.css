@@ -129,10 +129,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Focus ring — gold on all focusable elements (UIUX §20) */
-*:focus-visible {
-  outline: 2px solid var(--accent-gold);
-  outline-offset: 2px;
+/* Focus ring — gold on all focusable elements (UIUX §20). In @layer base so a
+   component that manages its own focus (e.g. the auth inputs' wrapper ring) can
+   opt the inner control out with `outline-none` — utilities outrank base, while
+   an unlayered rule would always win and double up the ring. */
+@layer base {
+  *:focus-visible {
+    outline: 2px solid var(--accent-gold);
+    outline-offset: 2px;
+  }
 }
 
 @theme inline {
