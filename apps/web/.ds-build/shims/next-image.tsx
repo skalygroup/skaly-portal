@@ -6,9 +6,11 @@ import * as React from 'react';
 // (those paths 404 in the preview/design environment since there's no Next
 // server). esbuild's png/svg loaders turn these imports into data URIs.
 import skalyLogo from '../../public/brand/skaly-logo.png';
+import googleG from '../../public/brand/google-g.svg';
 
 const PUBLIC_ASSETS: Record<string, string> = {
   '/brand/skaly-logo.png': skalyLogo as unknown as string,
+  '/brand/google-g.svg': googleG as unknown as string,
 };
 
 type Props = {

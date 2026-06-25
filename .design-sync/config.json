@@ -17,6 +17,15 @@
     "Input": "src/components/ui/input.tsx",
     "Label": "src/components/ui/label.tsx",
     "Form": "src/components/ui/form.tsx",
-    "BrandPanel": "src/components/auth/brand-panel.tsx"
+    "BrandPanel": "src/components/auth/brand-panel.tsx",
+    "TextField": "src/components/auth/form-controls.tsx",
+    "PasswordField": "src/components/auth/form-controls.tsx",
+    "DateField": "src/components/auth/form-controls.tsx",
+    "SelectField": "src/components/auth/form-controls.tsx",
+    "TextareaField": "src/components/auth/form-controls.tsx",
+    "FileField": "src/components/auth/form-controls.tsx",
+    "SubmitButton": "src/components/auth/form-controls.tsx",
+    "GoogleButton": "src/components/auth/form-controls.tsx",
+    "FormBanner": "src/components/auth/form-controls.tsx"
   }
 }

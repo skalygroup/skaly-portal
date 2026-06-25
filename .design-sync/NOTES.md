@@ -7,16 +7,27 @@ This is SEPARATE from the hand-built "Skaly Portal Design System" project
 components + full screen mockups this repo can't reproduce.
 
 ## Shape / why it's unusual
-- The "design system" is 6 shadcn/Radix + Tailwind v4 primitives living INSIDE
-  the Next.js app (`apps/web/src/components/ui` + `auth/brand-panel`), not a
-  published package with a `dist/`. So this is **synth-entry / no-dist** mode.
+- The "design system" is shadcn/Radix + Tailwind v4 components living INSIDE
+  the Next.js app, not a published package with a `dist/`. So this is
+  **synth-entry / no-dist** mode.
 - We do NOT let synth-entry `export *` the whole app. A hand-written entry
-  (`apps/web/.ds-build/entry.tsx`, committed) re-exports only the 6 scoped
+  (`apps/web/.ds-build/entry.tsx`, committed) re-exports only the scoped
   components. The converter is pointed at it via `--entry`, which also makes
   `PKG_DIR` resolve to `apps/web`.
 
+## Components synced (15, two groups)
+- `general/` (5) — the shadcn primitives in `src/components/ui`: Alert, Button,
+  Input, Label, Form.
+- `auth/` (10) — `src/components/auth`: BrandPanel + the 9 shared auth form
+  controls from **`form-controls.tsx`** (TextField, PasswordField, DateField,
+  SelectField, TextareaField, FileField, SubmitButton, GoogleButton, FormBanner).
+  All 9 map to the SAME file in `componentSrcMap` (one src file, many exports).
+  Their group is `auth` because the file sits under `src/components/auth/`.
+- Adding more form controls: export from form-controls.tsx → add to entry.tsx →
+  add to `componentSrcMap` → author `.design-sync/previews/<Name>.tsx` → rebuild.
+
 ## Build scaffolding (committed, under apps/web/.ds-build/)
-- `entry.tsx` — the bundle entry (6 components).
+- `entry.tsx` — the bundle entry (15 components; see "Components synced").
 - `tsconfig.json` — read by the converter's tsconfigPathsPlugin. Maps `@/*` →
   `../src/*` and aliases `next/image`/`next/link` to local shims.
   **Must be plain JSON with NO `//` or `"//"` comment keys** — the plugin's
@@ -27,7 +38,8 @@ components + full screen mockups this repo can't reproduce.
   components bundle outside Next. The image shim also inlines known `public/`
   assets by absolute URL (currently `/brand/skaly-logo.png`) as a data URI,
   because those paths 404 in the preview/design environment — this is what makes
-  BrandPanel's logo show.
+  BrandPanel's logo show. Asset map currently holds `/brand/skaly-logo.png`
+  (BrandPanel) and `/brand/google-g.svg` (GoogleButton).
 - `tw-input.css` + `compile-css.mjs` → `styles.compiled.css` (gitignored).
   The app's CSS is Tailwind v4 (`@import 'tailwindcss'` + `@theme` + `@apply`),
   which MUST be compiled to a static stylesheet (`cfg.cssEntry`). compile-css

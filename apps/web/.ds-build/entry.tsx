@@ -17,3 +17,15 @@ export {
   useFormField,
 } from '../src/components/ui/form';
 export { BrandPanel } from '../src/components/auth/brand-panel';
+export {
+  TextField,
+  PasswordField,
+  DateField,
+  SelectField,
+  TextareaField,
+  FileField,
+  SubmitButton,
+  GoogleButton,
+  FormBanner,
+  FieldShell,
+} from '../src/components/auth/form-controls';
