@@ -1,16 +1,18 @@
 import fp from 'fastify-plugin';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
+import { db } from '../lib/db.js';
+import { env } from '../lib/env.js';
+import { logger } from '../lib/logger.js';
+import { redis } from '../lib/redis.js';
+
+import type { Role } from '@skaly/shared/schemas/auth';
 import type {
   FastifyInstance,
   FastifyRequest,
   FastifyReply,
   preHandlerHookHandler,
 } from 'fastify';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
-import type { Role } from '@skaly/shared/schemas/auth';
-import { env } from '../lib/env.js';
-import { logger } from '../lib/logger.js';
-import { db } from '../lib/db.js';
-import { redis } from '../lib/redis.js';
 
 /**
  * Authenticated staff identity attached to every protected request.

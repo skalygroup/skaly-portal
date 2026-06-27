@@ -1,16 +1,19 @@
-import { describe, test, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
+
 import Fastify from 'fastify';
-import pg from 'pg';
-import { Kysely, PostgresDialect } from 'kysely';
-import { Redis } from 'ioredis';
 import { validatorCompiler, serializerCompiler } from 'fastify-type-provider-zod';
-import type { Logger } from 'pino';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import type { DB } from '@skaly/shared';
-import { AuthService } from '../../src/services/AuthService.js';
+import { Redis } from 'ioredis';
+import { Kysely, PostgresDialect } from 'kysely';
+import pg from 'pg';
+import { describe, test, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+
 import staffRoutes from '../../src/routes/staff/index.js';
+import { AuthService } from '../../src/services/AuthService.js';
+
 import type { AuthUser } from '../../src/middleware/auth.plugin.js';
+import type { DB } from '@skaly/shared';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Logger } from 'pino';
 
 // Integration test: real local Postgres + Redis (docker), Supabase mocked.
 const connectionString =

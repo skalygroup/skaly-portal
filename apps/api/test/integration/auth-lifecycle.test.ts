@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { SignJWT, generateKeyPair, type KeyLike } from 'jose';
 import { randomUUID } from 'node:crypto';
+
+import { SignJWT, generateKeyPair, type KeyLike } from 'jose';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 
 /**
  * End-to-end auth lifecycle (Sprint 1 STEP 9). Runs against REAL Postgres +
@@ -23,7 +24,7 @@ const h = vi.hoisted(() => ({
 
 // Resolve the JWKS to our local public key instead of fetching Supabase's.
 vi.mock('jose', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('jose')>();
+  const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, createRemoteJWKSet: () => async () => h.keyHolder.publicKey };
 });
 
@@ -48,8 +49,8 @@ vi.mock('../../src/lib/supabase.js', () => ({
 // Imported AFTER the mocks above are declared (vitest hoists vi.mock).
 import { buildApp } from '../../src/app.js';
 import { db, pool } from '../../src/lib/db.js';
-import { redis } from '../../src/lib/redis.js';
 import { env } from '../../src/lib/env.js';
+import { redis } from '../../src/lib/redis.js';
 
 const USER_EMAIL = 'lifecycle@example.com';
 const ADMIN_EMAIL = `lifecycle-admin-${Date.now()}@lifecycle.itest`;

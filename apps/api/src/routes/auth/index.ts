@@ -1,9 +1,10 @@
-import type { FastifyInstance } from 'fastify';
 import { inviteRoutes } from './invite.js';
+import { sessionMfaRoutes } from './session-mfa.js';
 import { signupRequestRoutes } from './signup-request.js';
 import { signupReviewRoutes } from './signup-review.js';
 import { signupStatusRoutes } from './signup-status.js';
-import { sessionMfaRoutes } from './session-mfa.js';
+
+import type { FastifyInstance } from 'fastify';
 
 /**
  * Barrel for the /v1/auth/* area. Registers every sibling auth route file; the

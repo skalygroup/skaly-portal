@@ -141,6 +141,29 @@ export const MfaEnrollResponseSchema = z.object({
   recoveryCodes: z.array(z.string()).length(10),
 });
 
+/**
+ * One row of GET /v1/settings/signup-requests — the ADMIN list view. Unlike the
+ * applicant's public status poll, this intentionally carries `rejectionNote`:
+ * it's the admin's own internal note, visible only here (privacy boundary lives
+ * on the applicant endpoint, not this one).
+ */
+export const SignupRequestAdminItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  email: z.string().email(),
+  dateOfBirth: z.string().nullable(),
+  mobileNumber: z.string(),
+  roleRequested: RequestableRoleSchema,
+  message: z.string().nullable(),
+  cvFileKey: z.string().nullable(),
+  status: z.enum(['pending', 'approved', 'rejected']),
+  createdAt: z.string().nullable(),
+  reviewedAt: z.string().nullable(),
+  reviewedBy: z.object({ id: z.string(), name: z.string() }).nullable(),
+  rejectionNote: z.string().nullable(),
+  publicRejectionMessage: z.string().nullable(),
+});
+
 /** Returned by the session-refresh endpoint. */
 export const SessionRefreshResponseSchema = z.object({
   accessToken: z.string(),
@@ -173,6 +196,7 @@ export type PasswordResetRequestInput = z.infer<typeof PasswordResetRequestSchem
 export type PasswordResetConfirmInput = z.infer<typeof PasswordResetConfirmSchema>;
 export type MfaVerifyInput = z.infer<typeof MfaVerifySchema>;
 
+export type SignupRequestAdminItem = z.infer<typeof SignupRequestAdminItemSchema>;
 export type MfaEnrollResponse = z.infer<typeof MfaEnrollResponseSchema>;
 export type SessionRefreshResponse = z.infer<typeof SessionRefreshResponseSchema>;
 export type StaffMeResponse = z.infer<typeof StaffMeResponseSchema>;

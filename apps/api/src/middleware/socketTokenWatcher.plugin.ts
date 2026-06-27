@@ -1,5 +1,6 @@
-import type { Server, Socket } from 'socket.io';
 import { logger } from '../lib/logger.js';
+
+import type { Server, Socket } from 'socket.io';
 
 /**
  * WebSocket JWT refresh protocol (C-05).

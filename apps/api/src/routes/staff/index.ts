@@ -1,12 +1,14 @@
+import { StaffMeResponseSchema } from '@skaly/shared/schemas/auth';
+import { z } from 'zod';
+
+import { logger } from '../../lib/logger.js';
+import { getEffectivePermissions } from '../../lib/permissions.js';
+import { getR2Client, getR2Bucket } from '../../lib/r2.js';
+import { supabaseAdmin } from '../../lib/supabase.js';
+import { AuthService, AuthError } from '../../services/AuthService.js';
+
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { z } from 'zod';
-import { StaffMeResponseSchema } from '@skaly/shared/schemas/auth';
-import { AuthService, AuthError } from '../../services/AuthService.js';
-import { supabaseAdmin } from '../../lib/supabase.js';
-import { logger } from '../../lib/logger.js';
-import { getR2Client, getR2Bucket } from '../../lib/r2.js';
-import { getEffectivePermissions } from '../../lib/permissions.js';
 
 function sendAuthError(err: unknown, reply: FastifyReply): FastifyReply {
   if (err instanceof AuthError) {

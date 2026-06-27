@@ -1,22 +1,18 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import type { AuthChangeEvent, Session, User } from '@supabase/supabase-js';
-import { Loader2, Phone } from 'lucide-react';
 import { SignupRequestSchema } from '@skaly/shared/schemas/auth';
-import { createClient } from '@/lib/supabase/client';
-import { api, ApiError } from '@/lib/api';
-import {
-  buildSignupFormData,
-  validateCvFile,
-  CV_ACCEPT,
-  ROLE_OPTIONS,
-} from '@/lib/signup-form';
+import { Loader2, Phone } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
+import { useForm } from 'react-hook-form';
+
+import type { AuthChangeEvent, Session, User } from '@supabase/supabase-js';
+import type { z } from 'zod';
+
+
+
 import {
   TextField,
   DateField,
@@ -26,6 +22,14 @@ import {
   SubmitButton,
   FormBanner,
 } from '@/components/auth/form-controls';
+import { api, ApiError } from '@/lib/api';
+import {
+  buildSignupFormData,
+  validateCvFile,
+  CV_ACCEPT,
+  ROLE_OPTIONS,
+} from '@/lib/signup-form';
+import { createClient } from '@/lib/supabase/client';
 
 // Only the fields the user still fills in — name/email/googleUid come from the
 // Google session.

@@ -1,4 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
+
 import { handleBotStream } from '../../../src/lib/bot/stream-handler.js';
 
 // Mock dependencies

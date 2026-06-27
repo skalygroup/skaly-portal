@@ -1,7 +1,7 @@
-﻿import { db } from '../src/lib/db.js';
-import { logger } from '../src/lib/logger.js';
-import { seedSystemActor } from '../../../database/seeds/001_system_actor.js';
+﻿import { seedSystemActor } from '../../../database/seeds/001_system_actor.js';
 import { seedDevData } from '../../../database/seeds/002_dev_data.js';
+import { db } from '../src/lib/db.js';
+import { logger } from '../src/lib/logger.js';
 
 async function run() {
   try {

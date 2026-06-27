@@ -1,6 +1,7 @@
+import { z } from 'zod';
+
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { z } from 'zod';
 
 function toIso(d: unknown): string | null {
   return d ? new Date(d as string).toISOString() : null;

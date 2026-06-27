@@ -180,7 +180,6 @@ export function usePolling<T>(
       pollerRef.current = null;
     };
     // Intentionally run once; live values flow through refs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const stop = useCallback(() => {

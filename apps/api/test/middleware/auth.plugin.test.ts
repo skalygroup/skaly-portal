@@ -1,6 +1,6 @@
-import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { SignJWT, generateKeyPair, type KeyLike } from 'jose';
+import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 
 // ── Shared mock state (hoisted so vi.mock factories can close over it) ──────
 const h = vi.hoisted(() => {
@@ -57,7 +57,7 @@ vi.mock('../../src/lib/redis.js', () => ({
 // Keep real jose (real jwtVerify / SignJWT) but resolve keys locally instead
 // of fetching a remote JWKS.
 vi.mock('jose', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('jose')>();
+  const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, createRemoteJWKSet: () => async () => h.keyHolder.publicKey };
 });
 

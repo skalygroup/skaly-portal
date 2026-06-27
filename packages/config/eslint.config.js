@@ -1,5 +1,6 @@
 import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
+import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 
 /** @type {import('eslint').Linter.Config[]} */
@@ -12,6 +13,9 @@ export default [
       '**/dist/**',
       '**/build/**',
       '**/.next/**',
+      // Generated design-sync build output (Claude Design shims/bundles) —
+      // not authored here, ships its own @next/next disables we don't register.
+      '**/.ds-build/**',
       '**/next-env.d.ts',
       '**/db.types.ts',
     ],
@@ -25,6 +29,11 @@ export default [
     files: ['**/*.ts', '**/*.tsx'],
     plugins: {
       import: importPlugin,
+      // React Hooks linting. Registered here so inline
+      // `eslint-disable react-hooks/*` directives resolve (otherwise ESLint v9
+      // errors "rule definition not found"). Harmless for non-React packages —
+      // the rules only fire on hooks/components, which they don't contain.
+      'react-hooks': reactHooks,
     },
     languageOptions: {
       globals: {
@@ -53,6 +62,11 @@ export default [
         },
       ],
       'import/no-duplicates': 'warn',
+
+      // React Hooks — real bugs (conditional hooks) are errors; missing-deps
+      // are warnings, consistent with the import/order + TS rules above.
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
 
       // TypeScript rules
       '@typescript-eslint/no-unused-vars': [

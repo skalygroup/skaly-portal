@@ -1,8 +1,10 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useState, type ReactNode } from 'react';
 import { Toaster } from 'sonner';
+
+import { useSessionRefresh } from '@/lib/hooks/use-session-refresh';
 
 /**
  * App-wide client providers: TanStack Query + the Sonner toaster. Mounted once
@@ -13,6 +15,9 @@ import { Toaster } from 'sonner';
  * the :root default in globals.css), so a theme switcher would be dead weight.
  */
 export function Providers({ children }: { children: ReactNode }) {
+  // Silent session refresh for every signed-in page (no-ops when signed out).
+  useSessionRefresh();
+
   // One QueryClient per browser session, created lazily so it isn't shared
   // across requests on the server.
   const [queryClient] = useState(

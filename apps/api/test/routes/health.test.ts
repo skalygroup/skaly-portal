@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
 import { healthRoutes } from '../../src/routes/health.js';
 
 // Build a bare Fastify instance with mocked pool/redis decorators (the real

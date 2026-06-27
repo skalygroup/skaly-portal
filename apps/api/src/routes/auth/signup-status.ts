@@ -1,7 +1,8 @@
+import { SignupStatusResponseSchema } from '@skaly/shared/schemas/auth';
+import { z } from 'zod';
+
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { z } from 'zod';
-import { SignupStatusResponseSchema } from '@skaly/shared/schemas/auth';
 
 /**
  * GET /v1/auth/signup-requests/me/status — PUBLIC poll endpoint for the

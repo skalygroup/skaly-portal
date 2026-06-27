@@ -1,15 +1,18 @@
-import { describe, test, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
+
 import Fastify from 'fastify';
-import pg from 'pg';
-import { Kysely, PostgresDialect, sql } from 'kysely';
 import { validatorCompiler, serializerCompiler } from 'fastify-type-provider-zod';
+import { Kysely, PostgresDialect, sql } from 'kysely';
+import pg from 'pg';
+import { describe, test, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+
+import { signupStatusRoutes } from '../../src/routes/auth/signup-status.js';
+import { AuthService } from '../../src/services/AuthService.js';
+
+import type { DB } from '@skaly/shared';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Redis } from 'ioredis';
 import type { Logger } from 'pino';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import type { DB } from '@skaly/shared';
-import { AuthService } from '../../src/services/AuthService.js';
-import { signupStatusRoutes } from '../../src/routes/auth/signup-status.js';
 
 const connectionString =
   process.env.DATABASE_URL ?? 'postgresql://skaly:localdev@localhost:5432/skaly_dev';

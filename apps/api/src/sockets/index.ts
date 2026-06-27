@@ -1,10 +1,12 @@
-import type { Server as HttpServer } from 'node:http';
-import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { Redis } from 'ioredis';
+import { Server } from 'socket.io';
+
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { setupSocketTokenWatcher } from '../middleware/socketTokenWatcher.plugin.js';
+
+import type { Server as HttpServer } from 'node:http';
 
 export interface SocketSetup {
   io: Server;

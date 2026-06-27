@@ -1,10 +1,13 @@
+import { Big_Shoulders, DM_Sans, DM_Mono } from 'next/font/google';
+
 import type { Metadata } from 'next';
+
 // Google renamed "Big Shoulders Display" to "Big Shoulders"; this Next
 // version exports it as `Big_Shoulders` (NOT `Big_Shoulders_Display`).
-import { Big_Shoulders, DM_Sans, DM_Mono } from 'next/font/google';
 import './globals.css';
-import { cn } from "@/lib/utils";
+import { CursorFollow } from "@/components/effects/cursor-follow";
 import { Providers } from "@/components/providers";
+import { cn } from "@/lib/utils";
 
 const bigShoulders = Big_Shoulders({
   subsets: ['latin'],
@@ -48,6 +51,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       {/* suppressHydrationWarning: extensions also tag <body> (e.g. ColorZilla's
           cz-shortcut-listen="true"). Same one-level scope as <html> above. */}
       <body suppressHydrationWarning>
+        <CursorFollow />
         <Providers>{children}</Providers>
       </body>
     </html>

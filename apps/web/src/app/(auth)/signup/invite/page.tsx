@@ -1,18 +1,19 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
-import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import { Loader2, Mail, User, Phone } from 'lucide-react';
 import {
   SignupViaInviteSchema,
   type InviteCheckResponse,
 } from '@skaly/shared/schemas/auth';
-import { createClient } from '@/lib/supabase/client';
-import { api, ApiError } from '@/lib/api';
+import { Loader2, Mail, User, Phone } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+
+import type { z } from 'zod';
+
+
 import {
   TextField,
   PasswordField,
@@ -20,6 +21,8 @@ import {
   SubmitButton,
   FormBanner,
 } from '@/components/auth/form-controls';
+import { api, ApiError } from '@/lib/api';
+import { createClient } from '@/lib/supabase/client';
 
 // Token comes from the URL, not the form.
 const InviteFormSchema = SignupViaInviteSchema.omit({ token: true });

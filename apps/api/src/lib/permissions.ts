@@ -1,6 +1,6 @@
-import type { Kysely } from 'kysely';
 import type { DB } from '@skaly/shared';
 import type { Role } from '@skaly/shared/schemas/auth';
+import type { Kysely } from 'kysely';
 
 /**
  * Sprint 1 permission baseline — the role-default layer of the three-layer

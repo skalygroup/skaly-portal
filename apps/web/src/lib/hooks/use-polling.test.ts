@@ -2,6 +2,7 @@
 // The scheduler core is pure (timers + Date only); run in node to sidestep the
 // repo's currently-broken jsdom install.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { createPoller } from './use-polling';
 
 /**

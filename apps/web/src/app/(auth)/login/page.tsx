@@ -1,25 +1,38 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import Image from 'next/image';
-import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Loader2, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import {
   LoginEmailSchema,
   type LoginEmailInput,
   type StaffMeResponse,
 } from '@skaly/shared/schemas/auth';
-import { createClient } from '@/lib/supabase/client';
+import { Loader2, Mail, Lock, Eye, EyeOff } from 'lucide-react';
+import Image from 'next/image';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { toast } from 'sonner';
+
 import { api, ApiError } from '@/lib/api';
+import { createClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
   const supabase = createClient();
   const [oauthPending, setOauthPending] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  // After a completed password reset we redirect here with ?reset=success.
+  // Read it from the URL (rather than useSearchParams, which would force a
+  // Suspense boundary), toast once, then strip the param so a refresh is clean.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('reset') === 'success') {
+      toast.success('Password updated. Sign in with your new password.');
+      window.history.replaceState(null, '', '/login');
+    }
+  }, []);
 
   const {
     register,
@@ -99,13 +112,13 @@ export default function LoginPage() {
     <div className="w-full">
       {/* Mobile-only mark (brand panel is hidden below md) */}
       <Image
-        src="/brand/skaly-mark.svg"
-        alt="Skaly"
-        width={44}
-        height={44}
+        src="/brand/skaly-logo.png"
+        alt="Skaly Group"
+        width={52}
+        height={52}
         priority
         unoptimized
-        className="mb-6 rounded-[12px] md:hidden"
+        className="mb-6 md:hidden"
       />
 
       <div className="mb-7">
@@ -140,6 +153,7 @@ export default function LoginPage() {
               disabled={busy}
               className={inputEl}
               aria-invalid={!!errors.email}
+              suppressHydrationWarning
               {...register('email')}
             />
           </div>
@@ -171,6 +185,7 @@ export default function LoginPage() {
               disabled={busy}
               className={inputEl}
               aria-invalid={!!errors.password}
+              suppressHydrationWarning
               {...register('password')}
             />
             <button
@@ -178,6 +193,7 @@ export default function LoginPage() {
               onClick={() => setShowPassword((s) => !s)}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
               className="inline-flex shrink-0 p-1 text-text-muted hover:text-text-secondary"
+              suppressHydrationWarning
             >
               {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
@@ -192,6 +208,7 @@ export default function LoginPage() {
           type="submit"
           disabled={busy}
           className="mt-1.5 flex h-[46px] w-full items-center justify-center gap-2.5 rounded-md bg-accent-gold text-[15px] font-semibold text-bg-base transition-[background,transform] hover:bg-accent-gold-hover active:scale-[0.985] disabled:opacity-60"
+          suppressHydrationWarning
         >
           {isSubmitting && <Loader2 size={16} className="animate-spin" />}
           Sign in
@@ -213,6 +230,7 @@ export default function LoginPage() {
         onClick={onGoogle}
         disabled={busy}
         className="flex h-[46px] w-full items-center justify-center gap-2.5 rounded-md border border-border-default bg-bg-elevated text-[15px] font-semibold text-text-primary transition-colors hover:border-border-strong hover:bg-bg-hover active:scale-[0.985] disabled:opacity-60"
+        suppressHydrationWarning
       >
         {oauthPending ? (
           <Loader2 size={16} className="animate-spin" />

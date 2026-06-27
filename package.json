@@ -13,7 +13,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r exec eslint .",
+    "lint": "pnpm -r exec eslint . --max-warnings 0",
     "db:migrate": "pnpm --filter @skaly/api db:migrate",
     "db:rollback": "pnpm --filter @skaly/api db:rollback",
     "db:status": "pnpm --filter @skaly/api db:status",

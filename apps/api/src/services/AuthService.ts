@@ -1,14 +1,19 @@
-import type { Readable } from 'node:stream';
 import { createHash, randomBytes } from 'node:crypto';
-import { sql, type Kysely, type Transaction } from 'kysely';
-import type { Redis } from 'ioredis';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import type { S3Client } from '@aws-sdk/client-s3';
+
 import { Upload } from '@aws-sdk/lib-storage';
-import type { Logger } from 'pino';
+import { sql, type Kysely, type Transaction } from 'kysely';
+
+import { AttendanceService } from './AttendanceService.js';
+
+import type { S3Client } from '@aws-sdk/client-s3';
 import type { DB } from '@skaly/shared';
 import type { Role, SignupRequestInput } from '@skaly/shared/schemas/auth';
-import { AttendanceService } from './AttendanceService.js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Redis } from 'ioredis';
+import type { Readable } from 'node:stream';
+import type { Logger } from 'pino';
+
+
 
 /**
  * Domain error carrying the HTTP status the route should surface. Routes map

@@ -1,18 +1,21 @@
-import { describe, test, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import Fastify from 'fastify';
-import pg from 'pg';
-import { Kysely, PostgresDialect, sql } from 'kysely';
+import { fileURLToPath } from 'node:url';
+
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { mockClient } from 'aws-sdk-client-mock';
+import Fastify from 'fastify';
+import { Kysely, PostgresDialect, sql } from 'kysely';
+import pg from 'pg';
+import { describe, test, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+
+import { AuthService } from '../../src/services/AuthService.js';
+
+import type { DB } from '@skaly/shared';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Redis } from 'ioredis';
 import type { Logger } from 'pino';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import type { DB } from '@skaly/shared';
-import { AuthService } from '../../src/services/AuthService.js';
 
 // Integration: real local Postgres, S3/R2 mocked via aws-sdk-client-mock.
 const connectionString =
@@ -226,7 +229,6 @@ describe('signup CV upload — multipart 5MB limit (mirrors app.ts config)', () 
       for await (const part of request.parts()) {
         if (part.type === 'file') {
           try {
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             for await (const _chunk of part.file) {
               /* drain */
             }

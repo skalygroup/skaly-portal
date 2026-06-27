@@ -1,19 +1,12 @@
 import Image from 'next/image';
-import { CalendarCheck, Camera, UserRoundCheck, type LucideIcon } from 'lucide-react';
 
 /**
  * Left brand panel for the auth split-screen (redesign — docs login kit).
- * Black field with a gold-tint radial wash and a faded dot grid, the Skaly
- * monogram + wordmark, the "Operations, organised." pitch, three product
- * highlights, and a mono footer. Hidden below md (the layout shows the form
- * full-width on mobile).
+ * Black field with a gold-tint radial wash and a faded dot grid, the circular
+ * Skaly logo paired with the "Business Portal / Operations platform" lockup,
+ * the "Operations, organised." pitch, and a mono footer. Hidden below md (the
+ * layout shows the form full-width on mobile).
  */
-const FEATURES: { icon: LucideIcon; lead: string; rest: string }[] = [
-  { icon: CalendarCheck, lead: 'Content calendar', rest: 'across all clients at a glance' },
-  { icon: Camera, lead: 'Shoot planning', rest: 'with assignees and slots' },
-  { icon: UserRoundCheck, lead: 'Attendance & tasks', rest: 'tracked in real time' },
-];
-
 export function BrandPanel() {
   return (
     <div className="relative flex h-full flex-col justify-between overflow-hidden bg-bg-base px-14 py-11">
@@ -42,21 +35,21 @@ export function BrandPanel() {
       {/* Logo */}
       <div className="relative flex items-center gap-4">
         <Image
-          src="/brand/skaly-mark.svg"
-          alt="Skaly"
-          width={56}
-          height={56}
+          src="/brand/skaly-logo.png"
+          alt="Skaly Group"
+          width={78}
+          height={78}
           priority
           unoptimized
-          className="rounded-[14px]"
+          className="shrink-0"
         />
         <span className="h-10 w-px bg-border-default" />
         <div className="flex flex-col">
-          <span className="font-[family-name:var(--font-display)] text-2xl font-bold leading-none tracking-tight text-accent-gold">
-            SKALY
+          <span className="font-[family-name:var(--font-display)] text-2xl font-bold leading-none tracking-[0.01em] text-text-primary">
+            Business Portal
           </span>
           <span className="mt-1.5 font-[family-name:var(--font-mono)] text-[11px] uppercase tracking-[0.14em] text-text-muted">
-            Business Portal
+            Operations platform
           </span>
         </div>
       </div>
@@ -72,18 +65,6 @@ export function BrandPanel() {
           Attendance, shoots, content pipelines and chat — every team, every client, every day, in
           one dark, fast workspace.
         </p>
-        <div className="mt-7 flex flex-col gap-3.5">
-          {FEATURES.map(({ icon: Icon, lead, rest }) => (
-            <div key={lead} className="flex items-center gap-3.5">
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-accent-gold/15 text-accent-gold">
-                <Icon size={18} />
-              </span>
-              <span className="text-[13.5px] text-text-secondary">
-                <b className="font-semibold text-text-primary">{lead}</b> {rest}
-              </span>
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* Footer */}

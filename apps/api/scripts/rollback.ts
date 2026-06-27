@@ -1,11 +1,12 @@
 import 'dotenv/config';
+import { promises as fs } from 'fs';
+import path from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
+
 import { Kysely, PostgresDialect } from 'kysely';
 // kysely 0.29 moved the migration API out of the main entry into `kysely/migration`.
 import { Migrator, type Migration, type MigrationProvider } from 'kysely/migration';
 import pg from 'pg';
-import { promises as fs } from 'fs';
-import path from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

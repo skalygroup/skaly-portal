@@ -1,27 +1,28 @@
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import multipart from '@fastify/multipart';
+import rateLimit from '@fastify/rate-limit';
+import sensible from '@fastify/sensible';
 import Fastify, {
   type FastifyInstance,
   type FastifyServerOptions,
 } from 'fastify';
-import cors from '@fastify/cors';
-import helmet from '@fastify/helmet';
-import rateLimit from '@fastify/rate-limit';
-import sensible from '@fastify/sensible';
-import multipart from '@fastify/multipart';
 import {
   serializerCompiler,
   validatorCompiler,
   jsonSchemaTransform,
 } from 'fastify-type-provider-zod';
+
+import { pool, db } from './lib/db.js';
 import { env } from './lib/env.js';
 import { logger } from './lib/logger.js';
-import { pool, db } from './lib/db.js';
 import { redis } from './lib/redis.js';
-import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import authPlugin from './middleware/auth.plugin.js';
-import { healthRoutes } from './routes/health.js';
+import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import authRoutes from './routes/auth/index.js';
-import staffRoutes from './routes/staff/index.js';
+import { healthRoutes } from './routes/health.js';
 import settingsRoutes from './routes/settings/index.js';
+import staffRoutes from './routes/staff/index.js';
 
 /**
  * Builds and fully configures the Fastify instance — WITHOUT calling listen().

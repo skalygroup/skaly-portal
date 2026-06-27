@@ -1,10 +1,12 @@
-import type { FastifyInstance } from 'fastify';
-import { ZodError } from 'zod';
 import { SignupRequestSchema } from '@skaly/shared/schemas/auth';
-import { AuthService, AuthError } from '../../services/AuthService.js';
-import { supabaseAdmin } from '../../lib/supabase.js';
+import { ZodError } from 'zod';
+
 import { logger } from '../../lib/logger.js';
 import { getR2Client, getR2Bucket } from '../../lib/r2.js';
+import { supabaseAdmin } from '../../lib/supabase.js';
+import { AuthService, AuthError } from '../../services/AuthService.js';
+
+import type { FastifyInstance } from 'fastify';
 
 /**
  * POST /v1/auth/signup/request — public self-signup (APPFLOW §2.6).

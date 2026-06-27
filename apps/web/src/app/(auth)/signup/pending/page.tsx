@@ -1,15 +1,17 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
-import { toast } from 'sonner';
 import { CheckCircle2, Clock, Loader2 } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useRef } from 'react';
+import { toast } from 'sonner';
+
 import type { SignupStatusResponse } from '@skaly/shared/schemas/auth';
+
+import { FormBanner } from '@/components/auth/form-controls';
 import { api } from '@/lib/api';
 import { usePolling } from '@/lib/hooks/use-polling';
 import { ROLE_OPTIONS } from '@/lib/signup-form';
-import { FormBanner } from '@/components/auth/form-controls';
 
 // APPFLOW §2.6 cadence: 10s → 30s → 60s (then steady), capped at 10 minutes.
 const POLL_DELAYS = [10_000, 30_000, 60_000];
@@ -158,12 +160,9 @@ function PendingInner() {
         </p>
       )}
 
-      <Link
-        href="/login"
-        className="mt-5 inline-flex h-[46px] w-full items-center justify-center rounded-md border border-border-default bg-bg-elevated text-[15px] font-semibold text-text-primary transition-colors hover:border-border-strong hover:bg-bg-hover"
-      >
-        Back to login
-      </Link>
+      {/* No "back to sign up" affordance by design: a pending applicant
+          re-submitting would create duplicate requests for the admin to review.
+          They wait here; the page redirects to /login once approved. */}
     </div>
   );
 }

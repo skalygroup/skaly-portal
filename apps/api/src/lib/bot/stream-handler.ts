@@ -4,10 +4,10 @@
  * Do not modify the architecture without updating docs/14-PRE-BUILD-AUDIT.md H-04.
  */
 
-import type { Server } from 'socket.io';
+import type Anthropic from '@anthropic-ai/sdk';
 import type { Redis } from 'ioredis';
 import type { Kysely } from 'kysely';
-import type Anthropic from '@anthropic-ai/sdk';
+import type { Server } from 'socket.io';
 
 export interface HandleBotStreamArgs {
   staffId: string;

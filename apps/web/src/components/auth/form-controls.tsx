@@ -1,8 +1,9 @@
 'use client';
 
-import * as React from 'react';
-import Image from 'next/image';
 import { AlertCircle, ChevronDown, Eye, EyeOff, Loader2, Lock, Paperclip, X } from 'lucide-react';
+import Image from 'next/image';
+import * as React from 'react';
+
 import { cn } from '@/lib/utils';
 
 /**
@@ -86,6 +87,7 @@ export const TextField = React.forwardRef<HTMLInputElement, TextFieldProps>(func
           ref={ref}
           aria-invalid={!!error}
           className={cn(controlEl, className)}
+          suppressHydrationWarning
           {...rest}
         />
       </div>
@@ -115,6 +117,7 @@ export const PasswordField = React.forwardRef<HTMLInputElement, PasswordFieldPro
             type={show ? 'text' : 'password'}
             aria-invalid={!!error}
             className={cn(controlEl, className)}
+            suppressHydrationWarning
             {...rest}
           />
           <button
@@ -122,6 +125,7 @@ export const PasswordField = React.forwardRef<HTMLInputElement, PasswordFieldPro
             onClick={() => setShow((s) => !s)}
             aria-label={show ? 'Hide password' : 'Show password'}
             className="inline-flex shrink-0 p-1 text-text-muted hover:text-text-secondary"
+            suppressHydrationWarning
           >
             {show ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
@@ -156,6 +160,7 @@ export const DateField = React.forwardRef<HTMLInputElement, DateFieldProps>(func
           // the dark UI (otherwise the indicator is invisible on bg-elevated).
           style={{ colorScheme: 'dark' }}
           className={cn(controlEl, className)}
+          suppressHydrationWarning
           {...rest}
         />
       </div>
@@ -186,6 +191,7 @@ export const SelectField = React.forwardRef<HTMLSelectElement, SelectFieldProps>
           aria-invalid={!!error}
           style={{ colorScheme: 'dark' }}
           className={cn(controlEl, 'cursor-pointer appearance-none pr-6 text-text-primary', className)}
+          suppressHydrationWarning
           {...rest}
         >
           {options.map((o) => (
@@ -245,6 +251,7 @@ export const TextareaField = React.forwardRef<HTMLTextAreaElement, TextareaField
               'min-h-[84px] w-full resize-y border-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted focus-visible:outline-none',
               className,
             )}
+            suppressHydrationWarning
             {...rest}
           />
         </div>
@@ -287,6 +294,7 @@ export function FileField({
         disabled={disabled}
         className="sr-only"
         onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+        suppressHydrationWarning
       />
       {value ? (
         <div className={cn(wrapBase, error ? wrapError : wrapIdle, 'justify-between')}>
@@ -305,6 +313,7 @@ export function FileField({
             }}
             aria-label="Remove file"
             className="inline-flex shrink-0 p-1 text-text-muted hover:text-text-secondary"
+            suppressHydrationWarning
           >
             <X size={16} />
           </button>
@@ -320,6 +329,7 @@ export function FileField({
               ? 'border-status-red/70 text-status-red'
               : 'border-border-default text-text-muted hover:border-border-strong hover:bg-bg-hover',
           )}
+          suppressHydrationWarning
         >
           <Paperclip size={16} className="shrink-0" aria-hidden />
           Upload a file
@@ -344,6 +354,7 @@ export function SubmitButton({ loading, children, className, disabled, ...rest }
         'mt-1.5 flex h-[46px] w-full items-center justify-center gap-2.5 rounded-md bg-accent-gold text-[15px] font-semibold text-bg-base transition-[background,transform] hover:bg-accent-gold-hover active:scale-[0.985] disabled:opacity-60',
         className,
       )}
+      suppressHydrationWarning
       {...rest}
     >
       {loading && <Loader2 size={16} className="animate-spin" />}
@@ -362,6 +373,7 @@ export function GoogleButton({ loading, children, disabled, ...rest }: GoogleBut
       type="button"
       disabled={disabled || loading}
       className="flex h-[46px] w-full items-center justify-center gap-2.5 rounded-md border border-border-default bg-bg-elevated text-[15px] font-semibold text-text-primary transition-colors hover:border-border-strong hover:bg-bg-hover active:scale-[0.985] disabled:opacity-60"
+      suppressHydrationWarning
       {...rest}
     >
       {loading ? (

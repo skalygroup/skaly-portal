@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+
 import { BrandPanel } from '@/components/auth/brand-panel';
 
 /**

@@ -1,8 +1,8 @@
+import { buildApp } from './app.js';
+import { pool } from './lib/db.js';
 import { env } from './lib/env.js';
 import { logger } from './lib/logger.js';
-import { pool } from './lib/db.js';
 import { redis } from './lib/redis.js';
-import { buildApp } from './app.js';
 import { registerSockets } from './sockets/index.js';
 
 /**

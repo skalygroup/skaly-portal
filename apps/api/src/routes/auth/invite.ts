@@ -1,15 +1,17 @@
-import type { FastifyInstance } from 'fastify';
-import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { z } from 'zod';
 import {
   InviteCreateSchema,
   InviteCheckResponseSchema,
   SignupViaInviteSchema,
 } from '@skaly/shared/schemas/auth';
-import { AuthService, AuthError } from '../../services/AuthService.js';
-import { supabaseAdmin } from '../../lib/supabase.js';
+import { z } from 'zod';
+
 import { logger } from '../../lib/logger.js';
 import { getR2Client, getR2Bucket } from '../../lib/r2.js';
+import { supabaseAdmin } from '../../lib/supabase.js';
+import { AuthService, AuthError } from '../../services/AuthService.js';
+
+import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 /**
  * Invite-based onboarding routes.

@@ -1,8 +1,11 @@
 import crypto from 'crypto';
+
 import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
+
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 
 /**
  * Internal route authentication via X-Internal-Secret header.

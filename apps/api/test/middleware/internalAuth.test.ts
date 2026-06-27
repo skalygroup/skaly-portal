@@ -1,5 +1,6 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
 import Fastify from 'fastify';
+import { describe, test, expect, vi, beforeEach } from 'vitest';
+
 import internalAuthPlugin from '../../src/middleware/internalAuth.plugin.js';
 
 // Mock env with a known CRON_SECRET (32+ chars)

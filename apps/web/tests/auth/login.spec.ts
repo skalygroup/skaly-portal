@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
 /**
@@ -38,7 +38,7 @@ async function setActive(email: string, active: boolean) {
   }
 }
 
-async function login(page: import('@playwright/test').Page, email: string, password: string) {
+async function login(page: Page, email: string, password: string) {
   await page.goto('/login');
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);

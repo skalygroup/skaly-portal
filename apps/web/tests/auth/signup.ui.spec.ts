@@ -20,13 +20,13 @@ test.describe('signup page (request access)', () => {
   });
 
   test('renders PATH A (Google) and PATH B (form)', async ({ page }) => {
-    await expect(page.getByRole('heading', { name: 'Request access' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Join the workspace/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Continue with Google/ })).toBeVisible();
     await expect(page.getByLabel('Full name')).toBeVisible();
     await expect(page.getByLabel('Email')).toBeVisible();
-    await expect(page.getByLabel('Date of birth')).toBeVisible();
+    await expect(page.getByText('Date of birth')).toBeVisible();
     await expect(page.getByLabel('Mobile number')).toBeVisible();
-    await expect(page.getByLabel('Role requested')).toBeVisible();
+    await expect(page.getByText('Role requested')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Submit request' })).toBeVisible();
   });
 
@@ -61,7 +61,9 @@ test.describe('signup page (request access)', () => {
 
     await page.getByLabel('Full name').fill('Jane Doe');
     await page.getByLabel('Email').fill('jane@example.com');
-    await page.getByLabel('Date of birth').fill('1995-05-20');
+    // Custom date picker: open the trigger, pick a day via "Today".
+    await page.getByText('dd-mm-yyyy').click();
+    await page.getByRole('button', { name: 'Today' }).click();
     await page.getByLabel('Mobile number').fill('+919876543210');
     await page.getByRole('button', { name: 'Submit request' }).click();
 
@@ -82,7 +84,9 @@ test.describe('signup page (request access)', () => {
 
     await page.getByLabel('Full name').fill('Jane Doe');
     await page.getByLabel('Email').fill('jane@example.com');
-    await page.getByLabel('Date of birth').fill('1995-05-20');
+    // Custom date picker: open the trigger, pick a day via "Today".
+    await page.getByText('dd-mm-yyyy').click();
+    await page.getByRole('button', { name: 'Today' }).click();
     await page.getByLabel('Mobile number').fill('+919876543210');
     await page.getByRole('button', { name: 'Submit request' }).click();
 

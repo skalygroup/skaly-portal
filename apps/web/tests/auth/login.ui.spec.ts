@@ -28,7 +28,7 @@ test.describe('login page (redesign)', () => {
 
     // Brand panel (visible at the default desktop viewport)
     await expect(page.getByText('organised.')).toBeVisible();
-    await expect(page.getByText('Content calendar')).toBeVisible();
+    await expect(page.getByText('Operations platform')).toBeVisible();
   });
 
   test('client-side validation blocks an invalid submit', async ({ page }) => {

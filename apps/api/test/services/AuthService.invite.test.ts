@@ -1,12 +1,16 @@
-import { describe, test, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import pg from 'pg';
+
 import { Kysely, PostgresDialect, sql } from 'kysely';
+import pg from 'pg';
+import { describe, test, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+
+import { AuthService } from '../../src/services/AuthService.js';
+
+import type { DB } from '@skaly/shared';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Redis } from 'ioredis';
 import type { Logger } from 'pino';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import type { DB } from '@skaly/shared';
-import { AuthService } from '../../src/services/AuthService.js';
+
 
 // Integration test: real local Postgres (docker), Supabase + Redis mocked.
 const connectionString =

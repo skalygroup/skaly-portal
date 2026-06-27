@@ -1,16 +1,18 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
-import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { z } from 'zod';
 import {
   PasswordResetRequestSchema,
   MfaVerifySchema,
   MfaEnrollResponseSchema,
   SessionRefreshResponseSchema,
 } from '@skaly/shared/schemas/auth';
-import { AuthService, AuthError } from '../../services/AuthService.js';
-import { supabaseAdmin } from '../../lib/supabase.js';
+import { z } from 'zod';
+
 import { logger } from '../../lib/logger.js';
 import { getR2Client, getR2Bucket } from '../../lib/r2.js';
+import { supabaseAdmin } from '../../lib/supabase.js';
+import { AuthService, AuthError } from '../../services/AuthService.js';
+
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 function sendAuthError(err: unknown, reply: FastifyReply): FastifyReply {
   if (err instanceof AuthError) {
