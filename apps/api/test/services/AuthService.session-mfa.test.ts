@@ -36,6 +36,8 @@ const generateLink = vi.fn(async () => ({
   data: { properties: { action_link: 'https://reset.example/abc' } },
   error: null,
 }));
+const resetPasswordForEmail = vi.fn(async () => ({ data: {}, error: null }));
+const updateUserById = vi.fn(async () => ({ data: { user: { id: 'user-abc' } }, error: null }));
 const refreshSession = vi.fn();
 const adminSignOut = vi.fn(async () => ({ data: null, error: null }));
 const enrollFactor = vi.fn(async () => ({
@@ -55,8 +57,10 @@ const deleteFactor = vi.fn(async () => ({ data: { id: 'factor-xyz' }, error: nul
 const supabaseAdmin = {
   auth: {
     refreshSession,
+    resetPasswordForEmail,
     admin: {
       generateLink,
+      updateUserById,
       signOut: adminSignOut,
       mfa: { enrollFactor, listFactors, deleteFactor },
     },
@@ -104,26 +108,48 @@ beforeEach(() => vi.clearAllMocks());
 
 // ── Password reset (anti-enumeration) ────────────────────────────────────
 describe('AuthService.requestPasswordReset', () => {
-  test('known active email → 200-shaped result, generateLink called', async () => {
+  test('known active email → 200-shaped result, recovery email sent', async () => {
     const staff = await insertStaff();
     const res = await service.requestPasswordReset(staff.email);
     expect(res).toEqual({ status: 'sent' });
-    expect(generateLink).toHaveBeenCalledTimes(1);
-    expect(generateLink).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'recovery', email: staff.email }),
+    expect(resetPasswordForEmail).toHaveBeenCalledTimes(1);
+    expect(resetPasswordForEmail).toHaveBeenCalledWith(
+      staff.email,
+      expect.objectContaining({ redirectTo: expect.any(String) }),
     );
   });
 
-  test('unknown email → same result, generateLink NOT called (anti-enumeration)', async () => {
+  test('unknown email → same result, no email sent (anti-enumeration)', async () => {
     const res = await service.requestPasswordReset(email('ghost'));
     expect(res).toEqual({ status: 'sent' });
-    expect(generateLink).not.toHaveBeenCalled();
+    expect(resetPasswordForEmail).not.toHaveBeenCalled();
   });
 
-  test('inactive staff is treated as unknown (no link)', async () => {
+  test('inactive staff is treated as unknown (no email)', async () => {
     const staff = await insertStaff({ active: false });
     await service.requestPasswordReset(staff.email);
-    expect(generateLink).not.toHaveBeenCalled();
+    expect(resetPasswordForEmail).not.toHaveBeenCalled();
+  });
+});
+
+// ── Password update (admin API, bypasses "Secure password change") ────────
+describe('AuthService.updateOwnPassword', () => {
+  test('writes the new password via the admin API', async () => {
+    const staff = await insertStaff();
+    await service.updateOwnPassword(staff.id, staff.supabase_uid!, 'NewPassw0rd!');
+    expect(updateUserById).toHaveBeenCalledTimes(1);
+    expect(updateUserById).toHaveBeenCalledWith(staff.supabase_uid, { password: 'NewPassw0rd!' });
+  });
+
+  test('admin API error → PASSWORD_UPDATE_FAILED', async () => {
+    const staff = await insertStaff();
+    updateUserById.mockResolvedValueOnce({
+      data: { user: null },
+      error: { message: 'boom' },
+    } as never);
+    await expect(
+      service.updateOwnPassword(staff.id, staff.supabase_uid!, 'NewPassw0rd!'),
+    ).rejects.toMatchObject({ code: 'PASSWORD_UPDATE_FAILED', statusCode: 400 });
   });
 });
 

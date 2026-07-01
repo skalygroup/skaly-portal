@@ -93,7 +93,11 @@ export interface NotificationCreateEntry {
   recipientId: string;
   type: string;
   title: string;
+  /** Optional longer body (maps to notifications.message in Sprint 2). */
+  body?: string;
   data?: unknown;
+  /** Reuse the caller's transaction so the notification write is atomic with it. */
+  trx?: Transaction<DB>;
 }
 
 /**
@@ -146,7 +150,12 @@ export class AuthService {
    * with the same arg shape the real service will take.
    */
   private notificationServiceCreate(entry: NotificationCreateEntry): void {
-    this.logger.info({ notification: entry }, 'notification');
+    // `trx` is intentionally dropped from the logged payload (not serialisable),
+    // mirroring auditServiceLog. Sprint 2's real service will use it to write the
+    // notification row inside the caller's transaction.
+    const { trx: _trx, ...rest } = entry;
+    void _trx;
+    this.logger.info({ notification: rest }, 'notification');
   }
 
   /**
@@ -479,6 +488,7 @@ export class AuthService {
           type: 'signup_request',
           title: `New access request from ${form.name}`,
           data: { requestId, roleRequested: form.roleRequested },
+          trx,
         });
       }
 
@@ -612,6 +622,7 @@ export class AuthService {
           type: 'signup_approved',
           title: 'Your access request was approved',
           data: { resetLink },
+          trx,
         });
 
         // i. Audit.
@@ -720,15 +731,18 @@ export class AuthService {
       .executeTakeFirst();
 
     if (staff) {
-      const { error } = await this.supabaseAdmin.auth.admin.generateLink({
-        type: 'recovery',
-        email,
-        options: { redirectTo: PASSWORD_RESET_REDIRECT_URL },
+      // resetPasswordForEmail tells Supabase to actually SEND the recovery email
+      // (the /recover pipeline — the same SMTP that powers invites). admin.
+      // generateLink only *mints* a link for custom delivery and sends nothing,
+      // so using it here meant no reset email ever went out. redirectTo lands the
+      // user on /reset-password with the recovery token in the URL fragment.
+      const { error } = await this.supabaseAdmin.auth.resetPasswordForEmail(email, {
+        redirectTo: PASSWORD_RESET_REDIRECT_URL,
       });
       if (error) {
         // Never surface this to the caller — doing so would both leak existence
         // and break the uniform response. Log for ops; the user can retry.
-        this.logger.warn({ err: error, email }, 'requestPasswordReset: generateLink failed');
+        this.logger.warn({ err: error, email }, 'requestPasswordReset: send recovery email failed');
       }
     } else {
       // Keep wall-clock timing comparable to the matched path's network
@@ -906,6 +920,42 @@ export class AuthService {
       entity: 'staff',
       entityId: staffId,
       action: 'mfa.enroll',
+    });
+  }
+
+  /**
+   * Set a new password for the calling user via the Supabase Admin API.
+   *
+   * The reset-password page calls this instead of the client SDK's updateUser:
+   * with "Secure password change" enabled, GoTrue demands reauthentication for a
+   * client-side password change once the recovery session has been stepped up to
+   * aal2 (the authenticator gate makes `totp` the most-recent auth method, which
+   * consumes the recovery exemption). The service-role admin update is not
+   * subject to that gate. The route restricts this to an aal2 session, so a bare
+   * stolen aal1 login cannot reach it.
+   */
+  async updateOwnPassword(
+    staffId: string,
+    supabaseUid: string,
+    newPassword: string,
+  ): Promise<void> {
+    const { error } = await this.supabaseAdmin.auth.admin.updateUserById(supabaseUid, {
+      password: newPassword,
+    });
+    if (error) {
+      throw new AuthError(
+        'PASSWORD_UPDATE_FAILED',
+        400,
+        error.message || 'Could not update your password.',
+      );
+    }
+
+    this.auditServiceLog({
+      actorId: staffId,
+      actorSource: 'web',
+      entity: 'staff',
+      entityId: staffId,
+      action: 'password.reset_confirm',
     });
   }
 

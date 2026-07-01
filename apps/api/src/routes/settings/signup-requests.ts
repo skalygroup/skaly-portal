@@ -26,6 +26,7 @@ export async function settingsSignupRequestsRoutes(app: FastifyInstance) {
         querystring: z.object({
           status: z.enum(['pending', 'approved', 'rejected', 'all']).default('pending'),
         }),
+        security: [{ bearerAuth: [] }],
       },
     },
     async (request) => {

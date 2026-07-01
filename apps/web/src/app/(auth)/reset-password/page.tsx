@@ -2,19 +2,21 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { PasswordResetConfirmSchema } from '@skaly/shared/schemas/auth';
-import { ArrowRight, Check, Circle, Clock, Loader2 } from 'lucide-react';
+import { AlertCircle, ArrowRight, Check, Circle, Clock, Copy, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
-import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
-
+import type { AuthChangeEvent, Factor, Session } from '@supabase/supabase-js';
 
 import { AuthCanvasCard } from '@/components/auth/auth-canvas-card';
 import { PasswordField, SubmitButton, FormBanner } from '@/components/auth/form-controls';
+import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
+import { api, ApiError } from '@/lib/api';
 import { createClient } from '@/lib/supabase/client';
+import { cn } from '@/lib/utils';
 
 /**
  * New-password form schema. Reuses the shared password *policy* (the same
@@ -34,7 +36,12 @@ const ResetFormSchema = z
 
 type ResetFormInput = z.infer<typeof ResetFormSchema>;
 
-type View = 'checking' | 'ready' | 'invalid' | 'done';
+// Every reset passes an authenticator gate before the password form:
+//   'challenge' — account already has a verified TOTP factor → enter a code.
+//   'enroll'    — account has no factor → scan a QR, then enter a code.
+// Both end at AAL2, which Supabase requires to change the password of an
+// MFA-protected account and which we now require of everyone (RULES).
+type View = 'checking' | 'challenge' | 'enroll' | 'ready' | 'invalid' | 'done';
 
 // Live checklist, mirroring the shared PasswordSchema policy (10+ chars with an
 // uppercase, a lowercase, a digit, and a special character).
@@ -47,20 +54,34 @@ const REQUIREMENTS: { label: string; test: (p: string) => boolean }[] = [
 ];
 
 /**
- * Reset-password page (Sprint 1 STEP 13), redesigned on the brand canvas. Target
- * of Supabase's recovery email link: the @supabase/ssr client auto-consumes the
- * URL fragment (#access_token=…&type=recovery) on mount and establishes a
- * session. Once it exists we show the new-password form; updateUser sets the
- * password, then we sign out and bounce to /login so they re-authenticate.
+ * Reset-password page (Sprint 1 STEP 13/14). Target of Supabase's recovery link
+ * (delivered via /auth/confirm, which establishes the recovery session). Flow:
  *
- * No session means the link expired or was already used → a dead-end pointing
- * back to request a fresh link. The email is never pre-filled — the session
- * already knows the user (RULES).
+ *   verified link → authenticator step (challenge OR setup) → new-password form → done
+ *
+ * The authenticator step is mandatory for *everyone*: enrolled users pass a TOTP
+ * challenge; users without a factor set one up on the spot. Either way the
+ * session is raised to aal2 — Supabase refuses updateUser({password}) on an
+ * account with a verified factor below aal2 ("reauthentication required"), and a
+ * recovery session starts at aal1. A dead/expired link is a dead-end pointing
+ * back to /forgot-password. The email is never pre-filled — the session knows
+ * the user (RULES).
  */
 export default function ResetPasswordPage() {
   const router = useRouter();
   const supabase = createClient();
   const [view, setView] = useState<View>('checking');
+
+  // Authenticator step state (shared by the challenge + enroll variants).
+  const [factorId, setFactorId] = useState<string | null>(null);
+  const [enrollment, setEnrollment] = useState<{ qrCodeDataUrl: string; secret: string } | null>(
+    null,
+  );
+  const [enrollError, setEnrollError] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const [verifying, setVerifying] = useState(false);
+  const [mfaError, setMfaError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const {
     register,
@@ -81,39 +102,187 @@ export default function ResetPasswordPage() {
 
   useEffect(() => {
     let active = true;
+    let cleanup = () => {};
+    // Enrollment mints a factor; guard against React StrictMode's double-invoke
+    // (and the duplicate auth events Supabase can emit) creating two factors.
+    let enrollStarted = false;
 
-    // The recovery session may land via either getSession (fragment already
-    // consumed) or the PASSWORD_RECOVERY auth event (consumed just after mount).
-    const { data: sub } = supabase.auth.onAuthStateChange(
-      (_event: AuthChangeEvent, s: Session | null) => {
-        if (active && s) setView((prev) => (prev === 'checking' || prev === 'invalid' ? 'ready' : prev));
-      },
-    );
+    // Mint a fresh TOTP factor for an un-enrolled user. max_factors=1 means a
+    // stale unverified factor from an abandoned attempt blocks re-enroll — clear
+    // it and retry so the user always gets a scannable QR.
+    async function startEnroll() {
+      if (enrollStarted) return;
+      enrollStarted = true;
+      try {
+        let res = await supabase.auth.mfa.enroll({ factorType: 'totp' });
+        if (res.error) {
+          const { data: f } = await supabase.auth.mfa.listFactors();
+          const stale = f?.totp?.find((x: Factor) => x.status === 'unverified');
+          if (stale) {
+            await supabase.auth.mfa.unenroll({ factorId: stale.id });
+            res = await supabase.auth.mfa.enroll({ factorType: 'totp' });
+          }
+        }
+        if (!active) return;
+        if (res.error || !res.data) {
+          setEnrollError('Could not start authenticator setup. Request a new link to try again.');
+          return;
+        }
+        setFactorId(res.data.id);
+        setEnrollment({ qrCodeDataUrl: res.data.totp.qr_code, secret: res.data.totp.secret });
+      } catch {
+        if (active) {
+          setEnrollError('Could not start authenticator setup. Request a new link to try again.');
+        }
+      }
+    }
 
-    supabase.auth.getSession().then(({ data }: { data: { session: Session | null } }) => {
-      if (active && data.session) setView((prev) => (prev === 'checking' ? 'ready' : prev));
-    });
+    // Once a recovery session exists, route through the authenticator gate:
+    // a verified factor → challenge; otherwise → set one up.
+    async function gateAfterSession() {
+      const { data: factors } = await supabase.auth.mfa.listFactors();
+      if (!active) return;
+      const verified = factors?.totp?.find((f: Factor) => f.status === 'verified');
+      if (verified) {
+        setFactorId(verified.id);
+        setView('challenge');
+      } else {
+        setView('enroll');
+        void startEnroll();
+      }
+    }
 
-    // If neither path produces a session shortly after mount, the link is dead.
-    const timer = setTimeout(() => {
-      if (active) setView((prev) => (prev === 'checking' ? 'invalid' : prev));
-    }, 2000);
+    const search = window.location.search;
+    const hash = window.location.hash;
+    const params = new URLSearchParams(search);
+
+    if (/error=|error_code=/.test(hash + search)) {
+      // A dead link (expired/used/invalid) — show it even if a stale, non-recovery
+      // login session is still in storage. This is the bug behind "otp_expired"
+      // landing on the form: a leftover session must NOT unlock the flow.
+      setView('invalid');
+    } else if (params.get('confirmed') === '1') {
+      // Arrived from /auth/confirm, which already ran verifyOtp client-side and
+      // established the recovery session (the prefetch-safe path).
+      supabase.auth.getSession().then(({ data }: { data: { session: Session | null } }) => {
+        if (!active) return;
+        window.history.replaceState(null, '', '/reset-password');
+        if (data.session) void gateAfterSession();
+        else setView('invalid');
+      });
+    } else {
+      // Backward-compat for Supabase's default template, which delivers implicit
+      // hash tokens straight here. Accept a PASSWORD_RECOVERY event, or a session
+      // when the URL actually carried recovery tokens; a stale login alone won't.
+      const hadRecoveryTokens = /type=recovery|access_token=/.test(hash);
+      const { data: sub } = supabase.auth.onAuthStateChange(
+        (event: AuthChangeEvent, s: Session | null) => {
+          if (active && event === 'PASSWORD_RECOVERY' && s) void gateAfterSession();
+        },
+      );
+      if (hadRecoveryTokens) {
+        supabase.auth.getSession().then(({ data }: { data: { session: Session | null } }) => {
+          if (active && data.session) void gateAfterSession();
+        });
+      }
+      const timer = setTimeout(() => {
+        if (active) setView((prev) => (prev === 'checking' ? 'invalid' : prev));
+      }, 2500);
+      cleanup = () => {
+        sub.subscription.unsubscribe();
+        clearTimeout(timer);
+      };
+    }
 
     return () => {
       active = false;
-      sub.subscription.unsubscribe();
-      clearTimeout(timer);
+      cleanup();
     };
   }, [supabase]);
 
+  // ── Authenticator verify: challenge + verify the 6-digit TOTP. On the enroll
+  //    path we also persist staff.mfa_enrolled (mirrors /mfa-setup). Either way a
+  //    success raises the session to aal2 so the password form can complete. ──
+  const verifyMfa = useCallback(
+    async (sixDigits: string) => {
+      if (!factorId || verifying) return;
+      setVerifying(true);
+      setMfaError(null);
+      try {
+        const challenge = await supabase.auth.mfa.challenge({ factorId });
+        if (challenge.error || !challenge.data) {
+          setMfaError('Incorrect code. Try again.');
+          setCode('');
+          return;
+        }
+        const { error } = await supabase.auth.mfa.verify({
+          factorId,
+          challengeId: challenge.data.id,
+          code: sixDigits,
+        });
+        if (error) {
+          setMfaError('Incorrect code. Try again.');
+          setCode('');
+          return;
+        }
+        // The factor is now verified in Supabase. If we just enrolled it, flip
+        // staff.mfa_enrolled so the rest of the system agrees (non-fatal if it
+        // fails — the Supabase factor stands regardless).
+        if (view === 'enroll') {
+          try {
+            await api('/v1/auth/mfa/verify', {
+              method: 'POST',
+              body: JSON.stringify({ factorId, code: sixDigits }),
+            });
+          } catch {
+            // Ignore — the password reset can still proceed on the aal2 session.
+          }
+        }
+        // Session is now aal2 → the password form can complete updateUser.
+        setCode('');
+        setView('ready');
+      } catch {
+        setMfaError('Something went wrong verifying that code. Try again.');
+        setCode('');
+      } finally {
+        setVerifying(false);
+      }
+    },
+    [factorId, supabase, verifying, view],
+  );
+
+  function onCodeChange(value: string) {
+    setCode(value);
+    setMfaError(null);
+    if (value.length === 6) void verifyMfa(value);
+  }
+
+  async function copySecret(secret: string) {
+    try {
+      await navigator.clipboard.writeText(secret);
+    } catch {
+      // Clipboard can be blocked (insecure context / permissions) — no-op.
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }
+
   async function onSubmit({ newPassword }: ResetFormInput) {
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
-    if (error) {
-      // Supabase rejects reusing the current password and enforces its own
-      // policy; surface a friendly inline message either way.
+    // The password change runs server-side via the Supabase Admin API, NOT the
+    // client SDK. With "Secure password change" enabled, client updateUser
+    // demands reauthentication once the authenticator step-up makes `totp` the
+    // most-recent auth method (the recovery exemption is consumed server-side).
+    // The backend endpoint is gated on this same aal2 session and writes with
+    // the service role, which isn't subject to that reauthentication gate.
+    try {
+      await api('/v1/auth/password/update', {
+        method: 'POST',
+        body: JSON.stringify({ newPassword }),
+      });
+    } catch (err) {
       setError('root', {
         message:
-          error.message ||
+          (err instanceof ApiError && err.message) ||
           'Could not update your password. Try a different one or request a new link.',
       });
       return;
@@ -172,6 +341,177 @@ export default function ResetPasswordPage() {
     );
   }
 
+  // ── Authenticator setup (no factor yet): scan a QR, then enter a code ─────
+  if (view === 'enroll') {
+    return (
+      <AuthCanvasCard
+        eyebrow="Two-factor authentication"
+        title="Verify it’s you"
+        subtitle="For your security, set up an authenticator app before choosing a new password."
+        maxWidth={560}
+        footerRight="Account recovery"
+      >
+        <div className="flex flex-col gap-[22px] px-8 pb-[30px] pt-[26px]">
+          {enrollError && <FormBanner variant="error">{enrollError}</FormBanner>}
+
+          {!enrollment && !enrollError && (
+            <div className="flex items-center justify-center gap-2 py-14 text-text-secondary">
+              <Loader2 size={18} className="animate-spin" />
+              <span className="text-sm">Generating your secure code…</span>
+            </div>
+          )}
+
+          {enrollment && (
+            <>
+              {/* Step 1 — scan */}
+              <div className="flex flex-wrap items-start gap-5">
+                <div className="flex min-h-[204px] min-w-[204px] shrink-0 items-center justify-center rounded-[14px] bg-white p-2.5 shadow-[0_8px_24px_-10px_rgba(0,0,0,0.6)]">
+                  {/* QR is a data: URL from Supabase (not a static asset), so
+                      next/image can't optimise it — a plain <img> is correct. */}
+                  <img
+                    src={enrollment.qrCodeDataUrl}
+                    alt="Authenticator QR code"
+                    width={184}
+                    height={184}
+                    className="h-[184px] w-[184px]"
+                  />
+                </div>
+                <div className="flex min-w-[200px] flex-1 flex-col gap-2">
+                  <StepBadge n={1} label="Scan to add" />
+                  <p className="text-sm leading-[1.55] text-[#D4D4D8]">
+                    Open your authenticator app — Google Authenticator, 1Password, Authy — and scan
+                    this code to register the Skaly portal.
+                  </p>
+                </div>
+              </div>
+
+              {/* Manual secret */}
+              <div className="flex flex-col gap-2 rounded-xl border border-[#232329] bg-[#101013] p-4">
+                <span className="text-[12.5px] text-text-secondary">
+                  Can&apos;t scan? Enter this code manually in your authenticator app:
+                </span>
+                <div className="flex items-center gap-2.5">
+                  <code className="flex-1 select-all break-all font-[family-name:var(--font-mono)] text-[15px] tracking-[0.18em] text-accent-gold">
+                    {enrollment.secret}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => copySecret(enrollment.secret)}
+                    aria-label="Copy setup code"
+                    className="flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg border border-border-default bg-bg-elevated px-3 text-[12.5px] font-semibold text-[#E4E4E7] transition-colors hover:border-accent-gold hover:bg-bg-hover"
+                  >
+                    {copied ? <Check size={14} className="text-accent-gold" /> : <Copy size={14} />}
+                    {copied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Step 2 — verify */}
+              <div className="flex flex-col gap-3">
+                <StepBadge n={2} label="Enter the 6-digit code" />
+                <InputOTP
+                  maxLength={6}
+                  value={code}
+                  onChange={onCodeChange}
+                  disabled={verifying}
+                  autoFocus
+                  aria-label="6-digit verification code"
+                  containerClassName={cn(
+                    verifying && 'pointer-events-none',
+                    mfaError && '[animation:skShake_0.4s]',
+                  )}
+                >
+                  <InputOTPGroup>
+                    {[0, 1, 2, 3, 4, 5].map((i) => (
+                      <InputOTPSlot key={i} index={i} invalid={!!mfaError} />
+                    ))}
+                  </InputOTPGroup>
+                </InputOTP>
+
+                {mfaError ? (
+                  <span className="flex items-center gap-[7px] text-[13px] text-[#F87171]">
+                    <AlertCircle size={15} />
+                    {mfaError}
+                  </span>
+                ) : verifying ? (
+                  <span className="flex items-center gap-2 text-[13px] text-text-secondary">
+                    <Loader2 size={15} className="animate-spin text-accent-gold" />
+                    Verifying your code…
+                  </span>
+                ) : (
+                  <span className="text-[12.5px] text-text-muted">
+                    The code refreshes every 30 seconds — we continue automatically once all six
+                    digits are in.
+                  </span>
+                )}
+              </div>
+
+              <Link
+                href="/login"
+                className="self-center text-[13.5px] text-text-secondary transition-colors hover:text-text-primary"
+              >
+                Cancel and return to login
+              </Link>
+            </>
+          )}
+        </div>
+      </AuthCanvasCard>
+    );
+  }
+
+  // ── Authenticator challenge (factor already verified): enter a code ───────
+  if (view === 'challenge') {
+    return (
+      <AuthCanvasCard
+        eyebrow="Two-factor authentication"
+        title="Verify it’s you"
+        subtitle="Enter the 6-digit code from your authenticator app to keep resetting your password."
+        footerRight="Account recovery"
+      >
+        <div className="flex flex-col gap-4 px-8 pb-[30px] pt-6">
+          <InputOTP
+            maxLength={6}
+            value={code}
+            onChange={onCodeChange}
+            disabled={verifying}
+            autoFocus
+            aria-label="6-digit verification code"
+            containerClassName={cn(verifying && 'pointer-events-none', mfaError && '[animation:skShake_0.4s]')}
+          >
+            <InputOTPGroup>
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <InputOTPSlot key={i} index={i} invalid={!!mfaError} />
+              ))}
+            </InputOTPGroup>
+          </InputOTP>
+
+          <div className="min-h-[20px] text-[13px]">
+            {verifying ? (
+              <span className="flex items-center gap-2 text-text-secondary">
+                <Loader2 size={15} className="animate-spin text-accent-gold" />
+                Verifying your code…
+              </span>
+            ) : mfaError ? (
+              <span className="flex items-center gap-[7px] text-[#F87171]">
+                <AlertCircle size={15} />
+                {mfaError}
+              </span>
+            ) : (
+              <span className="text-text-muted">The code refreshes in your app every 30 seconds.</span>
+            )}
+          </div>
+
+          <Link
+            href="/login"
+            className="self-center text-[13.5px] text-text-secondary transition-colors hover:text-text-primary"
+          >
+            Cancel and return to login
+          </Link>
+        </div>
+      </AuthCanvasCard>
+    );
+  }
+
   // ── Done ───────────────────────────────────────────────────────────────
   if (view === 'done') {
     return (
@@ -198,7 +538,7 @@ export default function ResetPasswordPage() {
     );
   }
 
-  // ── Form (valid recovery session) ──────────────────────────────────────
+  // ── Form (valid recovery session, AAL satisfied) ─────────────────────────
   return (
     <AuthCanvasCard eyebrow="Set a new password" title="Create a new password" footerRight="Account recovery">
       <form onSubmit={handleSubmit(onSubmit)} noValidate className="flex flex-col gap-[18px] px-8 pb-[30px] pt-6">
@@ -254,5 +594,17 @@ export default function ResetPasswordPage() {
         </SubmitButton>
       </form>
     </AuthCanvasCard>
+  );
+}
+
+/** Numbered step kicker (gold disc + mono uppercase label). */
+function StepBadge({ n, label }: { n: number; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-2 font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.14em] text-text-muted">
+      <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[var(--accent-gold-dim)] text-[10px] font-bold text-accent-gold">
+        {n}
+      </span>
+      {label}
+    </span>
   );
 }

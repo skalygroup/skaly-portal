@@ -37,7 +37,10 @@ export default async function staffRoutes(app: FastifyInstance) {
   // ── Current user (C-04 reference handler) ───────────────────────────
   r.get(
     '/staff/me',
-    { preHandler: [app.verifyJwt], schema: { response: { 200: StaffMeResponseSchema } } },
+    {
+      preHandler: [app.verifyJwt],
+      schema: { response: { 200: StaffMeResponseSchema }, security: [{ bearerAuth: [] }] },
+    },
     async (request) => {
       const u = request.user;
       const permissions = await getEffectivePermissions(app.db, u.id);
@@ -59,7 +62,7 @@ export default async function staffRoutes(app: FastifyInstance) {
     '/staff/:id/mfa/reset',
     {
       preHandler: [app.verifyJwt, app.requireRole('admin')],
-      schema: { params: z.object({ id: z.string().uuid() }) },
+      schema: { params: z.object({ id: z.string().uuid() }), security: [{ bearerAuth: [] }] },
     },
     async (request, reply) => {
       try {

@@ -6,6 +6,22 @@ jobs:
     services:
       postgres: { image: postgres:16-alpine, env: { POSTGRES_USER: test, POSTGRES_DB: test, POSTGRES_PASSWORD: test }, ports: ["5432:5432"] }
       redis:    { image: redis:7-alpine, ports: ["6379:6379"] }
+    # Job-level env so every step (db:migrate, test) can satisfy EnvSchema.parse
+    # in apps/api/src/lib/env.ts, which is loaded transitively on import. These
+    # are valid-SHAPED placeholders only — the test suite mocks Supabase + JWKS
+    # and never makes a real network call, so no real secrets are required here.
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5432/test
+      REDIS_URL: redis://localhost:6379
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_JWKS_URL: https://example.supabase.co/auth/v1/.well-known/jwks.json
+      SUPABASE_JWT_SECRET: ci-placeholder-jwt-secret
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key
+      # EnvSchema requires >= 32 chars.
+      CRON_SECRET: ci-placeholder-cron-secret-0123456789
+      # ANTHROPIC_API_KEY is intentionally unset: it is .optional() in EnvSchema,
+      # and an empty string would fail the .startsWith('sk-ant-') check. Sprint 8
+      # (bot) reintroduces it via secrets when bot tests need it.
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -13,11 +29,7 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r typecheck
-      - run: pnpm -r exec eslint .
+      # Enforce the zero-warning bar in CI (matches each package's lint script).
+      - run: pnpm -r exec eslint . --max-warnings 0
       - run: pnpm --filter @skaly/api db:migrate
-        env: { DATABASE_URL: postgresql://test:test@localhost:5432/test }
       - run: pnpm test
-        env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/test
-          REDIS_URL: redis://localhost:6379
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY_TEST }}

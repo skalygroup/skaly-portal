@@ -35,7 +35,7 @@ export async function inviteRoutes(app: FastifyInstance) {
     '/auth/invite',
     {
       preHandler: [app.verifyJwt, app.requireRole('admin')],
-      schema: { body: InviteCreateSchema },
+      schema: { body: InviteCreateSchema, security: [{ bearerAuth: [] }] },
     },
     async (request, reply) => {
       const { email, role } = request.body;

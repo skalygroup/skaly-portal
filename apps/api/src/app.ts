@@ -54,6 +54,14 @@ export async function buildApp(
       openapi: {
         info: { title: 'Skaly Portal API', version: '0.1.0' },
         servers: [{ url: `http://localhost:${env.PORT}` }],
+        components: {
+          securitySchemes: {
+            // Routes guarded by verifyJwt advertise `security: [{ bearerAuth: [] }]`
+            // in their schema so Swagger UI shows the lock/auth icon. Enforcement
+            // is the preHandler; this only documents the contract.
+            bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+          },
+        },
       },
       transform: jsonSchemaTransform,
     });

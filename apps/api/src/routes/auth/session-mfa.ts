@@ -1,5 +1,6 @@
 import {
   PasswordResetRequestSchema,
+  PasswordResetConfirmSchema,
   MfaVerifySchema,
   MfaEnrollResponseSchema,
   SessionRefreshResponseSchema,
@@ -22,6 +23,28 @@ function sendAuthError(err: unknown, reply: FastifyReply): FastifyReply {
 }
 
 const RefreshSchema = z.object({ refreshToken: z.string().min(1) });
+
+// Reuse the shared password policy (10+ chars, upper/lower/digit/special).
+const PasswordUpdateSchema = z.object({
+  newPassword: PasswordResetConfirmSchema.shape.newPassword,
+});
+
+/**
+ * Read the `aal` claim from an already-verified Bearer token. verifyJwt has
+ * validated the signature/issuer/audience, so decoding the payload here is safe
+ * — we only need to read the assurance level, not re-verify.
+ */
+function readAal(authorization: string | undefined): string | undefined {
+  const token = (authorization ?? '').slice('Bearer '.length).trim();
+  const segment = token.split('.')[1];
+  if (!segment) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'));
+    return typeof payload.aal === 'string' ? payload.aal : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Session + MFA routes (Sprint 1 STEP 8).
@@ -54,6 +77,38 @@ export async function sessionMfaRoutes(app: FastifyInstance) {
     },
   );
 
+  // ── Password update (authenticated, aal2) ───────────────────────────
+  // Completes the recovery flow: after the reset link establishes a recovery
+  // session and the user clears the authenticator step (aal2), the new password
+  // is written with the service role. This bypasses GoTrue's "Secure password
+  // change" reauthentication gate, which a client-side updateUser cannot satisfy
+  // once the MFA step-up has consumed the recovery exemption. Requiring aal2
+  // ensures a bare (un-stepped-up) session can't use this to change a password.
+  r.post(
+    '/auth/password/update',
+    {
+      preHandler: [app.verifyJwt],
+      schema: { body: PasswordUpdateSchema, security: [{ bearerAuth: [] }] },
+    },
+    async (request, reply) => {
+      if (readAal(request.headers.authorization) !== 'aal2') {
+        return reply
+          .status(403)
+          .send({ error: { code: 'MFA_REQUIRED', message: 'Multi-factor verification required.' } });
+      }
+      try {
+        await authService.updateOwnPassword(
+          request.user.id,
+          request.user.supabase_uid,
+          request.body.newPassword,
+        );
+        return reply.status(204).send();
+      } catch (err) {
+        return sendAuthError(err, reply);
+      }
+    },
+  );
+
   // ── Session refresh (public) ────────────────────────────────────────
   r.post(
     '/auth/refresh',
@@ -69,7 +124,10 @@ export async function sessionMfaRoutes(app: FastifyInstance) {
   );
 
   // ── Sign out (authenticated) ────────────────────────────────────────
-  r.delete('/auth/session', { preHandler: [app.verifyJwt] }, async (request, reply) => {
+  r.delete(
+    '/auth/session',
+    { preHandler: [app.verifyJwt], schema: { security: [{ bearerAuth: [] }] } },
+    async (request, reply) => {
     // The bearer token is what Supabase's admin.signOut revokes; verifyJwt has
     // already validated it, so the prefix is guaranteed present here.
     const jwt = (request.headers.authorization ?? '').slice('Bearer '.length).trim();
@@ -82,7 +140,10 @@ export async function sessionMfaRoutes(app: FastifyInstance) {
   // endpoint (they belong in the user's password manager / printed sheet).
   r.post(
     '/auth/mfa/enroll',
-    { preHandler: [app.verifyJwt], schema: { response: { 200: MfaEnrollResponseSchema } } },
+    {
+      preHandler: [app.verifyJwt],
+      schema: { response: { 200: MfaEnrollResponseSchema }, security: [{ bearerAuth: [] }] },
+    },
     async (request, reply) => {
       try {
         const result = await authService.enrollMfa(request.user.id, request.user.supabase_uid);
@@ -96,7 +157,7 @@ export async function sessionMfaRoutes(app: FastifyInstance) {
   // ── MFA verify (authenticated) ──────────────────────────────────────
   r.post(
     '/auth/mfa/verify',
-    { preHandler: [app.verifyJwt], schema: { body: MfaVerifySchema } },
+    { preHandler: [app.verifyJwt], schema: { body: MfaVerifySchema, security: [{ bearerAuth: [] }] } },
     async (request, reply) => {
       try {
         await authService.verifyMfa(

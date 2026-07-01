@@ -38,7 +38,11 @@ export async function signupReviewRoutes(app: FastifyInstance) {
     '/auth/signup-requests/:id/approve',
     {
       ...adminOnly,
-      schema: { params: z.object({ id: z.string().uuid() }), body: SignupApproveSchema },
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: SignupApproveSchema,
+        security: [{ bearerAuth: [] }],
+      },
     },
     async (request, reply) => {
       try {
@@ -61,7 +65,11 @@ export async function signupReviewRoutes(app: FastifyInstance) {
     '/auth/signup-requests/:id/reject',
     {
       ...adminOnly,
-      schema: { params: z.object({ id: z.string().uuid() }), body: SignupRejectSchema },
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: SignupRejectSchema,
+        security: [{ bearerAuth: [] }],
+      },
     },
     async (request, reply) => {
       try {
@@ -82,7 +90,10 @@ export async function signupReviewRoutes(app: FastifyInstance) {
   // ── CV download (presigned, 1-hour TTL) ─────────────────────────────
   r.get(
     '/auth/signup-requests/:id/cv',
-    { ...adminOnly, schema: { params: z.object({ id: z.string().uuid() }) } },
+    {
+      ...adminOnly,
+      schema: { params: z.object({ id: z.string().uuid() }), security: [{ bearerAuth: [] }] },
+    },
     async (request, reply) => {
       const row = await app.db
         .selectFrom('signup_requests')

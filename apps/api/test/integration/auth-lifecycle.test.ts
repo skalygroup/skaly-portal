@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   inviteUserByEmail: vi.fn(),
   updateUserById: vi.fn(),
   generateLink: vi.fn(),
+  resetPasswordForEmail: vi.fn(),
   adminSignOut: vi.fn(),
   enrollFactor: vi.fn(),
   refreshSession: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock('../../src/lib/supabase.js', () => ({
   supabaseAdmin: {
     auth: {
       refreshSession: h.refreshSession,
+      resetPasswordForEmail: h.resetPasswordForEmail,
       admin: {
         inviteUserByEmail: h.inviteUserByEmail,
         updateUserById: h.updateUserById,
@@ -131,6 +133,7 @@ beforeAll(async () => {
     error: null,
   }));
   h.generateLink.mockResolvedValue({ data: { properties: { action_link: 'x' } }, error: null });
+  h.resetPasswordForEmail.mockResolvedValue({ data: {}, error: null });
   h.adminSignOut.mockResolvedValue({ data: null, error: null });
   h.enrollFactor.mockResolvedValue({
     data: {
@@ -283,15 +286,16 @@ describe('Auth lifecycle', () => {
     expect(signOutRes.statusCode).toBe(204);
     expect(h.adminSignOut).toHaveBeenCalled();
 
-    // 12. Password reset for the known email → always 200, link generated.
+    // 12. Password reset for the known email → always 200, recovery email sent.
     const resetRes = await app.inject({
       method: 'POST',
       url: '/v1/auth/password-reset',
       payload: { email: USER_EMAIL },
     });
     expect(resetRes.statusCode).toBe(200);
-    expect(h.generateLink).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'recovery', email: USER_EMAIL }),
+    expect(h.resetPasswordForEmail).toHaveBeenCalledWith(
+      USER_EMAIL,
+      expect.objectContaining({ redirectTo: expect.any(String) }),
     );
 
     // 13. Sign in again (fresh token) still resolves the same user.
