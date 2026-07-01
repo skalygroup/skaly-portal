@@ -130,6 +130,35 @@ describe('AuthService.requestPasswordReset', () => {
     await service.requestPasswordReset(staff.email);
     expect(resetPasswordForEmail).not.toHaveBeenCalled();
   });
+
+  test('timing: unknown-email latency mimics known-email latency (anti-enumeration)', async () => {
+    const staff = await insertStaff();
+    const SAMPLES = 10;
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+    // Warm + measure the matched path (this also populates the rolling average
+    // the unmatched path will mimic).
+    const knownDurations: number[] = [];
+    for (let i = 0; i < SAMPLES; i++) {
+      const t0 = performance.now();
+      await service.requestPasswordReset(staff.email);
+      knownDurations.push(performance.now() - t0);
+    }
+
+    // Measure the unmatched path — it should now sleep ~avg(known) ± jitter.
+    const unknownDurations: number[] = [];
+    for (let i = 0; i < SAMPLES; i++) {
+      const t0 = performance.now();
+      await service.requestPasswordReset(email('ghost-timing'));
+      unknownDurations.push(performance.now() - t0);
+    }
+
+    // Statistical overlap, not exact equality: the two means sit within a 200ms
+    // window (generous for setTimeout granularity + the ±20ms jitter). The point
+    // is that the unmatched path is NOT dramatically faster — that gap is the
+    // enumeration leak this calibration closes.
+    expect(Math.abs(mean(unknownDurations) - mean(knownDurations))).toBeLessThan(200);
+  });
 });
 
 // ── Password update (admin API, bypasses "Secure password change") ────────

@@ -55,6 +55,33 @@ const staffCacheKey = (supabaseUid: string) => `staff_lookup:${supabaseUid}`;
 // the recovery token has established a session.
 const PASSWORD_RESET_REDIRECT_URL = 'http://localhost:3000/reset-password';
 
+// Anti-enumeration timing (M-08). The matched password-reset path makes a real
+// network round-trip to Supabase; the unmatched path has nothing to do and would
+// return far faster, leaking which emails exist. We keep a rolling average of the
+// last few matched-path durations and make the unmatched path sleep that long
+// (plus a small jitter) so response latency is indistinguishable between the two.
+const HIT_DURATION_SAMPLES: number[] = [];
+const HIT_DURATION_SAMPLE_CAP = 20;
+// Used only until the first real send calibrates the average — deliberately on
+// the slow side so an early unmatched request never looks faster than a match.
+const FALLBACK_HIT_DURATION_MS = 800;
+const TIMING_JITTER_MS = 20;
+
+function recordHitDuration(ms: number): void {
+  HIT_DURATION_SAMPLES.push(ms);
+  if (HIT_DURATION_SAMPLES.length > HIT_DURATION_SAMPLE_CAP) HIT_DURATION_SAMPLES.shift();
+}
+
+function avgHitDurationMs(): number {
+  if (HIT_DURATION_SAMPLES.length === 0) return FALLBACK_HIT_DURATION_MS;
+  return HIT_DURATION_SAMPLES.reduce((a, b) => a + b, 0) / HIT_DURATION_SAMPLES.length;
+}
+
+/** Uniform jitter in [-maxMs, +maxMs] so the mimic isn't a constant value. */
+function jitterMs(maxMs: number): number {
+  return (Math.random() * 2 - 1) * maxMs;
+}
+
 export interface CreateInviteParams {
   /** Required — every invite is scoped to a specific address (APPFLOW §2.7). */
   email: string;
@@ -736,18 +763,23 @@ export class AuthService {
       // generateLink only *mints* a link for custom delivery and sends nothing,
       // so using it here meant no reset email ever went out. redirectTo lands the
       // user on /reset-password with the recovery token in the URL fragment.
+      //
+      // Time the real send so the unmatched path below can mimic its latency.
+      const startedAt = Date.now();
       const { error } = await this.supabaseAdmin.auth.resetPasswordForEmail(email, {
         redirectTo: PASSWORD_RESET_REDIRECT_URL,
       });
+      recordHitDuration(Date.now() - startedAt);
       if (error) {
         // Never surface this to the caller — doing so would both leak existence
         // and break the uniform response. Log for ops; the user can retry.
         this.logger.warn({ err: error, email }, 'requestPasswordReset: send recovery email failed');
       }
     } else {
-      // Keep wall-clock timing comparable to the matched path's network
-      // round-trip so response latency can't be used to enumerate accounts.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // No matching account: sleep for the rolling-average matched-path duration
+      // (plus jitter) so response latency can't be used to enumerate accounts.
+      const targetMs = Math.max(0, avgHitDurationMs() + jitterMs(TIMING_JITTER_MS));
+      await new Promise((resolve) => setTimeout(resolve, targetMs));
     }
 
     // Audit either way — the trail records that a reset was attempted (and
