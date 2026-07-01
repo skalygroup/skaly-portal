@@ -93,7 +93,7 @@ describe('middleware', () => {
   it('signs out and redirects a deactivated account to /login?error=deactivated', async () => {
     auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } });
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      meResponse(403, { error: { code: 'ACCOUNT_DEACTIVATED' } }),
+      meResponse(401, { error: { code: 'ACCOUNT_DEACTIVATED' } }),
     );
 
     const res = await middleware(req('/'));
