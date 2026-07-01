@@ -2481,6 +2481,7 @@ Sprint 7: Content Calendar + Trigger 2 consumer + virtualised grid
 - `docs/06-IMPLEMENTATION-PLAN.md` §11
 - `docs/FIX-GUIDE-V2-COMPLETE.md` §C-01, §H-01
 - The `apps/api/src/lib/bot/stream-handler.ts` reference from Sprint 0 STEP 9
+- `docs/decisions/ADR-002-mfa-full-wiring-deferred-to-sprint-8.md` — full MFA challenge-on-login wiring was deferred here; complete it as task 1 (role-gated bot mutations require an MFA-confirmed session)
 
 **The driving prompt:**
 
