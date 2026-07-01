@@ -13,7 +13,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
  *      SSR docs), writing any rotated tokens onto the response Set-Cookie;
  *   b. no session → /login;
  *   c. fetches /v1/staff/me (cached API-side by Redis staff_lookup:{uid}, 5-min
- *      TTL — we forward the same bearer so the API hits cache). 403
+ *      TTL — we forward the same bearer so the API hits cache). 401
  *      ACCOUNT_DEACTIVATED or 401 NO_STAFF_ROW → sign out + /login?error=deactivated;
  *   d. admin/manager without MFA, not already on /mfa-setup → /mfa-setup;
  *   e. otherwise pass.
@@ -68,8 +68,8 @@ export async function middleware(request: NextRequest) {
       cache: 'no-store',
     });
 
-    if (res.status === 403 || res.status === 401) {
-      // ACCOUNT_DEACTIVATED (403) / NO_STAFF_ROW (401) — revoke and bounce out.
+    if (res.status === 401) {
+      // ACCOUNT_DEACTIVATED / NO_STAFF_ROW (both 401) — revoke and bounce out.
       await supabase.auth.signOut();
       return redirectTo(request, response, '/login', 'error=deactivated');
     }

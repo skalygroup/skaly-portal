@@ -426,7 +426,7 @@ Should print an array containing `LoginEmailSchema`, `InviteCreateSchema`, etc.
 >      d. Looks up staff row. **Cache strategy:**
 >         - Try `redis.get('staff_lookup:' + supabaseUid)`. If hit, parse JSON.
 >         - If miss, `SELECT id, supabase_uid, name, email, role, active, mfa_enrolled, avatar_url FROM staff WHERE supabase_uid = $1 AND deleted_at IS NULL`. If no row, 401 `{ code: 'NO_STAFF_ROW' }` (means the Supabase user exists but no staff record — happens during signup if backfill failed). Cache with `SET staff_lookup:{uid} {json} EX 300` (5-minute TTL per BACKEND-SCHEMA §Redis schema line 576).
->      e. If `staff.active === false`, reject 403 `{ code: 'ACCOUNT_DEACTIVATED' }` (the frontend translates this to "Account deactivated. Contact your admin.").
+>      e. If `staff.active === false`, reject 401 `{ code: 'ACCOUNT_DEACTIVATED' }` (session invalidated — matches 04-APPFLOW §2.8, 08-AUTH-MATRIX §2, 09-ERROR-HANDLING §2; the frontend translates this to "Account deactivated. Contact your admin.").
 >      f. Set `request.user = staff` and proceed.
 >
 >    - Export a **factory** `requireRole(...roles: Role[])`: returns a `preHandler` that runs **after** `verifyJwt` and checks `request.user.role` is in the allowed set. On fail, 403 `{ code: 'PERMISSION_DENIED' }`. **Critical**: do not echo back which role was required. The error message is always the literal "Permission denied." per the audit M-08 design principle (no role leakage even in auth).
@@ -452,7 +452,7 @@ Should print an array containing `LoginEmailSchema`, `InviteCreateSchema`, etc.
 >    - `verifyJwt` returns 401 on missing header.
 >    - `verifyJwt` returns 401 on malformed token.
 >    - `verifyJwt` returns 401 on valid signature but unknown `sub` (no staff row).
->    - `verifyJwt` returns 403 on deactivated user.
+>    - `verifyJwt` returns 401 on deactivated user.
 >    - `verifyJwt` returns 200 on valid token + active staff row.
 >    - `requireRole('admin')` returns 403 for a team_member.
 >    - `requireRole('admin','manager')` returns 200 for both.
@@ -1022,7 +1022,7 @@ All green.
 >          method: 'GET', url: '/v1/staff/me',
 >          headers: { authorization: `Bearer ${userToken}` }
 >        });
->        expect(deactRes.statusCode).toBe(403);
+>        expect(deactRes.statusCode).toBe(401);
 >        expect(JSON.parse(deactRes.payload).code).toBe('ACCOUNT_DEACTIVATED');
 >      });
 >    });
@@ -1417,7 +1417,7 @@ Then for forgot/reset: in another browser (or incognito), go to `/forgot-passwor
 >    - Matcher: every route under `(portal)` + `/settings` + `/`. Public routes excluded: `/login`, `/signup*`, `/auth/*`, `/forgot-password`, `/reset-password`, `/_next`, `/api/*`.
 >    - Logic:
 >      a. If no session → redirect to `/login`.
->      b. If session, fetch `/v1/staff/me`. If 403 ACCOUNT_DEACTIVATED → sign out + redirect to `/login?error=deactivated`. If 401 NO_STAFF_ROW → same.
+>      b. If session, fetch `/v1/staff/me`. If 401 ACCOUNT_DEACTIVATED → sign out + redirect to `/login?error=deactivated`. If 401 NO_STAFF_ROW → same.
 >      c. If role is admin or manager AND `mfaEnrolled === false` AND current path is not `/mfa-setup` → redirect to `/mfa-setup`.
 >      d. Else, let the request pass.
 >    - The middleware refreshes the session token automatically via `supabase.auth.getUser()` per Supabase SSR docs.

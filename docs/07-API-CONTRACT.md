@@ -185,7 +185,7 @@ Approve a self-signup request, creating the user account.
 { "data": { "staffId": "uuid", "name": "New Person", "roleAssigned": "team_member" } }
 ```
 
-**Errors:** 403 `PERMISSION_DENIED` | 404 `RESOURCE_NOT_FOUND` | 400 `ALREADY_PROCESSED`
+**Errors:** 403 `PERMISSION_DENIED` | 404 `RESOURCE_NOT_FOUND` | 409 `ALREADY_PROCESSED`
 
 ---
 

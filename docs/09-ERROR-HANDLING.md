@@ -46,7 +46,7 @@ All API error responses follow a single consistent shape:
 | `PERIOD_LOCKED` | 423 | Write attempted on a locked period |
 | `PERIOD_NOT_FOUND` | 404 | Requested period does not exist in months table |
 | `UNLOCK_REASON_REQUIRED` | 400 | Unlock attempt missing required `reason` field |
-| `ALREADY_PROCESSED` | 400 | Signup request already approved or rejected |
+| `ALREADY_PROCESSED` | 409 | Signup request already approved or rejected, or a staff row already exists for this email (duplicate resource) |
 
 ### Data Integrity
 

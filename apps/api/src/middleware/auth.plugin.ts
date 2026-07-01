@@ -170,9 +170,12 @@ async function authPlugin(fastify: FastifyInstance) {
       }
     }
 
-    // e. Deactivated accounts are rejected (frontend shows "Account deactivated…").
+    // e. Deactivated accounts are rejected with 401 (session invalidated) so
+    // client middleware auto-clears the session — see 04-APPFLOW §2.8,
+    // 08-AUTH-MATRIX §2, 09-ERROR-HANDLING §2. Frontend routes on the code, not
+    // the status. (frontend shows "Account deactivated…")
     if (staff.active === false) {
-      return forbidden(reply, 'ACCOUNT_DEACTIVATED', 'Account deactivated.');
+      return unauthorized(reply, 'ACCOUNT_DEACTIVATED', 'Account deactivated.');
     }
 
     // f. Attach and proceed.

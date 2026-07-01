@@ -162,12 +162,12 @@ describe('auth.plugin', () => {
     expect(res.json().error.code).toBe('NO_STAFF_ROW');
   });
 
-  test('403 ACCOUNT_DEACTIVATED when the staff row is inactive', async () => {
+  test('401 ACCOUNT_DEACTIVATED when the staff row is inactive', async () => {
     h.executeTakeFirst.mockResolvedValue(makeStaffRow({ active: false }));
     const app = await buildTestApp();
     const token = await signToken();
     const res = await app.inject({ method: 'GET', url: '/protected', headers: auth(token) });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
     expect(res.json().error.code).toBe('ACCOUNT_DEACTIVATED');
   });
 

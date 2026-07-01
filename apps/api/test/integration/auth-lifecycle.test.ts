@@ -316,7 +316,7 @@ describe('Auth lifecycle', () => {
       url: '/v1/staff/me',
       headers: { authorization: `Bearer ${userToken}` },
     });
-    expect(deactRes.statusCode).toBe(403);
+    expect(deactRes.statusCode).toBe(401);
     expect(JSON.parse(deactRes.payload).error.code).toBe('ACCOUNT_DEACTIVATED');
   });
 
