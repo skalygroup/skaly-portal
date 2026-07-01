@@ -171,15 +171,23 @@ export const SessionRefreshResponseSchema = z.object({
   expiresAt: z.number(),
 });
 
-/** Shape of GET /v1/staff/me (C-04 reference handler). */
+/**
+ * Shape of GET /v1/staff/me (C-04 reference handler). The full own-profile
+ * (identical fields to GET /v1/staff/:id) PLUS the effective permission map the
+ * frontend gates UI on.
+ */
 export const StaffMeResponseSchema = z.object({
   id: z.string(),
   name: z.string(),
   email: z.string().email(),
   role: RoleSchema,
+  dateOfBirth: z.string().nullable(),
+  mobileNumber: z.string().nullable(),
+  cvFileKey: z.string().nullable(),
+  avatarUrl: z.string().url().nullable(),
   active: z.boolean(),
   mfaEnrolled: z.boolean(),
-  avatarUrl: z.string().url().nullable(),
+  createdAt: z.string(),
   permissions: z.record(z.string(), z.boolean()),
 });
 

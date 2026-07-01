@@ -116,6 +116,11 @@ async function cleanup() {
   // FK order: invite_links.created_by / signup_requests.reviewed_by → staff.id.
   await db.deleteFrom('invite_links').where('email', '=', USER_EMAIL).execute();
   await db.deleteFrom('signup_requests').where('email', '=', USER_EMAIL).execute();
+  // Real AuditService now writes audit_log rows (FK → staff); clear them first.
+  const ids = (
+    await db.selectFrom('staff').select('id').where('email', 'in', [ADMIN_EMAIL, USER_EMAIL]).execute()
+  ).map((r) => r.id);
+  if (ids.length) await db.deleteFrom('audit_log').where('staff_id', 'in', ids).execute();
   await db.deleteFrom('staff').where('email', 'in', [ADMIN_EMAIL, USER_EMAIL]).execute();
 }
 

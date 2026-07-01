@@ -96,6 +96,8 @@ async function cleanup() {
     .execute();
   const ids = created.map((s) => s.id);
   if (ids.length) await db.deleteFrom('attendance_logs').where('staff_id', 'in', ids).execute();
+  // Real NotificationService writes signup_approved rows (FK → staff); clear first.
+  if (ids.length) await db.deleteFrom('notifications').where('staff_id', 'in', ids).execute();
   await db.deleteFrom('signup_requests').where('email', 'like', `%${DOMAIN}`).execute();
   if (ids.length) await db.deleteFrom('staff').where('id', 'in', ids).execute();
   await db.deleteFrom('holidays').where('name', '=', 'ITEST-HOLIDAY').execute();

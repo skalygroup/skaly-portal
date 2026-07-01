@@ -25,7 +25,24 @@ export async function signupRequestRoutes(app: FastifyInstance) {
     getR2Bucket(),
   );
 
-  app.post('/auth/signup/request', async (request, reply) => {
+  // The body is consumed as a stream via request.parts() (the CV flows straight
+  // to R2), so we deliberately do NOT attach a Zod `body` schema — that would
+  // make the validator try to parse an already-streamed multipart body. We
+  // document the contract for Swagger instead: consumes + field list + the
+  // happy-path 201 shape.
+  app.post(
+    '/auth/signup/request',
+    {
+      schema: {
+        description:
+          'Public self-signup (multipart/form-data). Text fields: name, email, ' +
+          'dateOfBirth (YYYY-MM-DD), mobileNumber, roleRequested, message (optional), ' +
+          'googleUid (optional); plus an optional CV file part (≤5MB). Text fields ' +
+          'must precede the file part. Returns 201 { requestId, status: "pending" }.',
+        consumes: ['multipart/form-data'],
+      },
+    },
+    async (request, reply) => {
     if (!request.isMultipart()) {
       return reply.status(415).send({
         error: { code: 'UNSUPPORTED_MEDIA_TYPE', message: 'Expected multipart/form-data.' },

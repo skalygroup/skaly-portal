@@ -1,6 +1,6 @@
 import { logger } from '../lib/logger.js';
 
-import type { Server, Socket } from 'socket.io';
+import type { Namespace, Socket } from 'socket.io';
 
 /**
  * WebSocket JWT refresh protocol (C-05).
@@ -72,7 +72,7 @@ function scheduleTimers(
   }, msUntilDisconnect);
 }
 
-export function setupSocketTokenWatcher(io: Server): void {
+export function setupSocketTokenWatcher(io: Namespace): void {
   io.on('connection', (socket: Socket) => {
     const exp = socket.handshake.auth?.exp as number | undefined;
     const nowSec = Math.floor(Date.now() / 1000);

@@ -1,11 +1,10 @@
 import fp from 'fastify-plugin';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
 
-import { db } from '../lib/db.js';
-import { env } from '../lib/env.js';
+import { cacheKey, TokenVerificationError, verifySupabaseToken } from '../lib/auth-verify.js';
 import { logger } from '../lib/logger.js';
 import { redis } from '../lib/redis.js';
 
+import type { AuthUser } from '../lib/auth-verify.js';
 import type { Role } from '@skaly/shared/schemas/auth';
 import type {
   FastifyInstance,
@@ -14,31 +13,9 @@ import type {
   preHandlerHookHandler,
 } from 'fastify';
 
-/**
- * Authenticated staff identity attached to every protected request.
- *
- * This is exactly the column set verifyJwt selects/caches — NOT the full
- * `Staff` DB row. Typing it as the precise subset keeps handlers honest:
- * accessing a column we never load (e.g. date_of_birth) is a compile error,
- * not a runtime `undefined`. Per audit C-04, `id` is guaranteed non-null on
- * protected routes because the middleware refuses requests without a row.
- */
-export interface AuthUser {
-  id: string;
-  supabase_uid: string;
-  name: string;
-  email: string;
-  role: Role;
-  active: boolean;
-  mfa_enrolled: boolean;
-  avatar_url: string | null;
-}
-
-// Redis key for a cached staff lookup, keyed by Supabase user UUID.
-const cacheKey = (supabaseUid: string) => `staff_lookup:${supabaseUid}`;
-
-// 5-minute TTL per BACKEND-SCHEMA §Redis schema (line 576).
-const STAFF_CACHE_TTL_SECONDS = 300;
+// Re-exported so existing importers (types/fastify.d.ts, tests) keep resolving
+// AuthUser from the auth plugin. Its canonical home is lib/auth-verify.ts.
+export type { AuthUser } from '../lib/auth-verify.js';
 
 function unauthorized(reply: FastifyReply, code: string, message: string) {
   return reply.status(401).send({ error: { code, message } });
@@ -46,43 +23,6 @@ function unauthorized(reply: FastifyReply, code: string, message: string) {
 
 function forbidden(reply: FastifyReply, code: string, message: string) {
   return reply.status(403).send({ error: { code, message } });
-}
-
-/**
- * Fetch the staff row for a Supabase user. Returns undefined when the
- * Supabase account exists but has no matching (non-deleted) staff record.
- */
-async function fetchStaffByUid(supabaseUid: string): Promise<AuthUser | undefined> {
-  const row = await db
-    .selectFrom('staff')
-    .select([
-      'id',
-      'supabase_uid',
-      'name',
-      'email',
-      'role',
-      'active',
-      'mfa_enrolled',
-      'avatar_url',
-    ])
-    .where('supabase_uid', '=', supabaseUid)
-    .where('deleted_at', 'is', null)
-    .executeTakeFirst();
-
-  if (!row) return undefined;
-
-  // supabase_uid is non-null here — we just filtered on it. role is one of the
-  // four CHECK-constrained values; narrow the DB `string` to our Role union.
-  return {
-    id: row.id,
-    supabase_uid: supabaseUid,
-    name: row.name,
-    email: row.email,
-    role: row.role as Role,
-    active: row.active,
-    mfa_enrolled: row.mfa_enrolled,
-    avatar_url: row.avatar_url,
-  };
 }
 
 /**
@@ -117,10 +57,6 @@ export async function invalidateStaffCache(supabaseUid: string): Promise<void> {
 }
 
 async function authPlugin(fastify: FastifyInstance) {
-  // One JWKS instance per process. jose caches keys and auto-refreshes on
-  // unknown `kid` / cooldown, so a single shared set is correct and cheapest.
-  const jwks = createRemoteJWKSet(new URL(env.SUPABASE_JWKS_URL));
-
   const verifyJwt: preHandlerHookHandler = async (request, reply) => {
     // a. Bearer token from the Authorization header.
     const header = request.headers.authorization;
@@ -129,45 +65,16 @@ async function authPlugin(fastify: FastifyInstance) {
     }
     const token = header.slice('Bearer '.length).trim();
 
-    // b. Verify RS256 signature + issuer/audience. Never log the token body.
-    let supabaseUid: string;
+    // b–d. Verify signature + resolve staff (shared with the socket handshake).
+    let staff: AuthUser;
     try {
-      const { payload } = await jwtVerify(token, jwks, {
-        issuer: `${env.SUPABASE_URL}/auth/v1`,
-        audience: 'authenticated',
-      });
-      if (!payload.sub) {
-        return unauthorized(reply, 'INVALID_TOKEN', 'Invalid or expired token');
-      }
-      supabaseUid = payload.sub; // c. `sub` is the Supabase user UUID.
-    } catch {
-      return unauthorized(reply, 'INVALID_TOKEN', 'Invalid or expired token');
-    }
-
-    // d. Resolve the staff row — Redis first, DB on miss.
-    let staff: AuthUser | undefined;
-
-    try {
-      const cached = await redis.get(cacheKey(supabaseUid));
-      if (cached) staff = JSON.parse(cached) as AuthUser;
+      staff = await verifySupabaseToken(token);
     } catch (err) {
-      // Redis is a cache, not a source of truth: log and fall through to DB.
-      logger.warn({ err, supabaseUid }, 'verifyJwt: redis get failed, falling back to DB');
-    }
-
-    if (!staff) {
-      staff = await fetchStaffByUid(supabaseUid);
-      if (!staff) {
-        // Supabase user exists but no staff record (e.g. backfill failed mid-signup).
-        return unauthorized(reply, 'NO_STAFF_ROW', 'No staff record for this account');
+      if (err instanceof TokenVerificationError) {
+        // INVALID_TOKEN (bad signature / no sub) or NO_STAFF_ROW.
+        return unauthorized(reply, err.code, err.message);
       }
-
-      try {
-        await redis.set(cacheKey(supabaseUid), JSON.stringify(staff), 'EX', STAFF_CACHE_TTL_SECONDS);
-      } catch (err) {
-        // A failed write just means the next request also hits the DB.
-        logger.warn({ err, supabaseUid }, 'verifyJwt: redis set failed');
-      }
+      return unauthorized(reply, 'INVALID_TOKEN', 'Invalid or expired token');
     }
 
     // e. Deactivated accounts are rejected with 401 (session invalidated) so

@@ -94,8 +94,15 @@ async function insertStaff(over: Record<string, unknown> = {}) {
 }
 
 async function cleanup() {
-  // ON DELETE CASCADE clears mfa_recovery_codes when the staff row goes.
-  await db.deleteFrom('staff').where('email', 'like', `%${DOMAIN}`).execute();
+  // ON DELETE CASCADE clears mfa_recovery_codes when the staff row goes, but
+  // audit_log has a plain FK on staff_id — clear those rows first.
+  const ids = (
+    await db.selectFrom('staff').select('id').where('email', 'like', `%${DOMAIN}`).execute()
+  ).map((r) => r.id);
+  if (ids.length) {
+    await db.deleteFrom('audit_log').where('staff_id', 'in', ids).execute();
+    await db.deleteFrom('staff').where('id', 'in', ids).execute();
+  }
 }
 
 beforeAll(cleanup);

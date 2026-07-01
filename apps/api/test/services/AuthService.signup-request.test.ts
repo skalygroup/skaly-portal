@@ -53,10 +53,16 @@ function form(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function notifyCalls() {
-  return infoSpy.mock.calls.filter(
-    ([obj]) => obj && typeof obj === 'object' && 'notification' in obj,
-  );
+// The real NotificationService writes DB rows (not log lines). Count the
+// signup_request notifications created for a specific request — one per admin.
+async function notifCountForRequest(requestId: string): Promise<number> {
+  const rows = await db
+    .selectFrom('notifications')
+    .select('id')
+    .where('type', '=', 'signup_request')
+    .where(sql<string>`payload->>'requestId'`, '=', requestId)
+    .execute();
+  return rows.length;
 }
 
 function activeAdmins() {
@@ -70,6 +76,18 @@ function activeAdmins() {
 }
 
 async function cleanup() {
+  const staffIds = (
+    await db.selectFrom('staff').select('id').where('email', 'like', `%${DOMAIN}`).execute()
+  ).map((r) => r.id);
+  const reqIds = (
+    await db.selectFrom('signup_requests').select('id').where('email', 'like', `%${DOMAIN}`).execute()
+  ).map((r) => r.id);
+  // Notifications (FK → staff) must go before their recipients: those addressed
+  // to our marker staff, plus fan-out rows for our marker requests.
+  if (staffIds.length) await db.deleteFrom('notifications').where('staff_id', 'in', staffIds).execute();
+  if (reqIds.length) {
+    await db.deleteFrom('notifications').where(sql<string>`payload->>'requestId'`, 'in', reqIds).execute();
+  }
   await db.deleteFrom('signup_requests').where('email', 'like', `%${DOMAIN}`).execute();
   await db.deleteFrom('staff').where('email', 'like', `%${DOMAIN}`).execute();
 }
@@ -102,7 +120,7 @@ describe('AuthService.signupRequest (integration)', () => {
     expect(row?.cv_file_key).toBeNull();
     expect(s3Mock.commandCalls(PutObjectCommand).length).toBe(0);
 
-    expect(notifyCalls().length).toBe(adminCount);
+    expect(await notifCountForRequest(res.requestId)).toBe(adminCount);
   });
 
   test('valid form with PDF CV → streamed to R2 with the expected key', async () => {
@@ -213,8 +231,8 @@ describe('AuthService.signupRequest (integration)', () => {
       ])
       .execute();
 
-    await service.signupRequest(form());
-    expect(notifyCalls().length).toBe(before + 2);
+    const res = await service.signupRequest(form());
+    expect(await notifCountForRequest(res.requestId)).toBe(before + 2);
   });
 });
 

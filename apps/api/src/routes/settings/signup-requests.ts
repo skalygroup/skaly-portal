@@ -7,6 +7,26 @@ function toIso(d: unknown): string | null {
   return d ? new Date(d as string).toISOString() : null;
 }
 
+// Response shape for one admin-facing signup request. Nullability mirrors the
+// signup_requests table (db.types.ts): message/cv/rejection fields and the
+// reviewer are optional; name/email/status/role/createdAt are always present.
+const SignupRequestAdminItem = z.object({
+  id: z.string(),
+  name: z.string(),
+  email: z.string(),
+  dateOfBirth: z.string().nullable(),
+  mobileNumber: z.string(),
+  roleRequested: z.string(),
+  message: z.string().nullable(),
+  cvFileKey: z.string().nullable(),
+  status: z.string(),
+  createdAt: z.string().nullable(),
+  reviewedAt: z.string().nullable(),
+  reviewedBy: z.object({ id: z.string(), name: z.string().nullable() }).nullable(),
+  rejectionNote: z.string().nullable(),
+  publicRejectionMessage: z.string().nullable(),
+});
+
 /**
  * GET /v1/settings/signup-requests — admin list of signup requests.
  *
@@ -26,6 +46,7 @@ export async function settingsSignupRequestsRoutes(app: FastifyInstance) {
         querystring: z.object({
           status: z.enum(['pending', 'approved', 'rejected', 'all']).default('pending'),
         }),
+        response: { 200: z.array(SignupRequestAdminItem) },
         security: [{ bearerAuth: [] }],
       },
     },

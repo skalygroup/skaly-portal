@@ -1,26 +1,33 @@
+import { randomUUID } from 'node:crypto';
+
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import Fastify, {
+  type FastifyError,
   type FastifyInstance,
   type FastifyServerOptions,
 } from 'fastify';
 import {
   serializerCompiler,
   validatorCompiler,
-  jsonSchemaTransform,
+  hasZodFastifySchemaValidationErrors,
 } from 'fastify-type-provider-zod';
 
 import { pool, db } from './lib/db.js';
 import { env } from './lib/env.js';
+import { AppError } from './lib/errors.js';
 import { logger } from './lib/logger.js';
 import { redis } from './lib/redis.js';
+import { registerSwagger } from './lib/swagger.js';
 import authPlugin from './middleware/auth.plugin.js';
 import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import authRoutes from './routes/auth/index.js';
+import clientsRoutes from './routes/clients/index.js';
 import { healthRoutes } from './routes/health.js';
+import monthsRoutes from './routes/months/index.js';
 import settingsRoutes from './routes/settings/index.js';
 import staffRoutes from './routes/staff/index.js';
 
@@ -48,26 +55,66 @@ export async function buildApp(
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
-  // ── Swagger / OpenAPI (dev only, audit M-12) ───────────────────────
-  if (env.NODE_ENV !== 'production') {
-    await app.register(import('@fastify/swagger'), {
-      openapi: {
-        info: { title: 'Skaly Portal API', version: '0.1.0' },
-        servers: [{ url: `http://localhost:${env.PORT}` }],
-        components: {
-          securitySchemes: {
-            // Routes guarded by verifyJwt advertise `security: [{ bearerAuth: [] }]`
-            // in their schema so Swagger UI shows the lock/auth icon. Enforcement
-            // is the preHandler; this only documents the contract.
-            bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+  // ── Global error handler (09-ERROR-HANDLING.md §4) ─────────────────
+  // Single sanctioned renderer of the canonical error envelope
+  // { error: { code, message, details? } }. Any AppError thrown by a service
+  // or route surfaces here with its registered status; anything unexpected is
+  // sanitised to INTERNAL_ERROR with a traceId. Sprint 1 auth routes still
+  // catch their own AuthError locally and return before reaching this handler.
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    // Known application errors.
+    if (error instanceof AppError) {
+      return reply.status(error.statusCode).send({
+        error: { code: error.code, message: error.message, details: error.details },
+      });
+    }
+
+    // Zod schema validation failures (fastify-type-provider-zod).
+    if (hasZodFastifySchemaValidationErrors(error)) {
+      return reply.status(400).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Request validation failed.',
+          details: {
+            fields: error.validation.map((v) => ({
+              field: v.instancePath,
+              message: v.message,
+            })),
           },
         },
+      });
+    }
+
+    // Rate limiting (@fastify/rate-limit).
+    if (error.statusCode === 429) {
+      return reply.status(429).send({
+        error: {
+          code: 'RATE_LIMIT_EXCEEDED',
+          message: 'Too many requests. Please slow down.',
+        },
+      });
+    }
+
+    // Unexpected — sanitise, log with a correlation id, never leak internals.
+    const traceId = randomUUID();
+    request.log.error({ err: error, traceId, url: request.url }, 'Unhandled error');
+    return reply.status(500).send({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Something went wrong. Please try again.',
+        details: { traceId },
       },
-      transform: jsonSchemaTransform,
     });
-    await app.register(import('@fastify/swagger-ui'), {
-      routePrefix: '/docs',
-    });
+  });
+
+  // ── Swagger / OpenAPI (dev only, audit M-12) ───────────────────────
+  // Registered BEFORE the route plugins so it captures their Zod schemas, and
+  // deliberately BEFORE helmet: Fastify hooks only attach to routes registered
+  // after them, so mounting /docs ahead of helmet keeps its CSP off the Swagger
+  // UI assets (which use inline styles/scripts) without loosening helmet for
+  // the rest of the app. No-op in production — /docs must never be exposed.
+  await registerSwagger(app, { nodeEnv: env.NODE_ENV, port: env.PORT });
+  if (env.NODE_ENV !== 'production') {
     logger.info('Swagger UI available at /docs (dev only)');
   }
 
@@ -81,8 +128,13 @@ export async function buildApp(
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
+  // Global IP-keyed cap per 07-API-CONTRACT.md §2 (150 req/min). Per-route
+  // buckets (login by email, invite by staffId, …) are attached on their own
+  // routes via `config.rateLimit`. addHeaders keeps M-06 satisfied: every
+  // response advertises the client's remaining budget, and 429s carry
+  // Retry-After.
   await app.register(rateLimit, {
-    max: 100,
+    max: 150,
     timeWindow: '1 minute',
     addHeaders: {
       'x-ratelimit-limit': true,
@@ -120,6 +172,8 @@ export async function buildApp(
   await app.register(healthRoutes);
   await app.register(authRoutes, { prefix: '/v1' });
   await app.register(staffRoutes, { prefix: '/v1' });
+  await app.register(clientsRoutes, { prefix: '/v1' });
+  await app.register(monthsRoutes, { prefix: '/v1' });
   await app.register(settingsRoutes, { prefix: '/v1' });
 
   return app;

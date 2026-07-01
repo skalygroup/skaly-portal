@@ -65,6 +65,8 @@ async function cleanup() {
       .deleteFrom('invite_links')
       .where((eb) => eb.or([eb('created_by', 'in', ids), eb('used_by', 'in', ids)]))
       .execute();
+    // Real AuditService now writes audit_log rows (FK → staff); clear them first.
+    await db.deleteFrom('audit_log').where('staff_id', 'in', ids).execute();
     await db.deleteFrom('staff').where('id', 'in', ids).execute();
   }
 }

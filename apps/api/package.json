@@ -52,6 +52,7 @@
     "@types/node": "^22",
     "aws-sdk-client-mock": "^4.1.0",
     "kysely-codegen": "^0.20",
+    "socket.io-client": "^4",
     "tsx": "^4",
     "typescript": "^5",
     "vitest": "^3"

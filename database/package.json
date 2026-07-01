@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Database migrations and seeds for the Scaly Business Portal",
   "dependencies": {
+    "@skaly/shared": "workspace:*",
     "kysely": "^0.29",
     "pg": "^8.21.0"
   },

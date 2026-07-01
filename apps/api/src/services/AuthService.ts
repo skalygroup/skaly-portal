@@ -4,6 +4,8 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { sql, type Kysely, type Transaction } from 'kysely';
 
 import { AttendanceService } from './AttendanceService.js';
+import { AuditService } from './AuditService.js';
+import { NotificationService } from './NotificationService.js';
 
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { DB } from '@skaly/shared';
@@ -30,21 +32,6 @@ export class AuthError extends Error {
   }
 }
 
-/**
- * Shape Sprint 2's real AuditService.log will accept. Kept identical here so
- * swapping the placeholder for the real service is a one-line change.
- */
-export interface AuditLogEntry {
-  actorId: string;
-  /** Origin of the action (audit C-04). Web requests are 'web'. */
-  actorSource?: 'web' | 'system' | 'cron';
-  entity: string;
-  entityId: string;
-  action: string;
-  before?: unknown;
-  after?: unknown;
-  trx?: Transaction<DB>;
-}
 
 // 5-minute TTL, matching the auth plugin's staff_lookup cache (STEP 4).
 const STAFF_CACHE_TTL_SECONDS = 300;
@@ -112,20 +99,6 @@ const CV_MIME_EXT: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
 };
 
-/**
- * Shape Sprint 2's real NotificationService.create will accept. Placeholder
- * for now (logs intent) — swap-in is one line, same pattern as the audit log.
- */
-export interface NotificationCreateEntry {
-  recipientId: string;
-  type: string;
-  title: string;
-  /** Optional longer body (maps to notifications.message in Sprint 2). */
-  body?: string;
-  data?: unknown;
-  /** Reuse the caller's transaction so the notification write is atomic with it. */
-  trx?: Transaction<DB>;
-}
 
 /**
  * The admin MFA *enroll/verify* surface the spec targets. The installed
@@ -151,6 +124,8 @@ interface MfaAdminEnrollApi {
 
 export class AuthService {
   private readonly attendance = new AttendanceService();
+  private readonly audit = new AuditService();
+  private readonly notifications = new NotificationService();
 
   constructor(
     private readonly db: Kysely<DB>,
@@ -162,28 +137,15 @@ export class AuthService {
   ) {}
 
   /**
-   * Placeholder for Sprint 2's AuditService.log. Emits the entry to the log
-   * with the same arg shape the real service will take. `trx` is intentionally
-   * dropped from the logged payload (it is not serialisable).
+   * Structured security log for events that are NOT domain-row mutations and so
+   * have no place in audit_log (which is table-change-scoped: table_name +
+   * record_id UUID + CRUD action). Password-reset request/confirm run entirely
+   * against Supabase and can be anonymous, so they're recorded here, not audited.
    */
-  private auditServiceLog(entry: AuditLogEntry): void {
-    const { trx: _trx, ...rest } = entry;
-    void _trx;
-    this.logger.info({ audit: rest }, 'audit');
+  private securityLog(event: string, details: Record<string, unknown>): void {
+    this.logger.info({ security: { event, ...details } }, 'security');
   }
 
-  /**
-   * Placeholder for Sprint 2's NotificationService.create — logs the intent
-   * with the same arg shape the real service will take.
-   */
-  private notificationServiceCreate(entry: NotificationCreateEntry): void {
-    // `trx` is intentionally dropped from the logged payload (not serialisable),
-    // mirroring auditServiceLog. Sprint 2's real service will use it to write the
-    // notification row inside the caller's transaction.
-    const { trx: _trx, ...rest } = entry;
-    void _trx;
-    this.logger.info({ notification: rest }, 'notification');
-  }
 
   /**
    * Create an invite link and (when email-scoped) send the Supabase invite
@@ -225,12 +187,12 @@ export class AuthService {
         .where('id', '=', row.id)
         .execute();
 
-      // d. Audit (placeholder until Sprint 2).
-      this.auditServiceLog({
+      // d. Audit.
+      await this.audit.log({
         actorId: createdBy,
-        entity: 'invite_link',
+        entity: 'invite_links',
         entityId: row.id,
-        action: 'invite.create',
+        action: 'INSERT',
         after: { email, role },
         trx,
       });
@@ -363,11 +325,11 @@ export class AuthService {
           .execute();
 
         // h. Audit.
-        this.auditServiceLog({
+        await this.audit.log({
           actorId: staff.id,
           entity: 'staff',
           entityId: staff.id,
-          action: 'staff.create',
+          action: 'INSERT',
           after: { email: invite.email, role: invite.role, via: 'invite' },
           trx,
         });
@@ -501,7 +463,7 @@ export class AuthService {
           .execute();
       }
 
-      // Notify every active admin (placeholder until Sprint 2).
+      // Notify every active admin.
       const admins = await trx
         .selectFrom('staff')
         .select('id')
@@ -510,7 +472,7 @@ export class AuthService {
         .where('deleted_at', 'is', null)
         .execute();
       for (const admin of admins) {
-        this.notificationServiceCreate({
+        await this.notifications.create({
           recipientId: admin.id,
           type: 'signup_request',
           title: `New access request from ${form.name}`,
@@ -569,13 +531,12 @@ export class AuthService {
           })
           .where('id', '=', requestId)
           .execute();
-        this.auditServiceLog({
+        await this.audit.log({
           actorId: reviewerStaffId,
-          actorSource: 'web',
-          entity: 'signup_request',
+          entity: 'signup_requests',
           entityId: requestId,
-          action: 'signup_request.reject',
-          after: { reason: 'h04_account_exists' },
+          action: 'UPDATE',
+          after: { status: 'rejected', reason: 'h04_account_exists' },
           trx,
         });
         return { kind: 'h04' as const };
@@ -644,7 +605,7 @@ export class AuthService {
         }
 
         // h. Notify the new staff member (recipient = the row we just created).
-        this.notificationServiceCreate({
+        await this.notifications.create({
           recipientId: staff.id,
           type: 'signup_approved',
           title: 'Your access request was approved',
@@ -653,13 +614,12 @@ export class AuthService {
         });
 
         // i. Audit.
-        this.auditServiceLog({
+        await this.audit.log({
           actorId: reviewerStaffId,
-          actorSource: 'web',
-          entity: 'signup_request',
+          entity: 'signup_requests',
           entityId: requestId,
-          action: 'signup_request.approve',
-          after: { staffId: staff.id, roleAssigned },
+          action: 'UPDATE',
+          after: { status: 'approved', staffId: staff.id, roleAssigned },
           trx,
         });
 
@@ -727,13 +687,12 @@ export class AuthService {
 
       // rejection_note goes into the audit trail (admins can read it); the
       // rejected applicant has no JWT and never sees the audit log.
-      this.auditServiceLog({
+      await this.audit.log({
         actorId: reviewerStaffId,
-        actorSource: 'web',
-        entity: 'signup_request',
+        entity: 'signup_requests',
         entityId: requestId,
-        action: 'signup_request.reject',
-        after: { rejectionNote, publicRejectionMessage: publicRejectionMessage ?? null },
+        action: 'UPDATE',
+        after: { status: 'rejected', rejectionNote, publicRejectionMessage: publicRejectionMessage ?? null },
         trx,
       });
 
@@ -784,13 +743,10 @@ export class AuthService {
 
     // Audit either way — the trail records that a reset was attempted (and
     // internally whether it matched), never exposed to the requester.
-    this.auditServiceLog({
-      actorId: staff?.id ?? 'anonymous',
-      actorSource: 'web',
-      entity: 'staff',
-      entityId: staff?.id ?? 'unknown',
-      action: 'password.reset_request',
-      after: { email, matched: Boolean(staff) },
+    this.securityLog('password.reset_request', {
+      staffId: staff?.id ?? null,
+      email,
+      matched: Boolean(staff),
     });
 
     return { status: 'sent' as const };
@@ -805,13 +761,7 @@ export class AuthService {
   async confirmPasswordReset(token: string, newPassword: string): Promise<{ status: 'confirmed' }> {
     void token;
     void newPassword;
-    this.auditServiceLog({
-      actorId: 'anonymous',
-      actorSource: 'web',
-      entity: 'staff',
-      entityId: 'unknown',
-      action: 'password.reset_confirm',
-    });
+    this.securityLog('password.reset_confirm', { via: 'recovery_token' });
     return { status: 'confirmed' as const };
   }
 
@@ -902,12 +852,12 @@ export class AuthService {
         .execute();
     });
 
-    this.auditServiceLog({
+    await this.audit.log({
       actorId: staffId,
-      actorSource: 'web',
-      entity: 'staff',
-      entityId: staffId,
-      action: 'mfa.enroll_start',
+      entity: 'mfa_recovery_codes',
+      action: 'INSERT',
+      after: { staffId, event: 'recovery_codes_regenerated', count: codes.length },
+      trx: this.db,
     });
 
     // Supabase returns qr_code already as a data:image/png;base64,... string.
@@ -946,12 +896,13 @@ export class AuthService {
       .execute();
     await this.invalidateCache(supabaseUid);
 
-    this.auditServiceLog({
+    await this.audit.log({
       actorId: staffId,
-      actorSource: 'web',
       entity: 'staff',
       entityId: staffId,
-      action: 'mfa.enroll',
+      action: 'UPDATE',
+      after: { mfa_enrolled: true },
+      trx: this.db,
     });
   }
 
@@ -982,13 +933,7 @@ export class AuthService {
       );
     }
 
-    this.auditServiceLog({
-      actorId: staffId,
-      actorSource: 'web',
-      entity: 'staff',
-      entityId: staffId,
-      action: 'password.reset_confirm',
-    });
+    this.securityLog('password.reset_confirm', { staffId });
   }
 
   /**
@@ -1038,12 +983,13 @@ export class AuthService {
       await this.invalidateCache(target.supabase_uid);
     }
 
-    this.auditServiceLog({
+    await this.audit.log({
       actorId: adminId,
-      actorSource: 'web',
       entity: 'staff',
       entityId: targetStaffId,
-      action: 'mfa.reset',
+      action: 'UPDATE',
+      after: { mfa_enrolled: false, event: 'mfa_reset' },
+      trx: this.db,
     });
   }
 
