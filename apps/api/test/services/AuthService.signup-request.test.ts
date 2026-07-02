@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -53,26 +54,18 @@ function form(overrides: Record<string, unknown> = {}) {
   };
 }
 
-// The real NotificationService writes DB rows (not log lines). Count the
-// signup_request notifications created for a specific request — one per admin.
-async function notifCountForRequest(requestId: string): Promise<number> {
+// The real NotificationService writes DB rows (not log lines). Return the
+// recipient staff_ids of the signup_request fan-out for a specific request.
+// We assert against our OWN marker admins rather than a global admin count so
+// the test is deterministic even when other suites mutate `staff` in parallel.
+async function signupNotifRecipients(requestId: string): Promise<string[]> {
   const rows = await db
     .selectFrom('notifications')
-    .select('id')
+    .select('staff_id')
     .where('type', '=', 'signup_request')
     .where(sql<string>`payload->>'requestId'`, '=', requestId)
     .execute();
-  return rows.length;
-}
-
-function activeAdmins() {
-  return db
-    .selectFrom('staff')
-    .select('id')
-    .where('role', '=', 'admin')
-    .where('active', '=', true)
-    .where('deleted_at', 'is', null)
-    .execute();
+  return rows.map((r) => r.staff_id);
 }
 
 async function cleanup() {
@@ -105,8 +98,21 @@ beforeEach(() => {
 
 describe('AuthService.signupRequest (integration)', () => {
   test('valid form, no CV → pending row + one notification per active admin', async () => {
-    const adminCount = (await activeAdmins()).length;
-    expect(adminCount).toBeGreaterThan(0);
+    // Seed our own active admin so the assertion is independent of how many
+    // ambient admins other (parallel) suites happen to have live right now.
+    const myAdminId = randomUUID();
+    await db
+      .insertInto('staff')
+      .values({
+        id: myAdminId,
+        name: 'Req Admin',
+        email: email('admin'),
+        role: 'admin',
+        active: true,
+        mfa_enrolled: false,
+        supabase_uid: null,
+      })
+      .execute();
 
     const res = await service.signupRequest(form());
     expect(res.status).toBe('pending');
@@ -120,7 +126,11 @@ describe('AuthService.signupRequest (integration)', () => {
     expect(row?.cv_file_key).toBeNull();
     expect(s3Mock.commandCalls(PutObjectCommand).length).toBe(0);
 
-    expect(await notifCountForRequest(res.requestId)).toBe(adminCount);
+    // Fan-out notifies each active admin exactly once: our admin got exactly
+    // one, and no admin was double-notified.
+    const recipients = await signupNotifRecipients(res.requestId);
+    expect(recipients.filter((id) => id === myAdminId)).toHaveLength(1);
+    expect(new Set(recipients).size).toBe(recipients.length);
   });
 
   test('valid form with PDF CV → streamed to R2 with the expected key', async () => {
@@ -222,17 +232,24 @@ describe('AuthService.signupRequest (integration)', () => {
   });
 
   test('notifications fan out one-per-admin (extra admins are each notified)', async () => {
-    const before = (await activeAdmins()).length;
+    const admin1 = randomUUID();
+    const admin2 = randomUUID();
     await db
       .insertInto('staff')
       .values([
-        { name: 'Extra Admin 1', email: email('admin1'), role: 'admin', active: true, mfa_enrolled: false, supabase_uid: null },
-        { name: 'Extra Admin 2', email: email('admin2'), role: 'admin', active: true, mfa_enrolled: false, supabase_uid: null },
+        { id: admin1, name: 'Extra Admin 1', email: email('admin1'), role: 'admin', active: true, mfa_enrolled: false, supabase_uid: null },
+        { id: admin2, name: 'Extra Admin 2', email: email('admin2'), role: 'admin', active: true, mfa_enrolled: false, supabase_uid: null },
       ])
       .execute();
 
     const res = await service.signupRequest(form());
-    expect(await notifCountForRequest(res.requestId)).toBe(before + 2);
+
+    // Both extra admins are each notified exactly once, with no duplicates —
+    // proves one-per-admin fan-out without depending on the global admin count.
+    const recipients = await signupNotifRecipients(res.requestId);
+    expect(recipients.filter((id) => id === admin1)).toHaveLength(1);
+    expect(recipients.filter((id) => id === admin2)).toHaveLength(1);
+    expect(new Set(recipients).size).toBe(recipients.length);
   });
 });
 

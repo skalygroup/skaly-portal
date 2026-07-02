@@ -23,7 +23,9 @@ describe('Rate-limit headers (M-06)', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    // Guard so a beforeAll boot failure (e.g. missing R2 config) surfaces its
+    // real error instead of being masked by a "close of undefined" TypeError.
+    await app?.close();
     await pool.end();
     redis.disconnect();
   });

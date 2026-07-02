@@ -22,6 +22,15 @@ jobs:
       # ANTHROPIC_API_KEY is intentionally unset: it is .optional() in EnvSchema,
       # and an empty string would fail the .startsWith('sk-ant-') check. Sprint 8
       # (bot) reintroduces it via secrets when bot tests need it.
+      # R2 placeholders: buildApp() constructs the CV-upload/review routes, which
+      # build the S3 client at registration (requireR2), so the app can't boot
+      # without these. Presigning is offline crypto — r2.test.ts asserts URL
+      # shape only and never touches a live bucket, so fake-but-valid values are
+      # sufficient. No real Cloudflare secret is needed in CI.
+      R2_ENDPOINT: https://example.r2.cloudflarestorage.com
+      R2_ACCESS_KEY_ID: ci-placeholder-r2-access-key
+      R2_SECRET_ACCESS_KEY: ci-placeholder-r2-secret-key
+      R2_BUCKET_NAME: ci-test-bucket
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
