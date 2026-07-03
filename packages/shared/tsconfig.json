@@ -4,6 +4,7 @@
     "moduleResolution": "node",
     "outDir": "dist",
     "rootDir": "src",
+    "declaration": true,
     "baseUrl": ".",
     "paths": {
       "@skaly/shared/*": [
