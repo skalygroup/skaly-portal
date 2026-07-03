@@ -150,6 +150,20 @@ export function currentIstPeriod(now: Date = new Date()): string {
 }
 
 /**
+ * Today's IST calendar date as a 'YYYY-MM-DD' string (en-CA formats exactly so).
+ * Same Intl approach as currentIstPeriod — TZ-correct without date-fns-tz. Used
+ * by backfillCurrentPeriod to know where "today → end of period" starts.
+ */
+export function currentIstDate(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
+
+/**
  * The current month's row. months has no is_current/status column, so we match
  * on the computed IST period; if that row doesn't exist yet (e.g. before the
  * first rollover) we fall back to the most recent period. Throws

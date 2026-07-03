@@ -6,3 +6,5 @@ export type * from './db.types';
 
 // Cross-cutting constants shared by API + web.
 export { SYSTEM_ACTOR_UUID } from './constants/system';
+export { ROLE_DEFAULTS } from './constants/permissions';
+export type { RolePermissionDefaults, PermissionKey } from './constants/permissions';

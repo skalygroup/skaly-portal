@@ -6,8 +6,10 @@ import { Kysely, PostgresDialect, sql } from 'kysely';
 import pg from 'pg';
 import { describe, test, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 
+import { classifyDay, datesInPeriod } from '../../src/lib/period-days.js';
 import { signupStatusRoutes } from '../../src/routes/auth/signup-status.js';
 import { AuthService } from '../../src/services/AuthService.js';
+import { currentIstDate, currentIstPeriod } from '../../src/services/BaseService.js';
 
 import type { DB } from '@skaly/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -44,33 +46,16 @@ const logger = {
 
 const service = new AuthService(db, redis, supabaseAdmin, logger, {} as never, 'test-bucket');
 
-const PERIOD = new Date().toISOString().slice(0, 7);
+const PERIOD = currentIstPeriod();
 
-/** Working days (UTC, excl. Sundays) from today through end of this month. */
-function workingDaysThisPeriod(): string[] {
-  const t = new Date();
-  const cur = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()));
-  const end = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0));
-  const out: string[] = [];
-  for (let d = new Date(cur); d.getTime() <= end.getTime(); d.setUTCDate(d.getUTCDate() + 1)) {
-    if (d.getUTCDay() !== 0) out.push(d.toISOString().slice(0, 10));
-  }
-  return out;
+/** Every date (IST) from today through end-of-period — the backfill window.
+ * Sprint 3: backfill creates a row for EVERY date (working + sunday + holiday),
+ * so the new hire's column matches the grid; the count is simply the window. */
+function backfillWindow(): string[] {
+  const today = currentIstDate();
+  return datesInPeriod(PERIOD).filter((d) => d >= today);
 }
-
-/** Expected backfill count = working days minus active holidays in the period. */
-async function expectedAttendanceCount(): Promise<number> {
-  const wd = workingDaysThisPeriod();
-  const hol = await db
-    .selectFrom('holidays')
-    .select(sql<string>`to_char(date, 'YYYY-MM-DD')`.as('d'))
-    .where('period', '=', PERIOD)
-    .where('active', '=', true)
-    .where('removed_at', 'is', null)
-    .execute();
-  const holset = new Set(hol.map((h) => h.d));
-  return wd.filter((d) => !holset.has(d)).length;
-}
+const expectedAttendanceCount = (): number => backfillWindow().length;
 
 async function createPending(over: Record<string, unknown> = {}) {
   return db
@@ -136,7 +121,7 @@ beforeEach(() => {
 describe('AuthService.approveSignupRequest', () => {
   test('happy path: Supabase user + staff row + attendance backfill + approved', async () => {
     const req = await createPending();
-    const expected = await expectedAttendanceCount();
+    const expected = expectedAttendanceCount();
 
     const result = await service.approveSignupRequest(req.id, 'team_member', REVIEWER_ID);
 
@@ -170,29 +155,32 @@ describe('AuthService.approveSignupRequest', () => {
     expect(Number(att.c)).toBe(expected);
   });
 
-  test('M-02: backfill count excludes a holiday in the remaining period', async () => {
-    const wd = workingDaysThisPeriod();
-    // Pick a working day in range as the holiday (last one is safe).
-    const holidayDate = wd[wd.length - 1]!;
+  test('M-02: a holiday in the remaining period becomes a day_type=holiday row (not excluded)', async () => {
+    // Sprint 3: backfill creates a row for every date; a holiday date is marked
+    // day_type='holiday' rather than skipped — so the count is unchanged and the
+    // holiday cell exists (matching the grid the other staff already have).
+    const window = backfillWindow();
+    // Pick a working (non-Sunday) day in range so the holiday flip is visible.
+    const holidayDate = [...window].reverse().find((d) => classifyDay(d, new Set()) === 'working')!;
     await db
       .insertInto('holidays')
       .values({ period: PERIOD, date: holidayDate, name: 'ITEST-HOLIDAY', added_by: REVIEWER_ID })
       .execute();
 
     const req = await createPending();
-    const expected = await expectedAttendanceCount(); // now reflects the holiday
+    const expected = expectedAttendanceCount(); // full window, holiday included
 
     const result = await service.approveSignupRequest(req.id, 'team_member', REVIEWER_ID);
     expect(result.attendanceRowsCreated).toBe(expected);
 
-    // The holiday date must NOT be among the inserted attendance rows.
+    // The holiday date HAS a row, and its day_type is 'holiday'.
     const onHoliday = await db
       .selectFrom('attendance_logs')
-      .select('id')
+      .select('day_type')
       .where('staff_id', '=', result.staffId)
       .where(sql<boolean>`to_char(date, 'YYYY-MM-DD') = ${holidayDate}`)
       .executeTakeFirst();
-    expect(onHoliday).toBeUndefined();
+    expect(onHoliday?.day_type).toBe('holiday');
   });
 
   test('M-02 atomicity: staff insert failure rolls back the whole transaction', async () => {

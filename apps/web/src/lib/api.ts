@@ -10,6 +10,9 @@ export class ApiError extends Error {
     public readonly status: number,
     public readonly code: string,
     message?: string,
+    /** The backend envelope's `error.details` (e.g. STALE_DATA carries
+     * `{ currentVersion, updatedBy: { staffId, name } }` — 09-ERROR-HANDLING §5.1). */
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message ?? code);
     this.name = 'ApiError';
@@ -47,7 +50,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     // the body is empty or not JSON (e.g. a proxy 502).
     const body = await res.json().catch(() => null);
     const err = body?.error ?? body ?? {};
-    throw new ApiError(res.status, err.code ?? 'UNKNOWN', err.message);
+    throw new ApiError(res.status, err.code ?? 'UNKNOWN', err.message, err.details);
   }
 
   // 204 No Content has an empty body — guard JSON parsing for void responses.

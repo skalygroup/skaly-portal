@@ -1,55 +1,21 @@
+import { ROLE_DEFAULTS } from '@skaly/shared';
+
 import type { DB } from '@skaly/shared';
 import type { Role } from '@skaly/shared/schemas/auth';
 import type { Kysely } from 'kysely';
 
 /**
- * Sprint 1 permission baseline — the role-default layer of the three-layer
- * model in docs/08-AUTH-MATRIX.md. Per-user overrides (the user_permissions
- * table + perms:{staffId} cache, AUTH-MATRIX §6) arrive in Sprint 11; that work
- * will WRAP getEffectivePermissions, merging overrides on top of this baseline.
- * Keep this file the single source of the hard-coded defaults so the override
- * layer has exactly one thing to wrap.
+ * Role-default permission layer of the three-layer model in
+ * docs/08-AUTH-MATRIX.md. The defaults themselves live in ONE place —
+ * `ROLE_DEFAULTS` in packages/shared/src/constants/permissions.ts (the constant
+ * AUTH-MATRIX §6.1 names) — so the API and the frontend read the same map. This
+ * module just projects that map for a role and (Sprint 8) will WRAP the result
+ * with per-user overrides (user_permissions + perms:{staffId} cache, §6).
  *
- * Key naming follows AUTH-MATRIX §6.2. A "🔐 own data only" cell still counts
- * as `true` at this capability layer — record-level ownership (own attendance
- * column, assigned task, own shoot row) is enforced in the service layer, not
- * here.
+ * A "🔐 own data only" cell still counts as `true` here — record-level ownership
+ * (own attendance column, assigned task, own shoot row) is enforced in the
+ * service layer, not in this capability gate.
  */
-
-// permissionKey → roles that get it by default (transcribed from §3 + §4).
-const BASELINE: Record<string, Role[]> = {
-  'module.home.read': ['admin', 'manager', 'team_member', 'freelancer'],
-  'module.attendance.read': ['admin', 'manager', 'team_member'],
-  'module.attendance.write': ['admin', 'manager', 'team_member'],
-  'module.tasks.read': ['admin', 'manager', 'team_member'],
-  'module.tasks.write': ['admin', 'manager', 'team_member'],
-  'module.shoot_planner.read': ['admin', 'manager', 'team_member', 'freelancer'],
-  'module.shoot_planner.write': ['admin', 'manager'],
-  'module.content_dropper.read': ['admin', 'manager'],
-  'module.content_dropper.write': ['admin', 'manager'],
-  'module.content_calendar.read': ['admin', 'manager', 'team_member'],
-  'module.content_calendar.write': ['admin', 'manager'],
-  'module.dashboard.read': ['admin', 'manager', 'team_member', 'freelancer'],
-  'module.profile.read': ['admin', 'manager', 'team_member', 'freelancer'],
-  'module.profile.write': ['admin', 'manager', 'team_member', 'freelancer'],
-  'module.settings_staff.read': ['admin', 'manager'],
-  'module.settings_staff.write': ['admin'],
-  'module.settings_clients.read': ['admin', 'manager'],
-  'module.settings_clients.write': ['admin', 'manager'],
-  'module.settings_permissions.read': ['admin'],
-  'module.settings_permissions.write': ['admin'],
-  'module.settings_signup_requests.read': ['admin'],
-  'module.settings_signup_requests.write': ['admin'],
-  'module.settings_holidays.read': ['admin', 'manager'],
-  'module.settings_holidays.write': ['admin', 'manager'],
-  'module.settings_months.read': ['admin'],
-  'module.settings_months.write': ['admin'],
-  'module.settings_audit_log.read': ['admin'],
-  'module.settings_reports.read': ['admin', 'manager'],
-  'chat.access': ['admin', 'manager', 'team_member'],
-  'report.generate': ['admin', 'manager'],
-  'months.unlock': ['admin'],
-};
 
 /**
  * The role-default permission map for a role. Pure + synchronous so it can be
@@ -57,8 +23,8 @@ const BASELINE: Record<string, Role[]> = {
  */
 export function roleBaselinePermissions(role: Role): Record<string, boolean> {
   const out: Record<string, boolean> = {};
-  for (const key in BASELINE) {
-    out[key] = BASELINE[key]!.includes(role);
+  for (const key in ROLE_DEFAULTS) {
+    out[key] = ROLE_DEFAULTS[key]![role];
   }
   return out;
 }

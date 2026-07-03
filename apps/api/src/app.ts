@@ -24,9 +24,11 @@ import { redis } from './lib/redis.js';
 import { registerSwagger } from './lib/swagger.js';
 import authPlugin from './middleware/auth.plugin.js';
 import internalAuthPlugin from './middleware/internalAuth.plugin.js';
+import attendanceRoutes from './routes/attendance/index.js';
 import authRoutes from './routes/auth/index.js';
 import clientsRoutes from './routes/clients/index.js';
 import { healthRoutes } from './routes/health.js';
+import holidaysRoutes from './routes/holidays/index.js';
 import monthsRoutes from './routes/months/index.js';
 import settingsRoutes from './routes/settings/index.js';
 import staffRoutes from './routes/staff/index.js';
@@ -174,6 +176,8 @@ export async function buildApp(
   await app.register(staffRoutes, { prefix: '/v1' });
   await app.register(clientsRoutes, { prefix: '/v1' });
   await app.register(monthsRoutes, { prefix: '/v1' });
+  await app.register(attendanceRoutes, { prefix: '/v1' });
+  await app.register(holidaysRoutes, { prefix: '/v1' });
   await app.register(settingsRoutes, { prefix: '/v1' });
 
   return app;
