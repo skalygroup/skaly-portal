@@ -2,6 +2,7 @@ import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
 import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
+import nextPlugin from '@next/eslint-plugin-next';
 
 /** @type {import('eslint').Linter.Config[]} */
 export default [
@@ -106,6 +107,16 @@ export default [
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-empty-object-type': 'off',
+    },
+  },
+  // Next.js app — registers the Next plugin so `next build` stops warning
+  // that it can't find it in the ESLint config.
+  {
+    files: ['apps/web/**/*.ts', 'apps/web/**/*.tsx'],
+    plugins: { '@next/next': nextPlugin },
+    rules: {
+      ...nextPlugin.configs.recommended.rules,
+      ...nextPlugin.configs['core-web-vitals'].rules,
     },
   },
 ];
