@@ -8,3 +8,31 @@ export type * from './db.types';
 export { SYSTEM_ACTOR_UUID } from './constants/system';
 export { ROLE_DEFAULTS } from './constants/permissions';
 export type { RolePermissionDefaults, PermissionKey } from './constants/permissions';
+export {
+  ATTACHMENT_MAX_BYTES,
+  TASK_ATTACHMENT_TOTAL_BYTES,
+  ATTACHMENT_MIME_ALLOWLIST,
+} from './constants/attachments';
+export type { AttachmentMime } from './constants/attachments';
+
+// Work Allocation (tasks) request schemas — shared by API validation + web forms.
+export {
+  TASK_STATUS_VALUES,
+  TASK_PRIORITY_VALUES,
+  TaskStatusSchema,
+  TaskPrioritySchema,
+  TaskQuerySchema,
+  TaskCreateSchema,
+  TaskUpdateSchema,
+  AssignSchema,
+  AttachmentPresignSchema,
+  AttachmentConfirmSchema,
+} from './schemas/tasks';
+export type {
+  TaskQuery,
+  TaskCreateBody,
+  TaskUpdateBody,
+  AssignBody,
+  AttachmentPresignBody,
+  AttachmentConfirmBody,
+} from './schemas/tasks';
