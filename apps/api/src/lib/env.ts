@@ -20,7 +20,6 @@ const EnvSchema = z.object({
   REDIS_URL: z.string(),
 
   SUPABASE_URL: z.string().url(),
-  SUPABASE_JWT_SECRET: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   // JWKS endpoint for RS256 access-token verification (createRemoteJWKSet).
   SUPABASE_JWKS_URL: z.string().url(),

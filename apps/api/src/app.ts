@@ -32,6 +32,7 @@ import holidaysRoutes from './routes/holidays/index.js';
 import monthsRoutes from './routes/months/index.js';
 import settingsRoutes from './routes/settings/index.js';
 import staffRoutes from './routes/staff/index.js';
+import tasksRoutes from './routes/tasks/index.js';
 
 /**
  * Builds and fully configures the Fastify instance — WITHOUT calling listen().
@@ -178,6 +179,7 @@ export async function buildApp(
   await app.register(monthsRoutes, { prefix: '/v1' });
   await app.register(attendanceRoutes, { prefix: '/v1' });
   await app.register(holidaysRoutes, { prefix: '/v1' });
+  await app.register(tasksRoutes, { prefix: '/v1' });
   await app.register(settingsRoutes, { prefix: '/v1' });
 
   return app;
