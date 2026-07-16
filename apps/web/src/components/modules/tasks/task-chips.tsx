@@ -141,6 +141,8 @@ function Avatar({ assignee, style }: { assignee: TaskAssignee; style?: React.CSS
     .join('')
     .toUpperCase();
   return assignee.avatarUrl ? (
+    // 24px avatar from a remote URL; not worth the next/image pipeline.
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={assignee.avatarUrl}
       alt={assignee.name}
