@@ -36,3 +36,19 @@ export type {
   AttachmentPresignBody,
   AttachmentConfirmBody,
 } from './schemas/tasks';
+
+// Shoot Planner request schemas — shared by API validation + web forms.
+export {
+  SLOT_STATUS_VALUES,
+  SlotStatusSchema,
+  ShootQuerySchema,
+  SlotUpdateSchema,
+  SlotResetSchema,
+  SlotCountSchema,
+} from './schemas/shoot-planner';
+export type {
+  ShootQuery,
+  SlotUpdateBody,
+  SlotResetBody,
+  SlotCountBody,
+} from './schemas/shoot-planner';

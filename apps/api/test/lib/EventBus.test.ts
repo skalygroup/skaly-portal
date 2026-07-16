@@ -29,8 +29,23 @@ describe('EventBus', () => {
     eventBus.off('pipeline:posted', handler);
   });
 
+  test('emitting shoot:reset invokes its handler with the exact payload', () => {
+    const handler = vi.fn();
+    eventBus.on('shoot:reset', handler);
+
+    const payload = { clientId: 'client-1', period: '2026-07' };
+    eventBus.emit('shoot:reset', payload);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(payload);
+
+    eventBus.off('shoot:reset', handler);
+  });
+
   test('a wrong-shaped payload is a compile error', () => {
     // @ts-expect-error shoot:confirmed requires slotDate
     eventBus.emit('shoot:confirmed', { clientId: 'client-1', period: '2026-07' });
+    // @ts-expect-error shoot:reset requires period
+    eventBus.emit('shoot:reset', { clientId: 'client-1' });
   });
 });
