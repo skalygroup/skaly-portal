@@ -281,6 +281,7 @@ export default function MfaSetupPage() {
               <div className="flex min-h-[204px] min-w-[204px] shrink-0 items-center justify-center rounded-[14px] bg-white p-2.5 shadow-[0_8px_24px_-10px_rgba(0,0,0,0.6)]">
                 {/* QR is a data: URL from the API (not a static asset), so next/image
                     can't optimise it — a plain <img> is correct here. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={enrollment.qrCodeDataUrl}
                   alt="MFA QR code"
