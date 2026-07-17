@@ -39,6 +39,42 @@ import type { Transaction } from 'kysely';
 /** A fresh month has no holidays — they are applied afterwards via HolidayService. */
 const NO_HOLIDAYS: ReadonlySet<string> = new Set();
 
+/** The client fields slot generation needs — callers usually have them loaded. */
+export interface ShootSlotClient {
+  id: string;
+  shoot_slots_per_month: number;
+  pieces_per_visit: number;
+}
+
+/**
+ * shoot_schedules rows slot_index 1..shoot_slots_per_month for ONE client,
+ * slot_status 'Unset', pieces_expected = pieces_per_visit. Idempotent
+ * (ON CONFLICT (period, client_id, slot_index) DO NOTHING) — safe to re-run and
+ * safe over a partial set (fills only the gap). Shared by generatePeriodRows,
+ * the mid-month client backfill, and adjustSlotCount's increase path.
+ * Returns the number of rows actually inserted.
+ */
+export async function generateShootSlotsForClient(
+  client: ShootSlotClient,
+  period: string,
+  trx: Transaction<DB>,
+): Promise<number> {
+  const rows = Array.from({ length: client.shoot_slots_per_month }, (_, i) => ({
+    period,
+    client_id: client.id,
+    slot_index: i + 1,
+    slot_status: 'Unset',
+    pieces_expected: client.pieces_per_visit,
+  }));
+  const inserted = await trx
+    .insertInto('shoot_schedules')
+    .values(rows)
+    .onConflict((oc) => oc.columns(['period', 'client_id', 'slot_index']).doNothing())
+    .returning('id')
+    .execute();
+  return inserted.length;
+}
+
 export async function generatePeriodRows(period: string, trx: Transaction<DB>): Promise<void> {
   const dates = datesInPeriod(period);
 
@@ -86,21 +122,11 @@ export async function generatePeriodRows(period: string, trx: Transaction<DB>): 
     .onConflict((oc) => oc.columns(['period', 'client_id']).doNothing())
     .execute();
 
-  // shoot_schedules — slot_index 1..shoot_slots_per_month.
-  const shootRows = clients.flatMap((c) =>
-    Array.from({ length: c.shoot_slots_per_month }, (_, i) => ({
-      period,
-      client_id: c.id,
-      slot_index: i + 1,
-      slot_status: 'Unset',
-      pieces_expected: c.pieces_per_visit,
-    })),
-  );
-  await trx
-    .insertInto('shoot_schedules')
-    .values(shootRows)
-    .onConflict((oc) => oc.columns(['period', 'client_id', 'slot_index']).doNothing())
-    .execute();
+  // shoot_schedules — slot_index 1..shoot_slots_per_month, via the shared
+  // per-client generator (also used by the mid-month backfill + adjustSlotCount).
+  for (const c of clients) {
+    await generateShootSlotsForClient(c, period, trx);
+  }
 
   // content_calendar — one per client × each date.
   const calendarRows = clients.flatMap((c) =>

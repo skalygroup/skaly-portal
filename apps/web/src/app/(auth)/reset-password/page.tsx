@@ -9,7 +9,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
-import type { AuthChangeEvent, Factor, Session } from '@supabase/supabase-js';
+import type { Factor, Session } from '@supabase/supabase-js';
 
 import { AuthCanvasCard } from '@/components/auth/auth-canvas-card';
 import { PasswordField, SubmitButton, FormBanner } from '@/components/auth/form-controls';
@@ -102,7 +102,6 @@ export default function ResetPasswordPage() {
 
   useEffect(() => {
     let active = true;
-    let cleanup = () => {};
     // Enrollment mints a factor; guard against React StrictMode's double-invoke
     // (and the duplicate auth events Supabase can emit) creating two factors.
     let enrollStarted = false;
@@ -171,32 +170,30 @@ export default function ResetPasswordPage() {
         else setView('invalid');
       });
     } else {
-      // Backward-compat for Supabase's default template, which delivers implicit
-      // hash tokens straight here. Accept a PASSWORD_RECOVERY event, or a session
-      // when the URL actually carried recovery tokens; a stale login alone won't.
-      const hadRecoveryTokens = /type=recovery|access_token=/.test(hash);
-      const { data: sub } = supabase.auth.onAuthStateChange(
-        (event: AuthChangeEvent, s: Session | null) => {
-          if (active && event === 'PASSWORD_RECOVERY' && s) void gateAfterSession();
-        },
-      );
-      if (hadRecoveryTokens) {
-        supabase.auth.getSession().then(({ data }: { data: { session: Session | null } }) => {
-          if (active && data.session) void gateAfterSession();
-        });
+      // Supabase's default (implicit) recovery template lands here with the
+      // tokens in the URL hash (#access_token=…&refresh_token=…). Our browser
+      // client uses PKCE, which only consumes a ?code= query param and ignores
+      // implicit hash tokens — so detectSessionInUrl/PASSWORD_RECOVERY never
+      // fire. Establish the recovery session explicitly from the hash.
+      const hashParams = new URLSearchParams(hash.replace(/^#/, ''));
+      const accessToken = hashParams.get('access_token');
+      const refreshToken = hashParams.get('refresh_token');
+      if (accessToken && refreshToken) {
+        supabase.auth
+          .setSession({ access_token: accessToken, refresh_token: refreshToken })
+          .then(({ data, error }: { data: { session: Session | null }; error: unknown }) => {
+            if (!active) return;
+            window.history.replaceState(null, '', '/reset-password'); // strip tokens from URL
+            if (!error && data.session) void gateAfterSession();
+            else setView('invalid');
+          });
+      } else {
+        setView('invalid');
       }
-      const timer = setTimeout(() => {
-        if (active) setView((prev) => (prev === 'checking' ? 'invalid' : prev));
-      }, 2500);
-      cleanup = () => {
-        sub.subscription.unsubscribe();
-        clearTimeout(timer);
-      };
     }
 
     return () => {
       active = false;
-      cleanup();
     };
   }, [supabase]);
 

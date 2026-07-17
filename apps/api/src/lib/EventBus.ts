@@ -7,8 +7,9 @@
  * §5.2), and handlers run inline — no retries, no persistence.
  *
  * NO listeners are attached here. Listeners attached in Sprint 6
- * (shoot:confirmed → ContentDropperService.setComingShootDate) and Sprint 7
- * (pipeline:posted → ContentCalendarService.updateCell).
+ * (shoot:confirmed AND shoot:reset → ContentDropperService recomputes
+ * coming_shoot_date from the confirmed-future slot set, guarded by
+ * coming_shoot_source) and Sprint 7 (pipeline:posted).
  */
 import { EventEmitter } from 'node:events';
 
@@ -16,6 +17,8 @@ import { EventEmitter } from 'node:events';
 export interface EventPayloads {
   /** Trigger 1 → Content Dropper (Sprint 6). */
   'shoot:confirmed': { clientId: string; period: string; slotDate: string };
+  /** Slot reset → Sprint 6 recomputes coming_shoot_date for the client+period. */
+  'shoot:reset': { clientId: string; period: string };
   /** Trigger 2 → Content Calendar (Sprint 7). */
   'pipeline:posted': { clientId: string; period: string; postedAt: string };
 }
