@@ -1,6 +1,8 @@
+import { SYSTEM_ACTOR_UUID } from '@skaly/shared';
 import { Kysely, PostgresDialect } from 'kysely';
 import pg from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
+
 
 import { registerEventListeners } from '../../src/events/listeners.js';
 import { ContentDropperService } from '../../src/services/ContentDropperService.js';
@@ -96,7 +98,12 @@ beforeAll(async () => {
 
   await db
     .insertInto('staff')
-    .values({ id: ADMIN_ID, name: 'Trigger1 Admin', email: `admin-${ADMIN_ID}${DOMAIN}`, role: 'admin', active: true })
+    .values([
+      { id: ADMIN_ID, name: 'Trigger1 Admin', email: `admin-${ADMIN_ID}${DOMAIN}`, role: 'admin', active: true },
+      // System Actor — FK target for the recompute's changed_by_source='system' audit
+      // (C-04). Seeded via the DB seed in real envs, but CI runs migrations only.
+      { id: SYSTEM_ACTOR_UUID, name: 'System', email: 'system@skaly.internal', role: 'admin', active: true },
+    ])
     .onConflict((oc) => oc.column('id').doNothing())
     .execute();
   await db

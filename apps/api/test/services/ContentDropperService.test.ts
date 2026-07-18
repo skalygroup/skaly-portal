@@ -1,6 +1,8 @@
+import { SYSTEM_ACTOR_UUID } from '@skaly/shared';
 import { Kysely, PostgresDialect } from 'kysely';
 import pg from 'pg';
 import { describe, test, expect, beforeAll, afterEach, afterAll, vi } from 'vitest';
+
 
 import { eventBus } from '../../src/lib/EventBus.js';
 import { currentIstDate } from '../../src/services/BaseService.js';
@@ -23,9 +25,10 @@ const PERIOD = '1997-11';
 const LOCKED_PERIOD = '1997-10';
 const DOMAIN = '@dropper.itest';
 
-const ADMIN_ID = 'e0000000-0000-4000-8000-00000000e001';
-const CLIENT_ID = 'e0000000-0000-4000-8000-00000000e0c1';
-const INTERNAL_ID = 'e0000000-0000-4000-8000-00000000e0c2';
+// Own id namespace (e4*) — e0* is period-generation.test.ts's; must not collide.
+const ADMIN_ID = 'e4000000-0000-4000-8000-00000000e401';
+const CLIENT_ID = 'e4000000-0000-4000-8000-00000000e4c1';
+const INTERNAL_ID = 'e4000000-0000-4000-8000-00000000e4c2';
 const admin: CurrentUser = { staffId: ADMIN_ID, role: 'admin' };
 const teamMember: CurrentUser = { staffId: ADMIN_ID, role: 'team_member' };
 
@@ -78,7 +81,12 @@ async function seedPipeline(
 beforeAll(async () => {
   await db
     .insertInto('staff')
-    .values({ id: ADMIN_ID, name: 'Dropper Admin', email: `admin-${ADMIN_ID}${DOMAIN}`, role: 'admin', active: true })
+    .values([
+      { id: ADMIN_ID, name: 'Dropper Admin', email: `admin-${ADMIN_ID}${DOMAIN}`, role: 'admin', active: true },
+      // System Actor — FK target for the recompute's changed_by_source='system' audit
+      // (C-04). Seeded via the DB seed in real envs, but CI runs migrations only.
+      { id: SYSTEM_ACTOR_UUID, name: 'System', email: 'system@skaly.internal', role: 'admin', active: true },
+    ])
     .onConflict((oc) => oc.column('id').doNothing())
     .execute();
 
