@@ -39,6 +39,23 @@ describe('handleMutationError', () => {
     expect(toast.error).toHaveBeenCalledOnce();
   });
 
+  it('STAGE_SEQUENCE_VIOLATION → error toast + returns the code (caller shakes)', () => {
+    const res = handleMutationError(new ApiError(400, 'STAGE_SEQUENCE_VIOLATION', 'Mark RAW before Finals.'));
+    expect(res.code).toBe('STAGE_SEQUENCE_VIOLATION');
+    expect(toast.error).toHaveBeenCalledWith('Mark RAW before Finals.');
+  });
+
+  it('STALE_DATA → NO toast, returns staleData for the inline conflict UI', () => {
+    const err = new ApiError(409, 'STALE_DATA', 'stale', {
+      currentVersion: 4,
+      updatedBy: { staffId: 's1', name: 'Priya' },
+    });
+    const res = handleMutationError(err);
+    expect(res.code).toBe('STALE_DATA');
+    expect(res.staleData).toEqual({ currentVersion: 4, updatedBy: { staffId: 's1', name: 'Priya' } });
+    expect(toast.error).not.toHaveBeenCalled(); // inline banner is the message
+  });
+
   it('an unknown ApiError code still surfaces a toast', () => {
     const res = handleMutationError(new ApiError(500, 'WEIRD', 'boom'));
     expect(res.code).toBe('WEIRD');
