@@ -1,7 +1,13 @@
 # ADR-012 — Trigger 1 recompute: orthogonal write + rollover refresh
 
 **Status:** Accepted • Pre-Sprint 6 (build impact: Sprint 6 + Sprint 12)
-**Cross-refs:** ADR-010 · `05-BACKEND-SCHEMA.md` `content_pipelines` (`version`, `coming_shoot_source`) · Audit C-02 · Audit M-04 (calendar manual guard)
+**Cross-refs:** ADR-010 · ADR-013 · `05-BACKEND-SCHEMA.md` `content_pipelines` (`version`, `coming_shoot_source`) · Audit C-02 · the calendar manual-source guard (`04-APPFLOW.md` §8 / `07-API-CONTRACT.md` §Content Calendar / the `content_calendar_source` CHECK)
+
+> **ID-collision note (amended pre-Sprint 7):** this ADR originally cited "Audit M-04
+> (calendar manual guard)". That ID collides across two canonical docs —
+> `07-API-CONTRACT.md` labels the calendar auto-reset "(audit M-04)", while
+> `14-PRE-BUILD-AUDIT.md` §M-04 is "Concurrent bot session conflict across devices
+> (Phase 2)". Two different findings, one ID. Cite the rule, never the bare ID.
 
 ## Context
 `content_pipelines` is versioned for concurrent **user** edits of the stage columns.
@@ -15,7 +21,8 @@ a system projection on a **different** column.
    `NULL` if none. Never naive-`SET` to the event's `slotDate` (breaks on reset +
    multi-slot clients).
 2. **GUARD:** write only if `coming_shoot_source IN (NULL, 'trigger')` — never clobber a
-   `'manual'` override (mirrors calendar M-04). Set `coming_shoot_source = 'trigger'`.
+   `'manual'` override (mirrors the calendar manual-source guard, APPFLOW §8). Set
+   `coming_shoot_source = 'trigger'`.
 3. **ORTHOGONAL WRITE:** the recompute is a targeted `UPDATE` of `coming_shoot_date` +
    `coming_shoot_source` that does **NOT** bump `content_pipelines.version`. It touches a
    column orthogonal to the user-edited stage fields, so it must not cause a false
