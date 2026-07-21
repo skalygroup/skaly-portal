@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
+import { login } from './helpers/auth';
+
 /**
  * E2E smoke: Shoot Planner (Sprint 5 STEP 8) — lifecycle, freelancer isolation
  * (ADR-011 / M-07), reset gate.
@@ -54,12 +56,7 @@ async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   }
 }
 
-async function login(page: Page, email: string, password: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.locator('#password').fill(password);
-  await page.getByRole('button', { name: /Sign in/i }).click();
-}
+// login() comes from tests/helpers/auth — see the barrier note there.
 
 /** The Bearer token the browser sends — captured from the first /v1 API call. */
 async function captureApiToken(page: Page): Promise<string> {

@@ -38,11 +38,20 @@ async function setActive(email: string, active: boolean) {
   }
 }
 
+/**
+ * Local, deliberately: this spec asserts the login flow itself, so it must NOT
+ * use the shared helper's post-login barrier — several of its cases expect to
+ * STAY on /login (invalid password, deactivated account).
+ *
+ * `#password`, not getByLabel('Password'): the redesigned form also carries a
+ * "Forgot password?" control, so the accessible name matches two elements and
+ * Playwright's strict mode throws before the field is ever filled.
+ */
 async function login(page: Page, email: string, password: string) {
   await page.goto('/login');
   await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(password);
-  await page.getByRole('button', { name: 'Sign In' }).click();
+  await page.locator('#password').fill(password);
+  await page.getByRole('button', { name: /Sign in/i }).click();
 }
 
 test.describe('login (live auth flow)', () => {

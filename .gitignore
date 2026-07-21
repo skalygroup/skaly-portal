@@ -23,3 +23,7 @@ ds-bundle/
 .design-sync/learnings/
 .design-sync/node_modules
 apps/web/.ds-build/styles.compiled.css
+
+# Playwright run artifacts (traces, error contexts, screenshots)
+test-results/
+playwright-report/

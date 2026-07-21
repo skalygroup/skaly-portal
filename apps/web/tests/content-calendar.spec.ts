@@ -58,23 +58,43 @@ async function login(page: Page, email: string, password: string) {
   await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 15_000 });
 }
 
-/** The Bearer header the browser sends — captured from the first /v1 call. */
-async function captureApiToken(page: Page): Promise<string> {
-  const req = await page.waitForRequest(
+/**
+ * The Bearer header the browser sends — captured from a /v1 call.
+ *
+ * waitForRequest only observes requests made AFTER it starts waiting, so calling
+ * it once a page has already finished loading waits forever. Start the wait, then
+ * force a request: navigating (or re-navigating) always refetches the grid.
+ */
+async function captureApiToken(page: Page, navigate: () => Promise<unknown>): Promise<string> {
+  const pending = page.waitForRequest(
     (r) => r.url().includes('/v1/') && Boolean(r.headers()['authorization']),
     { timeout: 15_000 },
   );
+  await navigate();
+  const req = await pending;
   return req.headers()['authorization']!;
 }
 
+/**
+ * Navigate to the calendar and return the Bearer header, captured from the grid
+ * fetch that the navigation itself triggers. Every test takes the token here
+ * rather than mid-test: capturing later would need a reload, and a reload
+ * mid-test silently resets scroll position and re-mounts the grid under
+ * whatever the test was about to assert.
+ */
+async function gotoCalendar(page: Page, period = PERIOD): Promise<string> {
+  const auth = await captureApiToken(page, () => page.goto(`/content-calendar?period=${period}`));
+  await expect(page.getByRole('grid')).toBeVisible();
+  return auth;
+}
+
 /** The calendar's own column order — index 0 is the leftmost column. */
-async function firstClients(page: Page, n: number): Promise<{ id: string; name: string }[]> {
-  const auth = await captureApiToken(page);
+async function calendarClients(page: Page, auth: string): Promise<{ id: string; name: string }[]> {
   const res = await page.request.get(`${API_BASE}/v1/content-calendar?period=${PERIOD}`, {
     headers: { authorization: auth },
   });
   const body = (await res.json()) as { data: { clients: { id: string; name: string }[] } };
-  return body.data.clients.slice(0, n);
+  return body.data.clients;
 }
 
 /**
@@ -84,8 +104,8 @@ async function firstClients(page: Page, n: number): Promise<{ id: string; name: 
  * asserting "this client happened to be on screen", which passes or fails with
  * the client count.
  */
-async function scrollColumnIntoView(page: Page, clientId: string) {
-  const clients = await firstClients(page, 1000);
+async function scrollColumnIntoView(page: Page, auth: string, clientId: string) {
+  const clients = await calendarClients(page, auth);
   const index = clients.findIndex((c) => c.id === clientId);
   expect(index, 'client is not a calendar column').toBeGreaterThanOrEqual(0);
   await page.evaluate(
@@ -120,8 +140,8 @@ test.describe('Content Calendar', () => {
 
   test('admin edits a cell through the popover; it closes on outside click', async ({ page }) => {
     await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    await page.goto(`/content-calendar?period=${PERIOD}`);
-    const [client] = await firstClients(page, 1);
+    const auth = await gotoCalendar(page);
+    const [client] = await calendarClients(page, auth);
     touched.add(client!.id);
 
     const cell = page.getByTestId(`calendar-cell-${client!.id}-${TODAY}`);
@@ -146,8 +166,8 @@ test.describe('Content Calendar', () => {
 
   test('gold overlay: visible on open, hidden on close, and hidden when its column scrolls out', async ({ page }) => {
     await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    await page.goto(`/content-calendar?period=${PERIOD}`);
-    const [client] = await firstClients(page, 1);
+    const auth = await gotoCalendar(page);
+    const [client] = await calendarClients(page, auth);
     touched.add(client!.id);
 
     const overlay = page.getByTestId(`column-highlight-${client!.id}`);
@@ -203,8 +223,7 @@ test.describe('Content Calendar', () => {
 
   test('Trigger 2 round trip: the gold dot appears, then disappears after a manual edit', async ({ page }) => {
     await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    await page.goto(`/content-calendar?period=${PERIOD}`);
-    const auth = await captureApiToken(page);
+    const auth = await gotoCalendar(page);
 
     // A pipeline with no stages set yet, for a client that has a cell today.
     const pick = await withDb((c) =>
@@ -231,9 +250,9 @@ test.describe('Content Calendar', () => {
       version = (await res.json()).data.version as number;
     }
 
-    await page.goto(`/content-calendar?period=${PERIOD}`);
+    await gotoCalendar(page);
     // This client is arbitrary, so its column is probably culled — scroll to it.
-    await scrollColumnIntoView(page, clientId);
+    await scrollColumnIntoView(page, auth, clientId);
     const cell = page.getByTestId(`calendar-cell-${clientId}-${TODAY}`);
     await expect(cell).toHaveAttribute('aria-label', /Posted/);
     // The 6px marker + its tooltip (APPFLOW §8).
@@ -257,8 +276,8 @@ test.describe('Content Calendar', () => {
 
   test('a stale version renders the inline conflict with the updater name', async ({ page }) => {
     await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    await page.goto(`/content-calendar?period=${PERIOD}`);
-    const [client] = await firstClients(page, 1);
+    const auth = await gotoCalendar(page);
+    const [client] = await calendarClients(page, auth);
     touched.add(client!.id);
 
     // Move the row underneath the loaded cache, exactly like a concurrent editor.
@@ -287,8 +306,7 @@ test.describe('Content Calendar', () => {
   test('team_member sees a read-only grid and is refused by the API', async ({ page }) => {
     test.skip(!MEMBER_PASSWORD, 'Set TEST_MEMBER_* to run the read-only role test.');
     await login(page, MEMBER_EMAIL, MEMBER_PASSWORD);
-    await page.goto(`/content-calendar?period=${PERIOD}`);
-    await expect(page.getByRole('grid')).toBeVisible();
+    const auth = await gotoCalendar(page);
 
     // The grid renders but cannot be interacted with (Impl-Plan §10). The
     // computed style is the assertion — the API gate below is the real guarantee.
@@ -299,7 +317,6 @@ test.describe('Content Calendar', () => {
     // Comments stay outside that container, so they remain interactive later.
     await expect(page.getByText('Comments — coming soon')).toBeVisible();
 
-    const auth = await captureApiToken(page);
     const anyCell = await withDb((c) =>
       c.query(`SELECT id, version FROM content_calendar WHERE period=$1 LIMIT 1`, [PERIOD]),
     );
@@ -313,8 +330,8 @@ test.describe('Content Calendar', () => {
   test('freelancer is refused the calendar entirely', async ({ page }) => {
     test.skip(!FREELANCER_PASSWORD, 'Set TEST_FREELANCER_* to run the freelancer role test.');
     await login(page, FREELANCER_EMAIL, FREELANCER_PASSWORD);
-    await page.goto('/tasks'); // a page a freelancer may load, to mint a token
-    const auth = await captureApiToken(page);
+    // A page a freelancer may load, purely to mint a token.
+    const auth = await captureApiToken(page, () => page.goto('/tasks'));
 
     const res = await page.request.get(`${API_BASE}/v1/content-calendar?period=${PERIOD}`, {
       headers: { authorization: auth },

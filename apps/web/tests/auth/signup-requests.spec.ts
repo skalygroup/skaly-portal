@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
+import { login } from '../helpers/auth';
+
 /**
  * E2E: admin signup-request review (Sprint 1 STEP 14).
  *
@@ -51,12 +53,14 @@ async function cleanup(email: string) {
   });
 }
 
+/**
+ * The old assertion pinned the destination to /settings, /home or / — but an
+ * admin without MFA lands on /mfa-setup, so it failed on the redirect rather
+ * than on anything this spec is about. The shared helper waits for "anywhere
+ * but /login" instead.
+ */
 async function loginAsAdmin(page: Page) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(ADMIN_EMAIL);
-  await page.locator('#password').fill(ADMIN_PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/(settings|home)?$|\/$/);
+  await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
 }
 
 test.describe('admin signup requests (live flow)', () => {
