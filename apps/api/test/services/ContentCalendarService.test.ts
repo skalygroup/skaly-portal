@@ -158,6 +158,21 @@ describe('updateCell — the auto-reset and the optimistic lock', () => {
     expect(cell.updatedAt).not.toBeNull();
   });
 
+  test('the returned cell keeps its OWN date — no timezone shift (regression)', async () => {
+    const id = await seedCell();
+
+    const cell = await svc.updateCell(id, { status: 'Ready' }, admin, 1, db);
+
+    // node-postgres parses DATE as a JS Date at LOCAL midnight, so formatting the
+    // RETURNING row with toISOString() shifted this back a day under IST — the
+    // 7th came back as the 6th and the grid, which keys cells by
+    // `clientId:date`, filed the edit on the wrong day. Both endpoints must
+    // agree, so assert getGrid's date too.
+    expect(cell.date).toBe(DATE);
+    const grid = await svc.getGrid(PERIOD, admin, db);
+    expect(grid.cells.find((c) => c.id === id)?.date).toBe(DATE);
+  });
+
   test('a stale version raises 409 STALE_DATA carrying currentVersion + updatedBy', async () => {
     const id = await seedCell();
     await svc.updateCell(id, { status: 'Ready' }, admin, 1, db); // → version 2

@@ -21,7 +21,7 @@
  * the layer-3 backstop.)
  */
 import { CALENDAR_STATUSES, CALENDAR_NOTE_MAX, SYSTEM_ACTOR_UUID } from '@skaly/shared';
-import { sql, type Kysely, type Selectable } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, optimisticUpdate, type Executor } from './BaseService.js';
@@ -30,7 +30,7 @@ import { logger } from '../lib/logger.js';
 import { softDeletable } from '../lib/queries.js';
 
 import type { CurrentUser } from './AttendanceService.js';
-import type { CalendarStatus, ContentCalendar, DB } from '@skaly/shared';
+import type { CalendarStatus, DB } from '@skaly/shared';
 
 /** The fields a user PATCH may change. `source` and `version` are server-owned. */
 export interface CellPatch {
@@ -100,6 +100,33 @@ export class ContentCalendarService {
   private readonly audit = new AuditService();
 
   /**
+   * The one projection of a cell onto the wire, shared by getGrid and updateCell.
+   *
+   * `date` MUST come from to_char in SQL. node-postgres parses a DATE column into
+   * a JS Date at LOCAL midnight, so formatting it in JS via toISOString() shifts
+   * it a day backwards for any timezone east of UTC — under IST a PATCH to the
+   * 21st came back as the 20th, and the frontend (which keys cells by
+   * `clientId:date`) filed the edit under the wrong day.
+   */
+  private cellQuery(trx: Executor) {
+    return trx
+      .selectFrom('content_calendar')
+      .leftJoin('staff', 'staff.id', 'content_calendar.updated_by')
+      .select([
+        'content_calendar.id',
+        'content_calendar.client_id',
+        sql<string>`to_char(content_calendar.date, 'YYYY-MM-DD')`.as('date'),
+        'content_calendar.status',
+        'content_calendar.note',
+        'content_calendar.source',
+        'content_calendar.version',
+        'content_calendar.updated_at',
+        'content_calendar.updated_by',
+        'staff.name as updated_by_name',
+      ]);
+  }
+
+  /**
    * The full grid for `period`: every cell belonging to a currently-visible
    * client column, plus that column set.
    *
@@ -122,24 +149,9 @@ export class ContentCalendarService {
 
     if (clients.length === 0) return { cells: [], clients: [] };
 
-    // date via to_char so it is a stable 'YYYY-MM-DD' string, not a pg Date.
     // clients is joined only to sort by name — membership comes from the id list.
-    const cellRows = await trx
-      .selectFrom('content_calendar')
+    const cellRows = await this.cellQuery(trx)
       .innerJoin('clients', 'clients.id', 'content_calendar.client_id')
-      .leftJoin('staff', 'staff.id', 'content_calendar.updated_by')
-      .select([
-        'content_calendar.id',
-        'content_calendar.client_id',
-        sql<string>`to_char(content_calendar.date, 'YYYY-MM-DD')`.as('date'),
-        'content_calendar.status',
-        'content_calendar.note',
-        'content_calendar.source',
-        'content_calendar.version',
-        'content_calendar.updated_at',
-        'content_calendar.updated_by',
-        'staff.name as updated_by_name',
-      ])
       .where('content_calendar.period', '=', period)
       .where(
         'content_calendar.client_id',
@@ -226,10 +238,15 @@ export class ContentCalendarService {
         trx,
       });
 
-      return row;
+      // Re-read through the shared projection rather than shaping the RETURNING
+      // row by hand: that keeps `date` coming from to_char and picks up the
+      // updater's name from the same join getGrid uses, so a cell can never
+      // describe itself differently depending on which endpoint returned it.
+      const wire = await this.cellQuery(trx).where('content_calendar.id', '=', id).executeTakeFirstOrThrow();
+      return cellToDTO(wire as JoinedCellRow);
     });
 
-    return this.rowToDTO(updated, currentUser.staffId, db);
+    return updated;
   }
 
   /**
@@ -362,32 +379,6 @@ export class ContentCalendarService {
    * Re-shape a raw updated row for the wire. The updater is the current user by
    * definition, so their name is the only lookup needed.
    */
-  private async rowToDTO(
-    row: Selectable<ContentCalendar>,
-    actorId: string,
-    trx: Executor,
-  ): Promise<CalendarCellDTO> {
-    const actor = await trx
-      .selectFrom('staff')
-      .select('name')
-      .where('id', '=', actorId)
-      .executeTakeFirst();
-
-    return cellToDTO({
-      id: row.id,
-      client_id: row.client_id,
-      // The RETURNING row carries a pg Date; the wire wants 'YYYY-MM-DD'.
-      date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date),
-      status: row.status,
-      note: row.note,
-      source: row.source,
-      version: row.version,
-      updated_at: row.updated_at,
-      updated_by: row.updated_by,
-      updated_by_name: actor?.name ?? null,
-    });
-  }
-
   /** Defensive layer-3 assert — the route already gates (AUTH-MATRIX §3–§4). */
   private assertAdminOrManager(currentUser: CurrentUser): void {
     if (currentUser.role !== 'admin' && currentUser.role !== 'manager') {

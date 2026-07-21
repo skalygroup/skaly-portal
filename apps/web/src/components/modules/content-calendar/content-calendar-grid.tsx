@@ -1,10 +1,12 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { format, parseISO } from 'date-fns';
-import { memo, useEffect, useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { applyOptimisticCell, buildCellPatch, overlayRect, replaceCell } from './cell-actions';
+import { CellPopover } from './cell-popover';
 import {
   COLUMN_WIDTH,
   DATE_COL_WIDTH,
@@ -19,10 +21,13 @@ import {
 } from './types';
 
 import type { MonthItem } from '../attendance/types';
+import type { CalendarStatus } from '@skaly/shared';
 import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 
 import { api, ApiError } from '@/lib/api';
+import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
+import { handleMutationError } from '@/lib/mutation-errors';
 
 const mono = { fontFamily: 'var(--font-mono)' } as const;
 
@@ -71,12 +76,19 @@ const CalendarCellView = memo(function CalendarCellView({
   date,
   interactive,
   colIndex,
+  staleName,
+  onOpen,
+  onRefreshRow,
 }: {
   cell: CalendarCell | undefined;
   clientId: string;
   date: string;
   interactive: boolean;
   colIndex: number;
+  /** Set after a 409 on this cell — drives the inline conflict (ERROR-HANDLING §5.1). */
+  staleName: string | null;
+  onOpen: (cell: CalendarCell) => void;
+  onRefreshRow: () => void;
 }) {
   // No cell for this client+date: an un-backfilled client, or a period whose
   // rows were never generated. Render an inert placeholder, never a fake cell.
@@ -111,6 +123,28 @@ const CalendarCellView = memo(function CalendarCellView({
   const testId = `calendar-cell-${clientId}-${date}`;
   const label = `${cell.status}${cell.note ? ', has a note' : ''}`;
 
+  // 409 STALE_DATA inline conflict — the message IS the UI, no toast (§5.1).
+  if (staleName) {
+    return (
+      <span
+        role="gridcell"
+        aria-colindex={colIndex}
+        className="flex h-full w-full flex-col justify-center px-1 text-[10px] leading-tight"
+      >
+        <span style={{ color: 'var(--status-amber)' }}>Updated by {staleName}</span>
+        <button
+          type="button"
+          data-testid={`stale-refresh-${clientId}-${date}`}
+          onClick={onRefreshRow}
+          className="w-fit text-left font-semibold"
+          style={{ color: 'var(--accent-gold)' }}
+        >
+          Refresh row →
+        </button>
+      </span>
+    );
+  }
+
   // A locked period or a read-only role renders inert spans — never a button
   // that looks actionable and then 403s.
   if (!interactive) {
@@ -134,6 +168,7 @@ const CalendarCellView = memo(function CalendarCellView({
       aria-colindex={colIndex}
       aria-label={label}
       data-testid={testId}
+      onClick={() => onOpen(cell)}
       // 44×44 minimum target: the cell fills the 48px row and its 90px column.
       className="flex h-full w-full items-center justify-center gap-0.5 px-1"
     >
@@ -154,12 +189,22 @@ const CalendarCellView = memo(function CalendarCellView({
  * absolutely-positioned virtual track, so the two can never drift out of
  * alignment the way two synchronised scrollers would.
  *
+ * Real-time stays emit-only this sprint (ADR-010): the backend broadcasts
+ * content-calendar:updated, but there is no socket client yet. Own-mutation
+ * refresh is the TanStack Query cache replace in onSuccess.
+ *
  * TODO(Sprint 10): subscribe to content-calendar:updated on /ws/notify →
  * invalidateQueries(['content-calendar', payload.period]).
  */
 export function ContentCalendarGrid() {
   const { period } = useMonthContext();
+  const queryClient = useQueryClient();
   const today = useMemo(() => todayIstIso(), []);
+  const gridKey = useMemo(() => ['content-calendar', period] as const, [period]);
+  /** Which cell's popover is open, as `clientId:date`. */
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  /** Cells that 409'd, `clientId:date` → the name of whoever won the race. */
+  const [stale, setStale] = useState<Record<string, string>>({});
   const todayRowRef = useRef<HTMLDivElement>(null);
   // A plain useRef is enough even though the scroll container mounts only after
   // the query resolves (the loading branch returns before it) — TanStack Virtual
@@ -168,7 +213,7 @@ export function ContentCalendarGrid() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const { data, isPending, isError, error, refetch } = useQuery({
-    queryKey: ['content-calendar', period],
+    queryKey: gridKey,
     queryFn: async () =>
       (await api<{ data: CalendarGridResponse }>(`/v1/content-calendar?period=${period}`)).data,
     staleTime: 30_000,
@@ -205,6 +250,92 @@ export function ContentCalendarGrid() {
 
   const virtualColumns = colVirtualizer.getVirtualItems();
   const trackWidth = colVirtualizer.getTotalSize();
+
+  // ── Cell PATCH: optimistic, version-locked (C-02) ───────────────────────────
+  const cellMutation = useMutation({
+    mutationFn: async (vars: { cell: CalendarCell; change: { status?: CalendarStatus; note?: string | null } }) =>
+      (
+        await api<{ data: CalendarCell }>(`/v1/content-calendar/${vars.cell.id}`, {
+          method: 'PATCH',
+          // version from the cached cell; `source` is never sent (server-owned).
+          body: JSON.stringify(buildCellPatch(vars.cell, vars.change)),
+        })
+      ).data,
+    onMutate: (vars) => {
+      useColumnHighlightStore.getState().markPending(vars.cell.clientId);
+      const snapshot = queryClient.getQueryData<CalendarGridResponse>(gridKey);
+      queryClient.setQueryData<CalendarGridResponse>(gridKey, (old) =>
+        old ? applyOptimisticCell(old, vars.cell.id, vars.change) : old,
+      );
+      return { snapshot };
+    },
+    onSuccess: (returned, vars) => {
+      // REPLACE, not merge: the returned row carries the new version and the
+      // server's source='manual', which is what makes the gold dot disappear.
+      queryClient.setQueryData<CalendarGridResponse>(gridKey, (old) => (old ? replaceCell(old, returned) : old));
+      const store = useColumnHighlightStore.getState();
+      store.clearPending(vars.cell.clientId);
+      if (focusedColumnRef.current !== vars.cell.clientId) store.clearColumn(vars.cell.clientId);
+    },
+    onError: (err, vars, ctx) => {
+      if (ctx?.snapshot) queryClient.setQueryData(gridKey, ctx.snapshot); // revert
+      const res = handleMutationError(err, 'Could not update the cell. Please try again.');
+      if (res.code === 'STALE_DATA') {
+        setStale((s) => ({
+          ...s,
+          [`${vars.cell.clientId}:${vars.cell.date}`]: res.staleData?.updatedBy?.name ?? 'someone else',
+        }));
+        setOpenKey(null); // the popover's version is stale; close it
+      }
+      // §4.4 rule 4: the highlight stays, then clears 1.5s after the toast.
+      setTimeout(() => {
+        const store = useColumnHighlightStore.getState();
+        store.clearPending(vars.cell.clientId);
+        if (store.activeColumnId === vars.cell.clientId) store.setActiveColumn(null);
+      }, 1500);
+    },
+  });
+
+  // ── Gold column highlight, keyed by clientId (§4.4) ─────────────────────────
+  const focusedColumnRef = useRef<string | null>(null);
+  const columnFocusFor = useCallback(
+    (clientId: string) => ({
+      onFocus: () => {
+        focusedColumnRef.current = clientId;
+        useColumnHighlightStore.getState().setActiveColumn(clientId);
+      },
+      onBlur: () => {
+        if (focusedColumnRef.current === clientId) focusedColumnRef.current = null;
+        useColumnHighlightStore.getState().clearColumn(clientId);
+      },
+    }),
+    [],
+  );
+
+  const activeColumnId = useColumnHighlightStore((s) => s.activeColumnId);
+  // Read the virtual item's own `start`; null when that column is not rendered.
+  const overlay = overlayRect(activeColumnId, clients, virtualColumns);
+
+  const mutateRef = useRef(cellMutation.mutate);
+  mutateRef.current = cellMutation.mutate;
+
+  const openCell = useCallback((cell: CalendarCell) => {
+    setOpenKey(`${cell.clientId}:${cell.date}`);
+    focusedColumnRef.current = cell.clientId;
+    useColumnHighlightStore.getState().setActiveColumn(cell.clientId);
+  }, []);
+
+  const closePopover = useCallback(() => {
+    setOpenKey(null);
+    const store = useColumnHighlightStore.getState();
+    if (focusedColumnRef.current) store.clearColumn(focusedColumnRef.current);
+    focusedColumnRef.current = null;
+  }, []);
+
+  const refreshRow = useCallback(() => {
+    setStale({});
+    void queryClient.invalidateQueries({ queryKey: gridKey });
+  }, [queryClient, gridKey]);
 
   // Today into view — a plain DOM scroll, because rows are not virtualised.
   // Runs on `data`, not on mount: on first mount the grid is empty and there is
@@ -267,6 +398,12 @@ export function ContentCalendarGrid() {
         </div>
       ) : null}
 
+      {/* Outside-click backdrop for the popover — same approach as the Shoot
+          Planner. Sits below the popover (z-50) and above the grid. */}
+      {openKey ? (
+        <div className="fixed inset-0 z-40" onClick={closePopover} data-testid="popover-backdrop" aria-hidden />
+      ) : null}
+
       {/* team_member sees the whole grid but cannot interact with it (Impl-Plan
           §10). The API is the real gate — PATCH is 403 for them regardless. */}
       <div
@@ -285,6 +422,34 @@ export function ContentCalendarGrid() {
           aria-colcount={clients.length + 1}
           style={{ width: DATE_COL_WIDTH + trackWidth, position: 'relative' }}
         >
+          {/* ── Gold column highlight (UIUX §4.4) ──
+              ONE absolutely-positioned div inside the scrolling track, never a
+              class on the cells: virtualised columns unmount as they leave the
+              window and would take a class-based highlight with them. `left`
+              comes from the virtual item's own `start` (see overlayRect), and
+              when the active column is outside the window the overlay is not
+              rendered at all rather than clamped to an edge — a clamped overlay
+              would sit over the wrong client. pointer-events:none so it never
+              eats a click; below the popover's z-50. */}
+          {overlay ? (
+            <div
+              aria-hidden
+              data-testid={`column-highlight-${activeColumnId}`}
+              className="absolute"
+              style={{
+                left: overlay.left,
+                width: overlay.width,
+                top: 0,
+                height: HEADER_HEIGHT + days.length * ROW_HEIGHT,
+                background: 'var(--accent-gold-dim)',
+                borderLeft: '1px solid var(--accent-gold-border)',
+                borderRight: '1px solid var(--accent-gold-border)',
+                pointerEvents: 'none',
+                zIndex: 20,
+              }}
+            />
+          ) : null}
+
           {/* ── Header ── */}
           <div
             role="row"
@@ -374,19 +539,39 @@ export function ContentCalendarGrid() {
 
                 {virtualColumns.map((vc) => {
                   const client = clients[vc.index]!;
+                  const key = `${client.id}:${date}`;
+                  const cell = cellIndex.get(key);
                   return (
                     <div
                       key={client.id}
                       className="absolute top-0"
-                      style={{ left: DATE_COL_WIDTH + vc.start, width: vc.size, height: ROW_HEIGHT }}
+                      style={{
+                        left: DATE_COL_WIDTH + vc.start,
+                        width: vc.size,
+                        height: ROW_HEIGHT,
+                        // Lift the open cell above its neighbours so the popover
+                        // is not clipped by later-painted sibling columns.
+                        ...(openKey === key ? { zIndex: 40 } : {}),
+                      }}
                     >
                       <CalendarCellView
-                        cell={cellIndex.get(`${client.id}:${date}`)}
+                        cell={cell}
                         clientId={client.id}
                         date={date}
                         interactive={canEdit}
                         colIndex={vc.index + 2}
+                        staleName={stale[key] ?? null}
+                        onOpen={openCell}
+                        onRefreshRow={refreshRow}
                       />
+                      {openKey === key && cell ? (
+                        <CellPopover
+                          cell={cell}
+                          columnFocus={columnFocusFor(client.id)}
+                          onClose={closePopover}
+                          onPatch={(change) => mutateRef.current({ cell, change })}
+                        />
+                      ) : null}
                     </div>
                   );
                 })}
