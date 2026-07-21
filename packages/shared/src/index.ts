@@ -66,3 +66,14 @@ export type {
   StageUpdateBody,
   ClientNameBody,
 } from './schemas/content-dropper';
+
+// Content Calendar — status vocabulary + request schemas (API + web dropdown).
+export {
+  CALENDAR_STATUSES,
+  CALENDAR_NOTE_MAX,
+  CalendarStatusSchema,
+  CalendarQuerySchema,
+  CellUpdateBase,
+  CellUpdateSchema,
+} from './schemas/content-calendar';
+export type { CalendarStatus, CalendarQuery, CellUpdateBody } from './schemas/content-calendar';

@@ -28,6 +28,7 @@ import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import attendanceRoutes from './routes/attendance/index.js';
 import authRoutes from './routes/auth/index.js';
 import clientsRoutes from './routes/clients/index.js';
+import contentCalendarRoutes from './routes/content-calendar/index.js';
 import contentDropperRoutes from './routes/content-dropper/index.js';
 import { healthRoutes } from './routes/health.js';
 import holidaysRoutes from './routes/holidays/index.js';
@@ -190,6 +191,7 @@ export async function buildApp(
   await app.register(tasksRoutes, { prefix: '/v1' });
   await app.register(shootPlannerRoutes, { prefix: '/v1' });
   await app.register(contentDropperRoutes, { prefix: '/v1' });
+  await app.register(contentCalendarRoutes, { prefix: '/v1' });
   await app.register(settingsRoutes, { prefix: '/v1' });
 
   return app;

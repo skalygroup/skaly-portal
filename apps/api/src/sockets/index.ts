@@ -34,6 +34,23 @@ export function getIo(): Server {
 }
 
 /**
+ * Fire-and-forget org-wide grid-sync broadcast on /ws/notify (API-Contract §6).
+ * Every caller emits strictly AFTER its transaction commits, so a socket failure
+ * must never propagate — it logs and returns. Also swallows the not-initialised
+ * throw, which is the normal case under test.
+ *
+ * No frontend consumer yet (ADR-010 defers the socket client to Sprint 10).
+ * HolidayService predates this helper and keeps its own equivalent copy.
+ */
+export function broadcastToOrg(event: string, payload: Record<string, unknown>): void {
+  try {
+    getIo().of('/ws/notify').to('org:all').emit(event, payload);
+  } catch (err) {
+    logger.warn({ err, event, payload }, 'org broadcast emit failed');
+  }
+}
+
+/**
  * Handshake auth, shared by all three namespaces. Reads the token from
  * socket.handshake.auth.token and reuses the HTTP verifier — one source of truth
  * for "is this token valid + who is it". On success attaches { staffId, role }
