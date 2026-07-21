@@ -1,4 +1,37 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { defineConfig, devices } from '@playwright/test';
+
+/**
+ * Load apps/web/.env.e2e (gitignored) so the live specs get their credentials
+ * without the caller having to export anything.
+ *
+ * Deliberately NOT `set -a; . ./.env.e2e` in a shell: these values are unquoted,
+ * and a password containing `$` gets partially expanded by the shell — a real
+ * password silently arrives truncated at the `$`, and the failure looks like a
+ * broken login flow rather than a broken loader. Read the file literally instead.
+ * Hand-parsed rather than adding a dotenv dependency for six lines.
+ */
+function loadE2eEnv(): void {
+  let raw: string;
+  try {
+    raw = readFileSync(join(__dirname, '.env.e2e'), 'utf8');
+  } catch {
+    return; // absent is fine — the live specs self-skip.
+  }
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const eq = t.indexOf('=');
+    if (eq === -1) continue;
+    const key = t.slice(0, eq).trim();
+    // Strip one layer of wrapping quotes if present; otherwise take it verbatim.
+    const value = t.slice(eq + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
+    if (!(key in process.env)) process.env[key] = value; // a real env var still wins
+  }
+}
+loadE2eEnv();
 
 /**
  * Playwright config for the web app's E2E suite (apps/web/tests).
