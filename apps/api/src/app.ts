@@ -16,6 +16,7 @@ import {
   hasZodFastifySchemaValidationErrors,
 } from 'fastify-type-provider-zod';
 
+import { registerEventListeners } from './events/listeners.js';
 import { pool, db } from './lib/db.js';
 import { env } from './lib/env.js';
 import { AppError } from './lib/errors.js';
@@ -27,6 +28,7 @@ import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import attendanceRoutes from './routes/attendance/index.js';
 import authRoutes from './routes/auth/index.js';
 import clientsRoutes from './routes/clients/index.js';
+import contentDropperRoutes from './routes/content-dropper/index.js';
 import { healthRoutes } from './routes/health.js';
 import holidaysRoutes from './routes/holidays/index.js';
 import monthsRoutes from './routes/months/index.js';
@@ -164,6 +166,11 @@ export async function buildApp(
   app.decorate('pool', pool);
   app.decorate('redis', redis);
 
+  // ── Cross-module EventBus listeners (Trigger 1: shoot:* → coming_shoot_date) ──
+  // Registered once here (module-guarded) now that the shared db exists — this is
+  // the single startup path both server.ts and inject-tests flow through.
+  registerEventListeners(db);
+
   // ── User auth (Sprint 1 STEP 4: Supabase RS256 JWT + staff lookup) ──
   // After db/redis are available; before any route plugin so route
   // preHandlers can reference app.verifyJwt / app.requireRole.
@@ -182,6 +189,7 @@ export async function buildApp(
   await app.register(holidaysRoutes, { prefix: '/v1' });
   await app.register(tasksRoutes, { prefix: '/v1' });
   await app.register(shootPlannerRoutes, { prefix: '/v1' });
+  await app.register(contentDropperRoutes, { prefix: '/v1' });
   await app.register(settingsRoutes, { prefix: '/v1' });
 
   return app;

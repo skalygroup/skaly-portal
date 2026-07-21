@@ -52,3 +52,17 @@ export type {
   SlotResetBody,
   SlotCountBody,
 } from './schemas/shoot-planner';
+
+// Content Dropper request schemas — shared by API validation + web forms.
+export {
+  STAGE_VALUES,
+  StageSchema,
+  DropperQuerySchema,
+  StageUpdateSchema,
+  ClientNameSchema,
+} from './schemas/content-dropper';
+export type {
+  DropperQuery,
+  StageUpdateBody,
+  ClientNameBody,
+} from './schemas/content-dropper';
