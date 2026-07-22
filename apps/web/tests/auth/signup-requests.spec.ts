@@ -46,9 +46,28 @@ async function seedPendingRequest(email: string, name: string) {
   });
 }
 
+/**
+ * Remove the approved staff row AND the rows approval generates for it.
+ *
+ * Approving a request runs the period-row generators, which give the new staff
+ * member an attendance_logs row per day of the current period. Deleting the
+ * staff row alone therefore violates attendance_logs_staff_id_fkey, the whole
+ * cleanup aborts, and the account survives — the reason this database had a
+ * dozen abandoned e2e-approve-* accounts before this was fixed.
+ */
 async function cleanup(email: string) {
   await withDb(async (c) => {
-    await c.query('DELETE FROM staff WHERE email = $1', [email]);
+    const { rows } = await c.query<{ id: string }>('SELECT id FROM staff WHERE email = $1', [email]);
+    const staffId = rows[0]?.id;
+    if (staffId) {
+      // Everything a freshly approved member can own. All these FKs are NO
+      // ACTION, so one missed table aborts the whole cleanup: attendance_logs
+      // was the first, notifications the next. Add a line if a new one appears.
+      for (const table of ['attendance_logs', 'notifications', 'task_assignees', 'user_permissions', 'bot_sessions']) {
+        await c.query(`DELETE FROM ${table} WHERE staff_id = $1`, [staffId]);
+      }
+      await c.query('DELETE FROM staff WHERE id = $1', [staffId]);
+    }
     await c.query('DELETE FROM signup_requests WHERE email = $1', [email]);
   });
 }
