@@ -1,5 +1,9 @@
 import { test, expect, type Route } from '@playwright/test';
 
+// typeInto, not fill(): fill() leaves these React-controlled inputs empty in
+// webkit, so the form submitted blank and both cases failed there.
+import { typeInto } from '../helpers/auth';
+
 /**
  * Signup UI + client behaviour. Drives a real browser against the web dev
  * server only — the API is stubbed via route interception and timers are driven
@@ -59,12 +63,12 @@ test.describe('signup page (request access)', () => {
     );
     const requestPromise = page.waitForRequest('**/v1/auth/signup/request');
 
-    await page.getByLabel('Full name').fill('Jane Doe');
-    await page.getByLabel('Email').fill('jane@example.com');
+    await typeInto(page.getByLabel('Full name'), 'Jane Doe');
+    await typeInto(page.getByLabel('Email'), 'jane@example.com');
     // Custom date picker: open the trigger, pick a day via "Today".
     await page.getByText('dd-mm-yyyy').click();
     await page.getByRole('button', { name: 'Today' }).click();
-    await page.getByLabel('Mobile number').fill('+919876543210');
+    await typeInto(page.getByLabel('Mobile number'), '+919876543210');
     await page.getByRole('button', { name: 'Submit request' }).click();
 
     const req = await requestPromise;
@@ -82,12 +86,12 @@ test.describe('signup page (request access)', () => {
       }),
     );
 
-    await page.getByLabel('Full name').fill('Jane Doe');
-    await page.getByLabel('Email').fill('jane@example.com');
+    await typeInto(page.getByLabel('Full name'), 'Jane Doe');
+    await typeInto(page.getByLabel('Email'), 'jane@example.com');
     // Custom date picker: open the trigger, pick a day via "Today".
     await page.getByText('dd-mm-yyyy').click();
     await page.getByRole('button', { name: 'Today' }).click();
-    await page.getByLabel('Mobile number').fill('+919876543210');
+    await typeInto(page.getByLabel('Mobile number'), '+919876543210');
     await page.getByRole('button', { name: 'Submit request' }).click();
 
     const banner = page.getByRole('alert');

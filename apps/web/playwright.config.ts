@@ -44,7 +44,15 @@ loadE2eEnv();
  *    so the suite stays green until that infra is wired.
  *
  * Run:  pnpm --filter @skaly/web exec playwright test
- * (Browsers: `npx playwright install chromium` once.)
+ * (Browsers: `npx playwright install chromium webkit` once.)
+ *
+ * THE API MUST HAVE ITS RATE LIMIT LIFTED for a full-suite run. The global cap
+ * is 150 req/min keyed by IP (API-Contract §2); a whole suite is ~50 sign-ins
+ * plus grid fetches from one address, so specs late in the run get 429 where
+ * they assert 403 — rate-limited rather than tested. Start the API with:
+ *   PORT=3002 RATE_LIMIT_MAX=1000000 pnpm --filter @skaly/api dev
+ * and point both the app and the specs at it:
+ *   NEXT_PUBLIC_API_URL=http://localhost:3002
  */
 export default defineConfig({
   testDir: './tests',
@@ -52,6 +60,19 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
+  /**
+   * One worker. fullyParallel:false only serialises tests WITHIN a file — files
+   * still run concurrently, and the default here was 4 workers.
+   *
+   * These are live specs against one database and one set of shared accounts.
+   * With parallel files, login.spec's deactivation case (which flips
+   * staff.active and restores it) overlapped attendance's team_member case,
+   * which then signed in during the deactivated window and failed. Same story
+   * for anything else touching shared rows. Every "passes alone, fails in the
+   * suite" symptom in this suite traced back to here, and each one previously
+   * got explained away as flakiness.
+   */
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: 'list',

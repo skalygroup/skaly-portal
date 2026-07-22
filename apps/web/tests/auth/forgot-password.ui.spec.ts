@@ -1,5 +1,9 @@
 import { test, expect, type Page } from '@playwright/test';
 
+// typeInto, not fill(): fill() leaves this React-controlled input empty in
+// webkit, so the form submitted blank.
+import { typeInto } from '../helpers/auth';
+
 /**
  * Forgot-password UI (Sprint 1 STEP 13). The backend is anti-enumeration: it
  * always returns 200 regardless of whether the email exists, and the UI must
@@ -33,7 +37,7 @@ test.describe('forgot password page', () => {
   test('known email → neutral confirmation', async ({ page }) => {
     await mockReset(page);
     await page.goto('/forgot-password');
-    await page.getByLabel('Email').fill('admin@skalygroup.com');
+    await typeInto(page.getByLabel('Email'), 'admin@skalygroup.com');
     await page.getByRole('button', { name: 'Send reset link' }).click();
 
     await expect(page.getByRole('heading', { name: 'Check your inbox' })).toBeVisible();
@@ -43,7 +47,7 @@ test.describe('forgot password page', () => {
   test('unknown email → identical confirmation (no enumeration leak)', async ({ page }) => {
     await mockReset(page);
     await page.goto('/forgot-password');
-    await page.getByLabel('Email').fill('nobody@nowhere.example');
+    await typeInto(page.getByLabel('Email'), 'nobody@nowhere.example');
     await page.getByRole('button', { name: 'Send reset link' }).click();
 
     await expect(page.getByRole('heading', { name: 'Check your inbox' })).toBeVisible();

@@ -21,7 +21,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
  * so the next render restores "". Chromium tolerates it; webkit does not, which
  * is why the whole suite passed on one engine and failed on the other.
  */
-async function typeInto(field: Locator, value: string): Promise<void> {
+export async function typeInto(field: Locator, value: string): Promise<void> {
   await field.click();
   await field.pressSequentially(value);
 }

@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
+import { typeInto } from '../helpers/auth';
+
 /**
  * E2E: the login flow (Sprint 1 STEP 11).
  *
@@ -59,16 +61,39 @@ async function setStaffFlag(email: string, column: 'active' | 'mfa_enrolled', va
     await client.end();
   }
   if (!uid) return;
-  // Via the compose stack's redis-cli rather than a redis client: apps/web has no
-  // redis dependency, and docker compose is already a hard prerequisite of these
-  // live specs. Non-fatal — a missed delete degrades to the old 5-minute staleness.
+
+  // Delete, then VERIFY, then delete again if needed.
+  //
+  // A single delete is not enough: a request already in flight can finish after
+  // it and write the pre-change row straight back, and the stale value then
+  // survives the full 5-minute TTL. Whichever spec next signs in as this shared
+  // account gets the old state — that is what failed the team_member cases in
+  // attendance, tasks and content-dropper, in the NEXT run, from here.
+  // Note the exit condition: it keeps deleting until the cache holds the NEW
+  // value, and an empty key is explicitly not good enough. Returning on empty
+  // was the bug — the delete lands, the key reads empty, and the in-flight
+  // request writes the old row back a moment later.
+  for (let attempt = 0; attempt < 12; attempt++) {
+    if (!redisCli(['DEL', `staff_lookup:${uid}`])) return; // no redis — TTL will do it
+    await new Promise((r) => setTimeout(r, 200));
+    const cached = redisCli(['GET', `staff_lookup:${uid}`]) ?? '';
+    if (cached.includes(`"${column}":${value}`)) return;
+  }
+}
+
+/**
+ * redis-cli through the compose stack, rather than a redis client: apps/web has
+ * no redis dependency and docker compose is already a hard prerequisite of these
+ * live specs. Returns null when redis is unreachable.
+ */
+function redisCli(args: string[]): string | null {
   try {
-    execFileSync('docker', ['compose', 'exec', '-T', 'redis', 'redis-cli', 'DEL', `staff_lookup:${uid}`], {
+    return execFileSync('docker', ['compose', 'exec', '-T', 'redis', 'redis-cli', ...args], {
       cwd: join(__dirname, '..', '..', '..', '..'),
-      stdio: 'ignore',
+      encoding: 'utf8',
     });
   } catch {
-    /* redis unreachable — the TTL will clear it eventually */
+    return null;
   }
 }
 
@@ -83,8 +108,11 @@ async function setStaffFlag(email: string, column: 'active' | 'mfa_enrolled', va
  */
 async function login(page: Page, email: string, password: string) {
   await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.locator('#password').fill(password);
+  // typeInto, not fill(): fill() leaves these React-controlled inputs empty in
+  // webkit (see the helper), so the form submitted blank and all four cases
+  // failed on the wrong thing.
+  await typeInto(page.getByLabel('Email'), email);
+  await typeInto(page.locator('#password'), password);
   await page.getByRole('button', { name: /Sign in/i }).click();
 }
 
@@ -107,7 +135,13 @@ test.describe('login (live auth flow)', () => {
     await expect(page).toHaveURL(/\/login/);
   });
 
-  test('deactivated account → ACCOUNT_DEACTIVATED message', async ({ page }) => {
+  test('deactivated account → ACCOUNT_DEACTIVATED message', async ({ page, browserName }) => {
+    // One engine only. This case and the MFA one below mutate a staff row that
+    // the whole suite shares, so running them once per project means two passes
+    // toggling the same account and racing each other's cache invalidation —
+    // whichever runs second sees the other's state. Neither asserts anything
+    // engine-specific: the subject is API routing and one message.
+    test.skip(browserName !== 'chromium', 'mutates shared staff state — run once');
     await setStaffFlag(MEMBER_EMAIL, 'active', false);
     try {
       await login(page, MEMBER_EMAIL, MEMBER_PASSWORD);
@@ -126,7 +160,8 @@ test.describe('login (live auth flow)', () => {
     }
   });
 
-  test('admin without MFA → redirects to /mfa-setup', async ({ page }) => {
+  test('admin without MFA → redirects to /mfa-setup', async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'mutates shared staff state — run once');
     // The test creates its own precondition instead of assuming it. The seeded
     // admin enrolled in MFA at some point, so this spec's "an admin WITHOUT MFA"
     // premise quietly stopped holding and the case failed on a stale fixture

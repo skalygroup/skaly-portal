@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
+import { login } from './helpers/auth';
+
 /**
  * E2E smoke: Content Dropper (Sprint 6 STEP 8) — stage sequence (RAW → Finals →
  * Posted + Trigger-2 toast), the client-side sequence violation (shake, no
@@ -8,8 +10,7 @@ import { Client } from 'pg';
  *
  * NOTE: the guide names this tests/e2e/content-dropper.spec.ts, but the
  * Playwright config's testDir is ./tests (Sprint 1 convention), so it lives here
- * — same as tests/shoot-planner.spec.ts. Config runs chromium; webkit is not
- * wired in this repo.
+ * — same as tests/shoot-planner.spec.ts. Runs on chromium and webkit.
  *
  * NOTE: this repo has no portal sidebar nav yet (the (portal) layout renders
  * children directly), so "absent from the sidebar" is verified via the frontend
@@ -50,17 +51,8 @@ async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   }
 }
 
-async function login(page: Page, email: string, password: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.locator('#password').fill(password);
-  await page.getByRole('button', { name: /Sign in/i }).click();
-  // The login page redirects (→ /mfa-setup for a non-MFA admin, else /) only
-  // AFTER signInWithPassword resolves and the session is persisted. Wait for that
-  // redirect so a following page.goto() carries the auth token — otherwise the
-  // navigation races the sign-in and the grid's API call goes out unauthenticated.
-  await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 15_000 });
-}
+// login() comes from tests/helpers/auth — this spec's own copy used fill(),
+// which leaves the inputs empty in webkit and failed all three cases there.
 
 /** The Bearer token the browser sends — captured from the first /v1 API call. */
 async function captureApiToken(page: Page): Promise<string> {
