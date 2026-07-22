@@ -141,7 +141,7 @@ export async function buildApp(
   // response advertises the client's remaining budget, and 429s carry
   // Retry-After.
   await app.register(rateLimit, {
-    max: 150,
+    max: env.RATE_LIMIT_MAX,
     timeWindow: '1 minute',
     addHeaders: {
       'x-ratelimit-limit': true,

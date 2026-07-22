@@ -13,6 +13,12 @@ const EnvSchema = z.object({
     .default('http://localhost:3000,https://portal.skaly.in')
     .transform((s) => s.split(',').map((o) => o.trim()).filter(Boolean)),
 
+  // Global IP-keyed request cap per minute (API-Contract §2 sets 150). Override
+  // only for load testing: a k6 run drives every request from one IP, so the
+  // NFR §1.2 p95 gate measures the limiter instead of the endpoint unless the
+  // cap is lifted for that run.
+  RATE_LIMIT_MAX: z.coerce.number().default(150),
+
   DATABASE_URL: z.string().url(),
   DATABASE_POOL_MIN: z.coerce.number().default(2),
   DATABASE_POOL_MAX: z.coerce.number().default(20),

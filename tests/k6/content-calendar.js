@@ -12,6 +12,13 @@
  *   K6_TOKEN="Bearer eyJ..." \
  *   k6 run tests/k6/content-calendar.js
  *
+ * THE API UNDER TEST MUST HAVE ITS RATE LIMIT LIFTED. The global cap is 150
+ * req/min keyed by IP (API-Contract §2), and a load generator is a single IP —
+ * at 50 VUs roughly 92% of requests come back 429 and the p95 you measure is
+ * the limiter's, not the endpoint's. Start the target with RATE_LIMIT_MAX high:
+ *   PORT=3002 RATE_LIMIT_MAX=1000000 pnpm --filter @skaly/api dev
+ * Verify before trusting a run: the response's x-ratelimit-limit must not be 150.
+ *
  * The token is a real Supabase access token for an admin/manager/team_member.
  * Grab one from a logged-in browser (Application → Local Storage) or from an
  * API call's Authorization header — never hardcode it here.
@@ -23,11 +30,14 @@ import http from 'k6/http';
 
 const BASE = __ENV.K6_BASE_URL || 'http://localhost:3001';
 const TOKEN = __ENV.K6_TOKEN || '';
-const PERIOD =
-  __ENV.K6_PERIOD ||
-  new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit' }).format(
-    new Date(),
-  );
+/**
+ * Current IST period. Shifted by hand rather than with Intl.DateTimeFormat:
+ * k6's JS runtime has no Intl at all, so the formatter used everywhere else in
+ * this repo throws "Intl is not defined" here and the script dies before the
+ * first request. IST is a fixed UTC+5:30 with no DST, so the offset is exact.
+ */
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const PERIOD = __ENV.K6_PERIOD || new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 7);
 
 export const options = {
   scenarios: {
