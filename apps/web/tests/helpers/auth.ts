@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 /**
  * Shared E2E auth helpers.
@@ -14,6 +14,19 @@ import { expect, type Page } from '@playwright/test';
  */
 
 /**
+ * Type into a React-controlled field, key by key.
+ *
+ * NOT `fill()`: in webkit it leaves these inputs empty. fill() sets `value` and
+ * dispatches one input event, and React's value tracker treats that as no change,
+ * so the next render restores "". Chromium tolerates it; webkit does not, which
+ * is why the whole suite passed on one engine and failed on the other.
+ */
+async function typeInto(field: Locator, value: string): Promise<void> {
+  await field.click();
+  await field.pressSequentially(value);
+}
+
+/**
  * Sign in and WAIT for the post-login redirect.
  *
  * The barrier is load-bearing, not politeness: the login page redirects only
@@ -27,11 +40,18 @@ import { expect, type Page } from '@playwright/test';
  */
 export async function login(page: Page, email: string, password: string): Promise<void> {
   await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
+  const emailField = page.getByLabel('Email');
   // #password, never getByLabel('Password'): the redesigned form has both the
   // field and a "Forgot password?" control, so the accessible-name lookup is
   // ambiguous and trips Playwright's strict mode.
-  await page.locator('#password').fill(password);
+  const passwordField = page.locator('#password');
+  await typeInto(emailField, email);
+  await typeInto(passwordField, password);
+  // Both values must survive to the submit. Asserted rather than assumed: with
+  // fill() in webkit they did not, and an empty submit fails at the redirect
+  // barrier below looking exactly like broken auth.
+  await expect(emailField).toHaveValue(email);
+  await expect(passwordField).toHaveValue(password);
   await page.getByRole('button', { name: /Sign in/i }).click();
   await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 15_000 });
 }

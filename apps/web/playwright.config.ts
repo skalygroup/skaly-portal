@@ -66,5 +66,9 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Sprint 7 close-out asks for webkit too. Install once: `playwright install webkit`.
+    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+  ],
 });

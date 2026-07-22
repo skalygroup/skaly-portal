@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
+import { captureApiToken, login } from './helpers/auth';
+
 /**
  * E2E: Content Calendar (Sprint 7 STEP 9) — cell edit via the popover, the
  * positioned-overlay gold highlight INCLUDING the virtualisation case, the
@@ -57,32 +59,6 @@ async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   } finally {
     await client.end();
   }
-}
-
-async function login(page: Page, email: string, password: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.locator('#password').fill(password);
-  await page.getByRole('button', { name: /Sign in/i }).click();
-  // Wait for the post-login redirect so a following goto() carries the token.
-  await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 15_000 });
-}
-
-/**
- * The Bearer header the browser sends — captured from a /v1 call.
- *
- * waitForRequest only observes requests made AFTER it starts waiting, so calling
- * it once a page has already finished loading waits forever. Start the wait, then
- * force a request: navigating (or re-navigating) always refetches the grid.
- */
-async function captureApiToken(page: Page, navigate: () => Promise<unknown>): Promise<string> {
-  const pending = page.waitForRequest(
-    (r) => r.url().includes('/v1/') && Boolean(r.headers()['authorization']),
-    { timeout: 15_000 },
-  );
-  await navigate();
-  const req = await pending;
-  return req.headers()['authorization']!;
 }
 
 /**
@@ -167,7 +143,13 @@ test.describe('Content Calendar', () => {
     // Optimistic + server replace — the chip reflects the new status.
     await expect(cell).toHaveAttribute('aria-label', /Ready/);
 
-    await page.getByTestId('popover-backdrop').click();
+    // A raw click in the corner, not `getByTestId('popover-backdrop').click()`:
+    // the backdrop is re-created whenever the grid re-renders (the mutation's
+    // cache replace does exactly that), so Playwright's actionability retry loop
+    // keeps losing the node — "element was detached from the DOM, retrying" until
+    // the test times out. The backdrop is `fixed inset-0`, so any point outside
+    // the popover lands on it and this stays a genuine outside-click.
+    await page.mouse.click(10, 10);
     await expect(popover).toBeHidden();
 
     // And it really persisted (not just an un-reverted optimistic write).
@@ -387,7 +369,12 @@ test.describe('Content Calendar', () => {
     expect(res.status()).toBe(403);
   });
 
-  test('NFR §1.1: FCP < 1.5s and TTI-proxy < 2.0s with a full period loaded', async ({ page }) => {
+  test('NFR §1.1: FCP < 1.5s and TTI-proxy < 2.0s with a full period loaded', async ({ page, browserName }) => {
+    // Chromium only, and deliberately: webkit implements neither the paint-timing
+    // entry this reads nor the Long Tasks API the scroll gate below needs. There
+    // the metrics come back null/empty and the gate passes without measuring
+    // anything — a vacuous green is worse than an honest skip.
+    test.skip(browserName !== 'chromium', 'paint timing + long tasks are chromium-only APIs');
     await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await page.goto(`/content-calendar?period=${PERIOD}`);
     await expect(page.getByRole('grid')).toBeVisible();
@@ -416,7 +403,10 @@ test.describe('Content Calendar', () => {
     if (metrics.domInteractiveMs !== null) expect(metrics.domInteractiveMs).toBeLessThan(2000);
   });
 
-  test('NFR §1.4: horizontal scroll holds 60fps with no long tasks', async ({ page }) => {
+  test('NFR §1.4: horizontal scroll holds 60fps with no long tasks', async ({ page, browserName }) => {
+    // See the note on the FCP gate above — webkit has no Long Tasks API, so the
+    // long-task assertion here is always trivially satisfied there.
+    test.skip(browserName !== 'chromium', 'the Long Tasks API is chromium-only');
     await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await page.goto(`/content-calendar?period=${PERIOD}`);
     const grid = page.getByRole('grid');
