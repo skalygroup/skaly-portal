@@ -217,6 +217,34 @@ test.describe('Content Calendar', () => {
     await expect(overlay).toBeHidden();
   });
 
+  test("today's row is tinted and scrolled into view on load (UIUX §11)", async ({ page }) => {
+    await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await page.goto(`/content-calendar?period=${PERIOD}`);
+    await expect(page.getByRole('grid')).toBeVisible();
+
+    const row = page.getByTestId(`calendar-row-${TODAY}`);
+    await expect(row).toBeVisible();
+    // Compare against a non-today row rather than matching a colour pattern:
+    // `rgba(0, 0, 0, 0)` satisfies any rgb regex, so a missing tint would pass.
+    const other = TODAY.endsWith('-01') ? `${PERIOD}-02` : `${PERIOD}-01`;
+    const [todayBg, otherBg] = await Promise.all([
+      row.evaluate((el) => getComputedStyle(el).backgroundColor),
+      page.getByTestId(`calendar-row-${other}`).evaluate((el) => getComputedStyle(el).backgroundColor),
+    ]);
+    expect(todayBg, 'today row carries no tint of its own').not.toBe(otherBg);
+
+    // In view means inside the SCROLLER's band, not the window's: the grid
+    // scrolls internally, so a row can be on-page and still not visible here.
+    const visible = await page.evaluate((date: string) => {
+      const el = document.querySelector(`[data-testid="calendar-row-${date}"]`)!;
+      const scroller = document.querySelector('[role="grid"]')!.parentElement!;
+      const r = el.getBoundingClientRect();
+      const s = scroller.getBoundingClientRect();
+      return r.top >= s.top - 1 && r.bottom <= s.bottom + 1;
+    }, TODAY);
+    expect(visible, "today's row is not inside the scroller's viewport").toBe(true);
+  });
+
   test('column virtualisation culls the DOM (Impl-Plan §10)', async ({ page }) => {
     await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await page.goto(`/content-calendar?period=${PERIOD}`);
