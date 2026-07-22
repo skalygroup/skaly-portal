@@ -1,5 +1,7 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { Client } from 'pg';
+
+import { login } from './helpers/auth';
 
 /**
  * E2E smoke: Staff Attendance (Sprint 3 STEP 8). Smoke depth only — the
@@ -47,12 +49,8 @@ async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   }
 }
 
-async function login(page: Page, email: string, password: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.locator('#password').fill(password);
-  await page.getByRole('button', { name: /Sign in/i }).click();
-}
+// login() comes from tests/helpers/auth — see the barrier note there. The local
+// copy here omitted it and every grid fetch went out unauthenticated.
 
 test.describe('attendance grid (live smoke)', () => {
   test.beforeEach(() => {

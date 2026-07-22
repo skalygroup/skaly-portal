@@ -1,5 +1,10 @@
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+
 import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
+
+import { typeInto } from '../helpers/auth';
 
 /**
  * E2E: the login flow (Sprint 1 STEP 11).
@@ -28,21 +33,87 @@ const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD ?? '';
 // (so the suite stays green) rather than failing on missing infra.
 const FLOW_ENABLED = Boolean(MEMBER_PASSWORD && ADMIN_PASSWORD && process.env.DATABASE_URL);
 
-async function setActive(email: string, active: boolean) {
+/**
+ * Flip a boolean staff flag AND drop the API's cached staff lookup.
+ *
+ * The auth plugin caches the staff row in Redis under `staff_lookup:{uid}` for 5
+ * minutes, so a raw UPDATE is invisible in BOTH directions: the deactivated user
+ * still logs in, and — worse — the restore at the end of this test stays unseen,
+ * so every later spec that signs in as this member gets "Account deactivated"
+ * for up to five minutes. That is what makes a failure here cascade into
+ * attendance, tasks, content-dropper and content-calendar.
+ *
+ * The product invalidates this key itself on the paths that own it (approval,
+ * deactivation); this fixture writes SQL directly, so it must do the same.
+ */
+async function setStaffFlag(email: string, column: 'active' | 'mfa_enrolled', value: boolean) {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
+  let uid: string | null = null;
   try {
-    await client.query('UPDATE staff SET active = $1 WHERE email = $2', [active, email]);
+    // `column` is a literal from this file's own union type, never user input.
+    const res = await client.query<{ supabase_uid: string | null }>(
+      `UPDATE staff SET ${column} = $1 WHERE email = $2 RETURNING supabase_uid`,
+      [value, email],
+    );
+    uid = res.rows[0]?.supabase_uid ?? null;
   } finally {
     await client.end();
   }
+  if (!uid) return;
+
+  // Delete, then VERIFY, then delete again if needed.
+  //
+  // A single delete is not enough: a request already in flight can finish after
+  // it and write the pre-change row straight back, and the stale value then
+  // survives the full 5-minute TTL. Whichever spec next signs in as this shared
+  // account gets the old state — that is what failed the team_member cases in
+  // attendance, tasks and content-dropper, in the NEXT run, from here.
+  // Note the exit condition: it keeps deleting until the cache holds the NEW
+  // value, and an empty key is explicitly not good enough. Returning on empty
+  // was the bug — the delete lands, the key reads empty, and the in-flight
+  // request writes the old row back a moment later.
+  for (let attempt = 0; attempt < 12; attempt++) {
+    if (!redisCli(['DEL', `staff_lookup:${uid}`])) return; // no redis — TTL will do it
+    await new Promise((r) => setTimeout(r, 200));
+    const cached = redisCli(['GET', `staff_lookup:${uid}`]) ?? '';
+    if (cached.includes(`"${column}":${value}`)) return;
+  }
 }
 
+/**
+ * redis-cli through the compose stack, rather than a redis client: apps/web has
+ * no redis dependency and docker compose is already a hard prerequisite of these
+ * live specs. Returns null when redis is unreachable.
+ */
+function redisCli(args: string[]): string | null {
+  try {
+    return execFileSync('docker', ['compose', 'exec', '-T', 'redis', 'redis-cli', ...args], {
+      cwd: join(__dirname, '..', '..', '..', '..'),
+      encoding: 'utf8',
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Local, deliberately: this spec asserts the login flow itself, so it must NOT
+ * use the shared helper's post-login barrier — several of its cases expect to
+ * STAY on /login (invalid password, deactivated account).
+ *
+ * `#password`, not getByLabel('Password'): the redesigned form also carries a
+ * "Forgot password?" control, so the accessible name matches two elements and
+ * Playwright's strict mode throws before the field is ever filled.
+ */
 async function login(page: Page, email: string, password: string) {
   await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(password);
-  await page.getByRole('button', { name: 'Sign In' }).click();
+  // typeInto, not fill(): fill() leaves these React-controlled inputs empty in
+  // webkit (see the helper), so the form submitted blank and all four cases
+  // failed on the wrong thing.
+  await typeInto(page.getByLabel('Email'), email);
+  await typeInto(page.locator('#password'), password);
+  await page.getByRole('button', { name: /Sign in/i }).click();
 }
 
 test.describe('login (live auth flow)', () => {
@@ -64,19 +135,46 @@ test.describe('login (live auth flow)', () => {
     await expect(page).toHaveURL(/\/login/);
   });
 
-  test('deactivated account → ACCOUNT_DEACTIVATED message', async ({ page }) => {
-    await setActive(MEMBER_EMAIL, false);
+  test('deactivated account → ACCOUNT_DEACTIVATED message', async ({ page, browserName }) => {
+    // One engine only. This case and the MFA one below mutate a staff row that
+    // the whole suite shares, so running them once per project means two passes
+    // toggling the same account and racing each other's cache invalidation —
+    // whichever runs second sees the other's state. Neither asserts anything
+    // engine-specific: the subject is API routing and one message.
+    test.skip(browserName !== 'chromium', 'mutates shared staff state — run once');
+    await setStaffFlag(MEMBER_EMAIL, 'active', false);
     try {
       await login(page, MEMBER_EMAIL, MEMBER_PASSWORD);
       await expect(page.getByText('Account deactivated. Contact your admin.')).toBeVisible();
       await expect(page).toHaveURL(/\/login/);
     } finally {
-      await setActive(MEMBER_EMAIL, true);
+      // Close the page BEFORE restoring. The login attempt leaves requests in
+      // flight, and one that read active=false can write it back into the
+      // staff_lookup cache after the restore deleted the key — re-poisoning it
+      // for the full 5-minute TTL and handing every later spec that signs in as
+      // this shared member an "Account deactivated" screen. No page, no new
+      // requests; the settle covers whatever was already on the wire.
+      await page.close();
+      await new Promise((r) => setTimeout(r, 250));
+      await setStaffFlag(MEMBER_EMAIL, 'active', true);
     }
   });
 
-  test('admin without MFA → redirects to /mfa-setup', async ({ page }) => {
-    await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    await expect(page).toHaveURL(/\/mfa-setup$/);
+  test('admin without MFA → redirects to /mfa-setup', async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'mutates shared staff state — run once');
+    // The test creates its own precondition instead of assuming it. The seeded
+    // admin enrolled in MFA at some point, so this spec's "an admin WITHOUT MFA"
+    // premise quietly stopped holding and the case failed on a stale fixture
+    // rather than on the routing it exists to check.
+    await setStaffFlag(ADMIN_EMAIL, 'mfa_enrolled', false);
+    try {
+      await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+      await expect(page).toHaveURL(/\/mfa-setup$/);
+    } finally {
+      // Same reason as the deactivation case above — close first, then restore.
+      await page.close();
+      await new Promise((r) => setTimeout(r, 250));
+      await setStaffFlag(ADMIN_EMAIL, 'mfa_enrolled', true);
+    }
   });
 });

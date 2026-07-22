@@ -1,4 +1,37 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { defineConfig, devices } from '@playwright/test';
+
+/**
+ * Load apps/web/.env.e2e (gitignored) so the live specs get their credentials
+ * without the caller having to export anything.
+ *
+ * Deliberately NOT `set -a; . ./.env.e2e` in a shell: these values are unquoted,
+ * and a password containing `$` gets partially expanded by the shell — a real
+ * password silently arrives truncated at the `$`, and the failure looks like a
+ * broken login flow rather than a broken loader. Read the file literally instead.
+ * Hand-parsed rather than adding a dotenv dependency for six lines.
+ */
+function loadE2eEnv(): void {
+  let raw: string;
+  try {
+    raw = readFileSync(join(__dirname, '.env.e2e'), 'utf8');
+  } catch {
+    return; // absent is fine — the live specs self-skip.
+  }
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const eq = t.indexOf('=');
+    if (eq === -1) continue;
+    const key = t.slice(0, eq).trim();
+    // Strip one layer of wrapping quotes if present; otherwise take it verbatim.
+    const value = t.slice(eq + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
+    if (!(key in process.env)) process.env[key] = value; // a real env var still wins
+  }
+}
+loadE2eEnv();
 
 /**
  * Playwright config for the web app's E2E suite (apps/web/tests).
@@ -11,7 +44,15 @@ import { defineConfig, devices } from '@playwright/test';
  *    so the suite stays green until that infra is wired.
  *
  * Run:  pnpm --filter @skaly/web exec playwright test
- * (Browsers: `npx playwright install chromium` once.)
+ * (Browsers: `npx playwright install chromium webkit` once.)
+ *
+ * THE API MUST HAVE ITS RATE LIMIT LIFTED for a full-suite run. The global cap
+ * is 150 req/min keyed by IP (API-Contract §2); a whole suite is ~50 sign-ins
+ * plus grid fetches from one address, so specs late in the run get 429 where
+ * they assert 403 — rate-limited rather than tested. Start the API with:
+ *   PORT=3002 RATE_LIMIT_MAX=1000000 pnpm --filter @skaly/api dev
+ * and point both the app and the specs at it:
+ *   NEXT_PUBLIC_API_URL=http://localhost:3002
  */
 export default defineConfig({
   testDir: './tests',
@@ -19,6 +60,19 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
+  /**
+   * One worker. fullyParallel:false only serialises tests WITHIN a file — files
+   * still run concurrently, and the default here was 4 workers.
+   *
+   * These are live specs against one database and one set of shared accounts.
+   * With parallel files, login.spec's deactivation case (which flips
+   * staff.active and restores it) overlapped attendance's team_member case,
+   * which then signed in during the deactivated window and failed. Same story
+   * for anything else touching shared rows. Every "passes alone, fails in the
+   * suite" symptom in this suite traced back to here, and each one previously
+   * got explained away as flakiness.
+   */
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: 'list',
@@ -33,5 +87,9 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Sprint 7 close-out asks for webkit too. Install once: `playwright install webkit`.
+    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+  ],
 });

@@ -8,7 +8,23 @@ import { AssigneeStack, StatusChip } from './task-chips';
 
 import type { Task } from './types';
 
+import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
+
 export type SaveState = 'saving' | 'saved' | 'error' | undefined;
+
+/**
+ * Whether this cell's column is the highlighted one, read straight from the store.
+ *
+ * Deliberately NOT an `active` prop threaded down from the grid: that put
+ * `activeColumnId` in the column-definition memo, so focusing a cell rebuilt
+ * every column and TanStack Table remounted the grid — between the focus event
+ * and the click. The click then landed on a detached element, StatusCell's local
+ * `open` state died with the old component, and the dropdown never appeared.
+ * The grid's first click did nothing, every time.
+ */
+function useColumnActive(columnId: string): boolean {
+  return useColumnHighlightStore((s) => s.activeColumnId === columnId);
+}
 
 const goldGlow = { boxShadow: '0 0 0 2px var(--accent-gold)', borderRadius: 9999 } as const;
 
@@ -17,7 +33,7 @@ const goldGlow = { boxShadow: '0 0 0 2px var(--accent-gold)', borderRadius: 9999
 export function StatusCell({
   task,
   editable,
-  active,
+  columnId,
   shaking,
   onChange,
   onFocusColumn,
@@ -25,13 +41,14 @@ export function StatusCell({
 }: {
   task: Task;
   editable: boolean;
-  active: boolean;
+  columnId: string;
   shaking: boolean;
   onChange: (status: string) => void;
   onFocusColumn: () => void;
   onBlurColumn: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const active = useColumnActive(columnId);
   if (!editable) return <StatusChip status={task.status} />;
 
   return (
@@ -86,7 +103,7 @@ export function StatusCell({
 export function AssigneeCell({
   task,
   editable,
-  active,
+  columnId,
   staff,
   onAdd,
   onRemove,
@@ -95,7 +112,7 @@ export function AssigneeCell({
 }: {
   task: Task;
   editable: boolean;
-  active: boolean;
+  columnId: string;
   staff: { id: string; name: string }[];
   onAdd: (staffId: string) => void;
   onRemove: (staffId: string) => void;
@@ -103,6 +120,7 @@ export function AssigneeCell({
   onBlurColumn: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const active = useColumnActive(columnId);
   if (!editable) return <AssigneeStack assignees={task.assignees} />;
 
   const assigned = new Set(task.assignees.map((a) => a.id));
@@ -151,7 +169,7 @@ export function ResultEditor({
   task,
   editable,
   saveState,
-  active,
+  columnId,
   onSave,
   onFocusColumn,
   onBlurColumn,
@@ -159,12 +177,13 @@ export function ResultEditor({
   task: Task;
   editable: boolean;
   saveState: SaveState;
-  active: boolean;
+  columnId: string;
   onSave: (result: string) => void;
   onFocusColumn: () => void;
   onBlurColumn: () => void;
 }) {
   const [val, setVal] = useState(task.result ?? '');
+  const active = useColumnActive(columnId);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => setVal(task.result ?? ''), [task.result]);
 

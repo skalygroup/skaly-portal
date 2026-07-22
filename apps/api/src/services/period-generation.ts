@@ -75,6 +75,59 @@ export async function generateShootSlotsForClient(
   return inserted.length;
 }
 
+/**
+ * One content_pipelines row for ONE client — all stage timestamps NULL,
+ * coming_shoot_source NULL, version 1 (status is derived on read). Idempotent
+ * via ON CONFLICT (period, client_id). Returns rows actually inserted.
+ */
+export async function generatePipelineRowForClient(
+  clientId: string,
+  period: string,
+  trx: Transaction<DB>,
+): Promise<number> {
+  const inserted = await trx
+    .insertInto('content_pipelines')
+    .values({ period, client_id: clientId, version: 1 })
+    .onConflict((oc) => oc.columns(['period', 'client_id']).doNothing())
+    .returning('id')
+    .execute();
+  return inserted.length;
+}
+
+/**
+ * content_calendar cells for ONE client — one per calendar day of `period`,
+ * status 'No Activity', source NULL, version 1. The day count comes from
+ * datesInPeriod (28/29/30/31, never hardcoded). Idempotent via
+ * ON CONFLICT (period, client_id, date). Returns rows actually inserted.
+ *
+ * FULL MONTH, deliberately — not "from today", the way Sprint 3's attendance
+ * backfill works. An attendance row asserts a person's working day, so
+ * generating one before their start date would state something false; a
+ * 'No Activity' calendar cell for a pre-join day is simply true. It also matches
+ * Sprint 5's shoot slots (all slot_index 1..N regardless of join date) and keeps
+ * the frontend's `clientId:date` Map hole-free, which the grid render depends on.
+ */
+export async function generateCalendarCellsForClient(
+  clientId: string,
+  period: string,
+  trx: Transaction<DB>,
+): Promise<number> {
+  const rows = datesInPeriod(period).map((date) => ({
+    period,
+    client_id: clientId,
+    date,
+    status: 'No Activity',
+    version: 1,
+  }));
+  const inserted = await trx
+    .insertInto('content_calendar')
+    .values(rows)
+    .onConflict((oc) => oc.columns(['period', 'client_id', 'date']).doNothing())
+    .returning('id')
+    .execute();
+  return inserted.length;
+}
+
 export async function generatePeriodRows(period: string, trx: Transaction<DB>): Promise<void> {
   const dates = datesInPeriod(period);
 
@@ -115,26 +168,47 @@ export async function generatePeriodRows(period: string, trx: Transaction<DB>): 
 
   if (clients.length === 0) return;
 
-  // content_pipelines — one per client, mostly nulls (status is derived on read).
-  await trx
-    .insertInto('content_pipelines')
-    .values(clients.map((c) => ({ period, client_id: c.id, version: 1 })))
-    .onConflict((oc) => oc.columns(['period', 'client_id']).doNothing())
-    .execute();
-
-  // shoot_schedules — slot_index 1..shoot_slots_per_month, via the shared
-  // per-client generator (also used by the mid-month backfill + adjustSlotCount).
+  // pipeline / shoot / calendar all go through the shared per-client generators,
+  // which the mid-month backfill also calls — one definition of "what a client's
+  // rows are for a period", so the seed, the rollover and the backfill can't drift.
   for (const c of clients) {
+    await generatePipelineRowForClient(c.id, period, trx);
     await generateShootSlotsForClient(c, period, trx);
+    await generateCalendarCellsForClient(c.id, period, trx);
+  }
+}
+
+/**
+ * Mid-month backfill for ONE client: shoot slots + pipeline row + calendar cells
+ * for `period`, in the CALLER's transaction so it commits atomically with the
+ * client insert. Idempotent, and a no-op (returns zeroes) for an inactive or
+ * internal client — the same guard ShootPlannerService.backfillClientSlots
+ * applies, evaluated once here instead of three times.
+ *
+ * This closes the Sprint 5/6 carried debt: without the calendar cells, a client
+ * created mid-period is invisible to Trigger 2 — marking its pipeline Posted
+ * hits ContentCalendarService.applyPostedTrigger's missing-cell no-op and the
+ * post is silently never recorded on the calendar.
+ */
+export async function backfillClientPeriodRows(
+  clientId: string,
+  period: string,
+  trx: Transaction<DB>,
+): Promise<{ slots: number; pipelines: number; cells: number }> {
+  const client = await trx
+    .selectFrom('clients')
+    .select(['id', 'shoot_slots_per_month', 'pieces_per_visit', 'active', 'is_internal'])
+    .where('id', '=', clientId)
+    .where('deleted_at', 'is', null)
+    .executeTakeFirst();
+
+  if (!client || !client.active || client.is_internal) {
+    return { slots: 0, pipelines: 0, cells: 0 };
   }
 
-  // content_calendar — one per client × each date.
-  const calendarRows = clients.flatMap((c) =>
-    dates.map((date) => ({ period, client_id: c.id, date, status: 'No Activity', version: 1 })),
-  );
-  await trx
-    .insertInto('content_calendar')
-    .values(calendarRows)
-    .onConflict((oc) => oc.columns(['period', 'client_id', 'date']).doNothing())
-    .execute();
+  return {
+    slots: await generateShootSlotsForClient(client, period, trx),
+    pipelines: await generatePipelineRowForClient(clientId, period, trx),
+    cells: await generateCalendarCellsForClient(clientId, period, trx),
+  };
 }

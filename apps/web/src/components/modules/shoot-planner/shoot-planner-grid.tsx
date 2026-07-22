@@ -8,7 +8,7 @@ import {
   useReactTable,
 } from '@tanstack/react-table';
 import { format, getWeekOfMonth, parseISO } from 'date-fns';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 
 import { applyPatchToSlots, replaceSlot, type SlotPatch } from './slot-actions';
@@ -45,6 +45,37 @@ const columnHelper = createColumnHelper<GridRow>();
  * assigned freelancer, with the week-of-month tag computed at render from
  * slot_date (date-fns — never stored; there is no week_number column).
  */
+/**
+ * The gold column tint, subscribing to the highlight store itself.
+ *
+ * Deliberately a component rather than `activeColumnId === colId` inline in the
+ * cell renderer: reading the store in the grid put activeColumnId in the
+ * column-definition memo, so focusing a cell rebuilt every column and TanStack
+ * Table remounted the grid — between the browser's focus event and its click
+ * event. The click landed on a detached node and never reached a handler, which
+ * is why the grid's first click did nothing. Subscribing here also limits the
+ * re-render to the column that actually changed.
+ */
+function ColumnHighlight({ columnId, children }: { columnId: string; children: ReactNode }) {
+  const active = useColumnHighlightStore((s) => s.activeColumnId === columnId);
+  return (
+    <div
+      className="relative"
+      style={
+        active
+          ? {
+              background: 'var(--accent-gold-dim)',
+              borderLeft: '1px solid var(--accent-gold-border)',
+              borderRight: '1px solid var(--accent-gold-border)',
+            }
+          : undefined
+      }
+    >
+      {children}
+    </div>
+  );
+}
+
 function SlotCellContent({ slot, readOnly }: { slot: Slot; readOnly: boolean }) {
   if (slot.slotStatus === 'Unset') {
     return (
@@ -151,7 +182,7 @@ export function ShootPlannerGrid() {
   const [errorSlotIds, setErrorSlotIds] = useState<Set<string>>(new Set());
 
   // ── Gold column highlight, keyed by slot_index (UIUX §4.4) ─────────────────
-  const activeColumnId = useColumnHighlightStore((s) => s.activeColumnId);
+  // activeColumnId is NOT read here — see ColumnHighlight.
   const focusedColumnRef = useRef<string | null>(null);
   const focusHandlers = useCallback((col: string) => {
     const store = useColumnHighlightStore;
@@ -219,6 +250,7 @@ export function ShootPlannerGrid() {
       failColumn(`slot-${vars.slot.slotIndex}`, vars.slot.id);
     },
   });
+  const { mutate: patchSlot, isPending: patchPending } = patchMutation;
 
   // ── Reset mutation (⋯ → dialog → POST reset { confirm: true }) ─────────────
   const resetMutation = useMutation({
@@ -293,23 +325,11 @@ export function ShootPlannerGrid() {
           // Within range but no row — a freelancer's non-owned slot (ADR-011).
           if (!slot) return <div className="min-h-11" />;
 
-          const columnActive = activeColumnId === colId;
           const hasError = errorSlotIds.has(slot.id);
           const editable = canEdit;
 
           return (
-            <div
-              className="relative"
-              style={
-                columnActive
-                  ? {
-                      background: 'var(--accent-gold-dim)',
-                      borderLeft: '1px solid var(--accent-gold-border)',
-                      borderRight: '1px solid var(--accent-gold-border)',
-                    }
-                  : undefined
-              }
-            >
+            <ColumnHighlight columnId={colId}>
               {editable ? (
                 <button
                   type="button"
@@ -379,13 +399,13 @@ export function ShootPlannerGrid() {
                   period={period}
                   piecesDefault={client.piecesPerVisit}
                   freelancers={freelancers}
-                  busy={patchMutation.isPending}
+                  busy={patchPending}
                   columnFocus={focusHandlers(colId)}
-                  onPatch={(patch) => patchMutation.mutate({ slot, patch })}
+                  onPatch={(patch) => patchSlot({ slot, patch })}
                   onClose={() => setOpenSlotId(null)}
                 />
               ) : null}
-            </div>
+            </ColumnHighlight>
           );
         },
       });
@@ -416,13 +436,18 @@ export function ShootPlannerGrid() {
     slotColumnCount,
     slotMap,
     canEdit,
-    activeColumnId,
     errorSlotIds,
     openSlotId,
     menuSlotId,
     period,
     freelancers,
-    patchMutation,
+    // .mutate + .isPending, never the mutation object: useMutation hands back a
+    // NEW result object every render, so `patchMutation` in this list rebuilt the
+    // column defs on every single render. TanStack Table then remounts every
+    // cell, which discards the state cells hold locally — the grid's first click
+    // vanished because the cell it hit had already been replaced.
+    patchSlot,
+    patchPending,
     focusHandlers,
   ]);
 

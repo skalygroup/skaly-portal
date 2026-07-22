@@ -27,10 +27,10 @@
 import { sql, type Kysely, type Updateable } from 'kysely';
 
 import { AuditService } from './AuditService.js';
-import { assertPeriodNotLocked, optimisticUpdate, type Executor } from './BaseService.js';
-import { currentIstDate } from './BaseService.js';
+import { assertPeriodNotLocked, currentIstDate, optimisticUpdate, type Executor } from './BaseService.js';
 import { AppError } from '../lib/errors.js';
 import { eventBus } from '../lib/EventBus.js';
+import { broadcastToOrg } from '../sockets/index.js';
 
 import type { CurrentUser } from './AttendanceService.js';
 import type { DB } from '@skaly/shared';
@@ -235,10 +235,14 @@ export class ContentDropperService {
     });
 
     // ── After COMMIT — Trigger 2 (H-02): server-computed IST CURRENT_DATE, no
-    // posted_date column, no socket broadcast (Sprint 7's listener owns that).
+    // posted_date column. The content-calendar:updated broadcast belongs to
+    // Sprint 7's listener, not here — this only announces the dropper's own grid.
     if (stage === 'posted') {
       eventBus.emit('pipeline:posted', { clientId, period, postedAt: currentIstDate() });
     }
+
+    // API-Contract §6. Forward-wiring for Sprint 10 — no consumer yet (ADR-010).
+    broadcastToOrg('content-dropper:updated', { clientId, period });
 
     return this.getRow(id, db);
   }

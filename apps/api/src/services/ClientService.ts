@@ -2,15 +2,18 @@
  * ClientService — read side (07-API-CONTRACT §clients). Every SELECT goes
  * through softDeletable so soft-deleted clients never surface (audit H-02).
  *
- * TODO(client-create): when POST /v1/clients / reactivate is built, the same
- * transaction must call ShootPlannerService.backfillClientSlots(clientId,
- * getCurrentPeriod().period, trx) for active non-internal clients.
- * TODO(Sprint 6/7): backfill pipeline + calendar rows for a mid-month client
- * in the same place.
+ * TODO(client-create): POST /v1/clients and the reactivate flow do not exist
+ * yet. When they are built, the insert transaction must call
+ * `backfillClientPeriodRows(clientId, (await getCurrentPeriod(trx)).period, trx)`
+ * — one call, already written and tested (period-generation.ts), which covers
+ * all three row sets (shoot slots + pipeline row + calendar cells) and no-ops
+ * for inactive/internal clients. Sprint 7 closed the generator half of the
+ * carried Sprint 5/6 debt; only this call site remains.
  */
 import { AuditService } from './AuditService.js';
 import { AppError } from '../lib/errors.js';
 import { softDeletable } from '../lib/queries.js';
+import { broadcastToOrg } from '../sockets/index.js';
 
 import type { CurrentUser } from './AttendanceService.js';
 import type { Executor } from './BaseService.js';
@@ -64,7 +67,7 @@ export class ClientService {
    * (04-APPFLOW §7). Returns the updated client.
    */
   async rename(id: string, name: string, currentUser: CurrentUser, db: Kysely<DB>): Promise<ClientListItem> {
-    return db.transaction().execute(async (trx) => {
+    const updated = await db.transaction().execute(async (trx) => {
       const before = await softDeletable(trx.selectFrom('clients').selectAll())
         .where('id', '=', id)
         .executeTakeFirst();
@@ -91,5 +94,11 @@ export class ClientService {
 
       return clientToDTO(updated);
     });
+
+    // After COMMIT — API-Contract §6. Forward-wiring for Sprint 10, which
+    // invalidates every clientId-keyed query so a rename propagates across modules.
+    broadcastToOrg('client:name_updated', { clientId: id, name });
+
+    return updated;
   }
 }

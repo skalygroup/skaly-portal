@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
+import { login } from './helpers/auth';
+
 /**
  * E2E smoke: Work Allocation / tasks (Sprint 4 STEP 8). Smoke depth only.
  *
@@ -74,12 +76,8 @@ async function cleanup() {
   });
 }
 
-async function login(page: Page, email: string, password: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.locator('#password').fill(password);
-  await page.getByRole('button', { name: /Sign in/i }).click();
-}
+// login() + captureApiToken() come from tests/helpers/auth — see the barrier
+// note there; the local copies omitted it and raced every grid fetch.
 
 /** The Bearer token the browser sends — captured from the first /v1 API call. */
 async function captureApiToken(page: Page): Promise<string> {
@@ -122,7 +120,9 @@ test.describe('tasks — live smoke', () => {
 
     const row = page.getByRole('row').filter({ hasText: desc });
     await expect(row).toBeVisible();
-    await expect(row.getByLabel(/assignee/i)).toBeVisible(); // avatar stack rendered
+    // /\d+ assignee/, not /assignee/i: the latter also matches the "Edit
+    // assignees" button in the same cell, and two matches is a strict-mode throw.
+    await expect(row.getByLabel(/\d+ assignee/i)).toBeVisible(); // avatar stack rendered
 
     await setStatus(page, desc, 'To Do', 'In Progress');
     await expect(row.getByRole('button', { name: 'In Progress', exact: true })).toBeVisible();
