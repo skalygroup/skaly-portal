@@ -1,3 +1,6 @@
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+
 import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
@@ -28,13 +31,43 @@ const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD ?? '';
 // (so the suite stays green) rather than failing on missing infra.
 const FLOW_ENABLED = Boolean(MEMBER_PASSWORD && ADMIN_PASSWORD && process.env.DATABASE_URL);
 
+/**
+ * Flip staff.active AND drop the API's cached staff lookup.
+ *
+ * The auth plugin caches the staff row in Redis under `staff_lookup:{uid}` for 5
+ * minutes, so a raw UPDATE is invisible in BOTH directions: the deactivated user
+ * still logs in, and — worse — the restore at the end of this test stays unseen,
+ * so every later spec that signs in as this member gets "Account deactivated"
+ * for up to five minutes. That is what makes a failure here cascade into
+ * attendance, tasks, content-dropper and content-calendar.
+ *
+ * The product invalidates this key itself on the paths that own it (approval,
+ * deactivation); this fixture writes SQL directly, so it must do the same.
+ */
 async function setActive(email: string, active: boolean) {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
+  let uid: string | null = null;
   try {
-    await client.query('UPDATE staff SET active = $1 WHERE email = $2', [active, email]);
+    const res = await client.query<{ supabase_uid: string | null }>(
+      'UPDATE staff SET active = $1 WHERE email = $2 RETURNING supabase_uid',
+      [active, email],
+    );
+    uid = res.rows[0]?.supabase_uid ?? null;
   } finally {
     await client.end();
+  }
+  if (!uid) return;
+  // Via the compose stack's redis-cli rather than a redis client: apps/web has no
+  // redis dependency, and docker compose is already a hard prerequisite of these
+  // live specs. Non-fatal — a missed delete degrades to the old 5-minute staleness.
+  try {
+    execFileSync('docker', ['compose', 'exec', '-T', 'redis', 'redis-cli', 'DEL', `staff_lookup:${uid}`], {
+      cwd: join(__dirname, '..', '..', '..', '..'),
+      stdio: 'ignore',
+    });
+  } catch {
+    /* redis unreachable — the TTL will clear it eventually */
   }
 }
 

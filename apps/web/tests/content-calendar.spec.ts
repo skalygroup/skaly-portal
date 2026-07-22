@@ -38,6 +38,16 @@ const ist = (opts: Intl.DateTimeFormatOptions) =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', ...opts }).format(new Date());
 const PERIOD = ist({ year: 'numeric', month: '2-digit' });
 const TODAY = ist({ year: 'numeric', month: '2-digit', day: '2-digit' });
+/**
+ * A day that is NOT today, for the tests that only need *an* editable cell.
+ *
+ * Trigger 2 always writes the cell for `postedAt` — today. A plain edit test
+ * aimed at today's cell therefore races the trigger fired by the round-trip test
+ * (and by the Sprint 6 dropper spec) over the same row: the grid loads version N,
+ * the trigger bumps it to N+1, and the edit correctly 409s. That is the product
+ * working, so the fix is to stop contending for the cell, not to weaken the test.
+ */
+const EDIT_DATE = TODAY.endsWith('-01') ? `${PERIOD}-02` : `${PERIOD}-01`;
 
 async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
@@ -134,7 +144,10 @@ test.describe('Content Calendar', () => {
 
   const touched = new Set<string>();
   test.afterEach(async () => {
-    for (const id of touched) await resetCell(id);
+    for (const id of touched) {
+      await resetCell(id);
+      await resetCell(id, EDIT_DATE);
+    }
     touched.clear();
   });
 
@@ -144,10 +157,10 @@ test.describe('Content Calendar', () => {
     const [client] = await calendarClients(page, auth);
     touched.add(client!.id);
 
-    const cell = page.getByTestId(`calendar-cell-${client!.id}-${TODAY}`);
+    const cell = page.getByTestId(`calendar-cell-${client!.id}-${EDIT_DATE}`);
     await cell.click();
 
-    const popover = page.getByTestId(`cell-popover-${client!.id}-${TODAY}`);
+    const popover = page.getByTestId(`cell-popover-${client!.id}-${EDIT_DATE}`);
     await expect(popover).toBeVisible();
     await popover.getByTestId('cell-status').selectOption('Ready');
 
@@ -159,7 +172,7 @@ test.describe('Content Calendar', () => {
 
     // And it really persisted (not just an un-reverted optimistic write).
     const row = await withDb((c) =>
-      c.query(`SELECT status, source FROM content_calendar WHERE client_id=$1 AND date=$2`, [client!.id, TODAY]),
+      c.query(`SELECT status, source FROM content_calendar WHERE client_id=$1 AND date=$2`, [client!.id, EDIT_DATE]),
     );
     expect(row.rows[0]).toMatchObject({ status: 'Ready', source: 'manual' });
   });
