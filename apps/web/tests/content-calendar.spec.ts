@@ -166,6 +166,13 @@ test.describe('Content Calendar', () => {
 
   test('gold overlay: visible on open, hidden on close, and hidden when its column scrolls out', async ({ page }) => {
     await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    // A narrow viewport so column 0 can actually LEAVE the virtual window. At the
+    // default 1280px the seeded 16 columns all sit inside the window + overscan,
+    // so scrolling to the end hides nothing and the assertion silently measured
+    // the fixture size instead of the overlay. 800px is the narrowest that still
+    // clears the portal layout's md breakpoint (below it the shell renders a
+    // "desktop only" panel and there is no grid at all).
+    await page.setViewportSize({ width: 800, height: 800 });
     const auth = await gotoCalendar(page);
     const [client] = await calendarClients(page, auth);
     touched.add(client!.id);
@@ -366,5 +373,87 @@ test.describe('Content Calendar', () => {
     );
     if (metrics.fcpMs !== null) expect(metrics.fcpMs).toBeLessThan(1500);
     if (metrics.domInteractiveMs !== null) expect(metrics.domInteractiveMs).toBeLessThan(2000);
+  });
+
+  test('NFR §1.4: horizontal scroll holds 60fps with no long tasks', async ({ page }) => {
+    await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await page.goto(`/content-calendar?period=${PERIOD}`);
+    const grid = page.getByRole('grid');
+    await expect(grid).toBeVisible();
+    const clients = Number(await grid.getAttribute('aria-colcount')) - 1;
+    test.skip(
+      clients < 20,
+      `Only ${clients} clients. Seed first: pnpm --filter @skaly/api exec tsx scripts/seed-perf-clients.ts 40`,
+    );
+
+    // Record frame deltas + long tasks across a REAL wheel scroll. Assigning
+    // scrollLeft would skip the compositor path entirely and measure nothing.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __frames: number[];
+        __long: { start: number; duration: number }[];
+        __rec: boolean;
+      };
+      w.__frames = [];
+      w.__long = [];
+      new PerformanceObserver((l) =>
+        w.__long.push(...l.getEntries().map((e) => ({ start: e.startTime, duration: e.duration }))),
+      ).observe({ entryTypes: ['longtask'] });
+      let last = performance.now();
+      w.__rec = true;
+      const tick = (t: number) => {
+        w.__frames.push(t - last);
+        last = t;
+        if (w.__rec) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+
+    // Aim at a point inside BOTH the scroller and the viewport. The grid element
+    // itself is ~3700×1500px, so its centre lands off-screen and the wheel events
+    // hit nothing — which reports a flawless 60fps for a page that never moved.
+    const point = await page.evaluate(() => {
+      const r = document.querySelector('[role="grid"]')!.parentElement!.getBoundingClientRect();
+      return {
+        x: r.left + Math.min(r.width, window.innerWidth - r.left) / 2,
+        y: r.top + Math.min(r.height, window.innerHeight - r.top) / 2,
+      };
+    });
+    await page.mouse.move(point.x, point.y);
+    // Everything before this instant is load tail (hydration, the first virtualiser
+    // measure). NFR §1.4 is about the SCROLL, so only long tasks after it count.
+    const scrollStart = await page.evaluate(() => performance.now());
+    for (let i = 0; i < 40; i++) {
+      await page.mouse.wheel(150, 0);
+      await page.waitForTimeout(16);
+    }
+
+    const fps = await page.evaluate((since: number) => {
+      const w = window as unknown as {
+        __frames: number[];
+        __long: { start: number; duration: number }[];
+        __rec: boolean;
+      };
+      w.__rec = false;
+      const f = w.__frames.slice(1).sort((a, b) => a - b);
+      return {
+        // Without this, an idle page that never scrolled reports a perfect 60fps.
+        scrolledPx: document.querySelector('[role="grid"]')!.parentElement!.scrollLeft,
+        frames: f.length,
+        medianMs: f[Math.floor(f.length / 2)],
+        p95Ms: f[Math.floor(f.length * 0.95)],
+        longTasksOver50ms: w.__long.filter((t) => t.duration > 50 && t.start >= since),
+        longTasksBeforeScroll: w.__long.filter((t) => t.duration > 50 && t.start < since).length,
+      };
+    }, scrollStart);
+
+    console.log('[calendar scroll]', JSON.stringify(fps));
+    expect(fps.frames, 'no frames recorded — the scroll never ran').toBeGreaterThan(30);
+    expect(fps.scrolledPx, 'the wheel did not move the grid — fps below is meaningless').toBeGreaterThan(500);
+    // 60fps is a 16.7ms budget. The median must sit on it; p95 gets one dropped
+    // frame of slack (33ms) because a GC pause is not a virtualisation problem.
+    expect(fps.medianMs).toBeLessThan(20);
+    expect(fps.p95Ms).toBeLessThan(34);
+    expect(fps.longTasksOver50ms).toEqual([]);
   });
 });
