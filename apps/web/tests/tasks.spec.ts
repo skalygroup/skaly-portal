@@ -120,7 +120,9 @@ test.describe('tasks — live smoke', () => {
 
     const row = page.getByRole('row').filter({ hasText: desc });
     await expect(row).toBeVisible();
-    await expect(row.getByLabel(/assignee/i)).toBeVisible(); // avatar stack rendered
+    // /\d+ assignee/, not /assignee/i: the latter also matches the "Edit
+    // assignees" button in the same cell, and two matches is a strict-mode throw.
+    await expect(row.getByLabel(/\d+ assignee/i)).toBeVisible(); // avatar stack rendered
 
     await setStatus(page, desc, 'To Do', 'In Progress');
     await expect(row.getByRole('button', { name: 'In Progress', exact: true })).toBeVisible();

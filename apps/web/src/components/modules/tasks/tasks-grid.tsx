@@ -28,7 +28,6 @@ const columnHelper = createColumnHelper<Task>();
 /** The edit surface threaded down to the cells (Step 7). */
 interface EditApi {
   staff: { id: string; name: string }[];
-  activeColumnId: string | null;
   saveStates: Record<string, SaveState>;
   shakeIds: Set<string>;
   canEditStatusResult: (t: Task) => boolean;
@@ -88,7 +87,6 @@ export function TasksGrid() {
   const [shakeIds, setShakeIds] = useState<Set<string>>(new Set());
   const setSave = useCallback((id: string, s: SaveState) => setSaveStates((p) => ({ ...p, [id]: s })), []);
 
-  const activeColumnId = useColumnHighlightStore((s) => s.activeColumnId);
   const focusedColumnRef = useRef<string | null>(null);
   const focusHandlers = useCallback((col: string) => {
     const store = useColumnHighlightStore;
@@ -203,22 +201,38 @@ export function TasksGrid() {
     [locked, me],
   );
 
+  const { mutate: setStatus } = statusMutation;
+  const { mutate: saveResult } = resultMutation;
+  const { mutate: assign } = assignMutation;
+
   const edit: EditApi = useMemo(
     () => ({
       staff,
-      activeColumnId,
       saveStates,
       shakeIds,
       canEditStatusResult,
       canEditAssignees: isManager && !locked,
-      onStatus: (task, status) => statusMutation.mutate({ task, status }),
-      onResultSave: (task, result) => resultMutation.mutate({ task, result }),
-      onAssignAdd: (task, staffId) => assignMutation.mutate({ task, staffId, add: true }),
-      onAssignRemove: (task, staffId) => assignMutation.mutate({ task, staffId, add: false }),
+      onStatus: (task, status) => setStatus({ task, status }),
+      onResultSave: (task, result) => saveResult({ task, result }),
+      onAssignAdd: (task, staffId) => assign({ task, staffId, add: true }),
+      onAssignRemove: (task, staffId) => assign({ task, staffId, add: false }),
       onOpenAttachments: (task) => setAttachTaskId(task.id),
       focusHandlers,
     }),
-    [staff, activeColumnId, saveStates, shakeIds, canEditStatusResult, isManager, locked, statusMutation, resultMutation, assignMutation, focusHandlers],
+    // Two things are deliberately absent here.
+    //
+    // activeColumnId: the cells subscribe to the highlight store themselves.
+    // Listing it rebuilt `edit`, and the column defs closing over it, the moment
+    // a cell took focus — so TanStack Table remounted every cell BETWEEN the
+    // browser's focus event and its click event. StatusCell's `open` flag lives
+    // in the cell, so the click that opened the dropdown destroyed the component
+    // holding it open and the menu never appeared. The grid's first click did
+    // nothing, every time.
+    //
+    // The mutation objects: useMutation returns a NEW result object on every
+    // render, which had the same effect on every render rather than just on
+    // focus. `.mutate` is referentially stable, so the memo actually holds.
+    [staff, saveStates, shakeIds, canEditStatusResult, isManager, locked, setStatus, saveResult, assign, focusHandlers],
   );
 
   const groups = useMemo(() => {
@@ -336,7 +350,7 @@ function TaskGroupTable({ tasks, edit }: { tasks: Task[]; edit: EditApi }) {
             <AssigneeCell
               task={row.original}
               editable={edit.canEditAssignees}
-              active={edit.activeColumnId === 'assignees'}
+              columnId="assignees"
               staff={edit.staff}
               onAdd={(sid) => edit.onAssignAdd(row.original, sid)}
               onRemove={(sid) => edit.onAssignRemove(row.original, sid)}
@@ -355,7 +369,7 @@ function TaskGroupTable({ tasks, edit }: { tasks: Task[]; edit: EditApi }) {
             <StatusCell
               task={row.original}
               editable={edit.canEditStatusResult(row.original)}
-              active={edit.activeColumnId === 'status'}
+              columnId="status"
               shaking={edit.shakeIds.has(row.original.id)}
               onChange={(s) => edit.onStatus(row.original, s)}
               onFocusColumn={fh.onFocus}
@@ -462,7 +476,7 @@ function FragmentRow({ open, colCount, task, edit, onToggle, children }: { open:
                     <ResultEditor
                       task={task}
                       editable={edit.canEditStatusResult(task)}
-                      active={edit.activeColumnId === 'result'}
+                      columnId="result"
                       saveState={edit.saveStates[task.id]}
                       onSave={(r) => edit.onResultSave(task, r)}
                       onFocusColumn={fh.onFocus}

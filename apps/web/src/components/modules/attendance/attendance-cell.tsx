@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { WORK_LOG_MAX, type AttendanceLog } from './types';
 
+import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { cn } from '@/lib/utils';
 
 
@@ -24,7 +25,18 @@ interface AttendanceCellProps {
   saveState: SaveState;
   /** Name of the last editor when a 409 STALE_DATA hit this row (§5.1). */
   staleName: string | null;
-  columnActive: boolean;
+  /**
+   * This cell's column key (the staff id), NOT a resolved boolean.
+   *
+   * The cell subscribes to the highlight store itself. Passing `columnActive`
+   * down put `activeColumnId` in the grid's column-definition memo, so focusing
+   * a cell rebuilt every column and TanStack Table remounted the whole grid —
+   * between the browser's focus event and the click event. The click then landed
+   * on a detached button and no request was ever sent: the grid's first click
+   * did nothing, every time. Subscribing here also narrows the re-render to the
+   * one column that actually changed.
+   */
+  columnId: string;
   onFocus: () => void;
   onBlur: () => void;
   onTogglePresent: (log: AttendanceLog) => void;
@@ -47,7 +59,7 @@ export function AttendanceCell({
   expanded,
   saveState,
   staleName,
-  columnActive,
+  columnId,
   onFocus,
   onBlur,
   onTogglePresent,
@@ -71,6 +83,8 @@ export function AttendanceCell({
   useEffect(() => () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
   }, []);
+
+  const columnActive = useColumnHighlightStore((s) => s.activeColumnId === columnId) && !locked;
 
   const highlight = columnActive
     ? {

@@ -73,7 +73,6 @@ export function AttendanceGrid() {
   }, []);
 
   // ── Gold column highlight (Amendment 2 / UIUX §4.4) ───────────────────────
-  const activeColumnId = useColumnHighlightStore((s) => s.activeColumnId);
   const focusedColumnRef = useRef<string | null>(null);
   const focusHandlers = useCallback((staffId: string) => {
     const store = useColumnHighlightStore;
@@ -161,16 +160,24 @@ export function AttendanceGrid() {
     },
   });
 
+  // Depend on .mutate, never on the mutation object: useMutation returns a NEW
+  // result object on every render, so `[patchMutation]` makes these callbacks —
+  // and the column defs built from them — change every render. TanStack Table
+  // then treats each render as new columns, the cell components remount, and
+  // any state they hold locally is thrown away. That is why the grid's FIRST
+  // click did nothing: it landed on a cell that was replaced before it could
+  // act. `.mutate` is referentially stable, so the memo actually holds.
+  const patch = patchMutation.mutate;
   const togglePresent = useCallback(
-    (log: AttendanceLog) => patchMutation.mutate({ log, patch: { present: !log.present } }),
-    [patchMutation],
+    (log: AttendanceLog) => patch({ log, patch: { present: !log.present } }),
+    [patch],
   );
   const saveWorkLog = useCallback(
     (log: AttendanceLog, workLog: string) => {
       if (workLog === (log.workLog ?? '')) return; // nothing changed
-      patchMutation.mutate({ log, patch: { workLog } });
+      patch({ log, patch: { workLog } });
     },
-    [patchMutation],
+    [patch],
   );
   const refreshRow = useCallback(() => {
     setStaleNames({});
@@ -244,7 +251,7 @@ export function AttendanceGrid() {
               expanded={expandedCellId !== null && log?.id === expandedCellId}
               saveState={log ? saveStates[log.id] : undefined}
               staleName={log ? (staleNames[log.id] ?? null) : null}
-              columnActive={!locked && activeColumnId === staff.id}
+              columnId={staff.id}
               onFocus={handlers.onFocus}
               onBlur={handlers.onBlur}
               onTogglePresent={togglePresent}
@@ -290,7 +297,9 @@ export function AttendanceGrid() {
     expandedCellId,
     saveStates,
     staleNames,
-    activeColumnId,
+    // activeColumnId is deliberately NOT here — the cells subscribe to the
+    // highlight store themselves. Listing it rebuilt every column on focus,
+    // remounting the grid between focus and click and swallowing the click.
     presentTotals,
     focusHandlers,
     togglePresent,
