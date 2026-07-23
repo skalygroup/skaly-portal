@@ -87,22 +87,20 @@ function botModel(): string {
 }
 
 /** Keep the last `maxTurns` real user turns. A tool_result is role:'user' too, so
- *  only string-content user messages count as turns; slicing at a real user
- *  message keeps every tool exchange intact and a valid user-first history. */
+ *  only string-content user messages count as turns; slicing AT the oldest kept
+ *  user message keeps every tool exchange intact and a valid user-first history
+ *  (Anthropic requires the first message to be role:'user' — slicing after the
+ *  dropped turn would orphan its assistant reply and start with 'assistant'). */
 export function trimToTurns(messages: Anthropic.MessageParam[], maxTurns: number): Anthropic.MessageParam[] {
   let userTurns = 0;
-  let start = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m !== undefined && m.role === 'user' && typeof m.content === 'string') {
       userTurns += 1;
-      if (userTurns > maxTurns) {
-        start = i + 1;
-        break;
-      }
+      if (userTurns === maxTurns) return messages.slice(i); // slice at the oldest KEPT turn
     }
   }
-  return messages.slice(start);
+  return messages; // fewer than maxTurns user turns — nothing to drop
 }
 
 export class BotService {
