@@ -48,7 +48,49 @@ export interface AuditLogInput {
   trx: Executor;
 }
 
+/** A read-side audit row (get_audit_log tool / settings audit view). */
+export interface AuditEntry {
+  id: string;
+  staffId: string;
+  staffName: string | null;
+  tableName: string;
+  action: string;
+  recordId: string | null;
+  source: string;
+  createdAt: string;
+}
+
 export class AuditService {
+  /**
+   * Recent audit_log entries, newest first (get_audit_log — admin only; the bot
+   * tool filter already excludes it for others and the handler asserts too).
+   * Read-only SELECT with the actor name joined; append-only table, no writes.
+   */
+  async query(opts: { limit?: number; tableName?: string }, db: Executor): Promise<AuditEntry[]> {
+    let q = db
+      .selectFrom('audit_log')
+      .leftJoin('staff', 'staff.id', 'audit_log.staff_id')
+      .select([
+        'audit_log.id as id',
+        'audit_log.staff_id as staffId',
+        'staff.name as staffName',
+        'audit_log.table_name as tableName',
+        'audit_log.action as action',
+        'audit_log.record_id as recordId',
+        'audit_log.changed_by_source as source',
+        'audit_log.created_at as createdAt',
+      ])
+      .orderBy('audit_log.created_at', 'desc')
+      .limit(Math.min(Math.max(opts.limit ?? 20, 1), 100));
+    if (opts.tableName) q = q.where('audit_log.table_name', '=', opts.tableName);
+
+    const rows = await q.execute();
+    return rows.map((r) => ({
+      ...r,
+      createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
+    }));
+  }
+
   /**
    * Append one audit_log row via the SECURITY DEFINER function. Returns the new
    * row's id. Runs inside the caller's transaction — never opens its own.
