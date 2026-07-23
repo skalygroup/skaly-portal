@@ -1,0 +1,17 @@
+{
+  "$comment": "DATE columns (OID 1082) are identity-parsed in src/lib/db.ts and must stay 'YYYY-MM-DD' strings, not JS Date. These overrides keep db:codegen from reverting db.types.ts to Timestamp. TIMESTAMPTZ (1184) columns are left as the default Timestamp. See src/lib/db.ts.",
+  "overrides": {
+    "columns": {
+      "attendance_logs.date": "string",
+      "content_calendar.date": "string",
+      "content_pipelines.coming_shoot_date": "string | null",
+      "content_pipelines.last_shoot_date": "string | null",
+      "holidays.date": "string",
+      "shoot_schedules.slot_date": "string | null",
+      "signup_requests.date_of_birth": "string",
+      "staff.date_of_birth": "string | null",
+      "tasks.date": "string",
+      "tasks.deadline": "string | null"
+    }
+  }
+}
