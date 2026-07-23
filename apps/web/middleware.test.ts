@@ -32,6 +32,16 @@ function req(path: string) {
   return new NextRequest(new URL(path, 'http://localhost:3000'));
 }
 
+/** A minimal unsigned JWT carrying just the `aal` claim — the middleware reads
+ *  the claim without verifying the signature. */
+function jwtWithAal(aal: string): string {
+  const payload = Buffer.from(JSON.stringify({ aal })).toString('base64url');
+  return `header.${payload}.sig`;
+}
+function sessionWith(token: string) {
+  return { data: { session: { access_token: token } } };
+}
+
 function meResponse(status: number, body?: unknown) {
   return {
     status,
@@ -115,6 +125,58 @@ describe('middleware', () => {
 
     expect(auth.signOut).toHaveBeenCalledOnce();
     expect(res.headers.get('location')).toContain('error=deactivated');
+  });
+
+  it('redirects an enrolled admin whose session is still aal1 to /mfa-challenge', async () => {
+    auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } });
+    auth.getSession.mockResolvedValue(sessionWith(jwtWithAal('aal1')));
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      meResponse(200, { role: 'admin', mfaEnrolled: true }),
+    );
+
+    const res = await middleware(req('/'));
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toContain('/mfa-challenge');
+  });
+
+  it('lets an enrolled admin with an aal2 session through', async () => {
+    auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } });
+    auth.getSession.mockResolvedValue(sessionWith(jwtWithAal('aal2')));
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      meResponse(200, { role: 'admin', mfaEnrolled: true }),
+    );
+
+    const res = await middleware(req('/'));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('location')).toBeNull();
+  });
+
+  it('does NOT redirect when an aal1 enrolled admin is already on /mfa-challenge (no loop)', async () => {
+    auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } });
+    auth.getSession.mockResolvedValue(sessionWith(jwtWithAal('aal1')));
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      meResponse(200, { role: 'admin', mfaEnrolled: true }),
+    );
+
+    const res = await middleware(req('/mfa-challenge'));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('location')).toBeNull();
+  });
+
+  it('fails closed: an enrolled admin whose token has no aal claim is challenged', async () => {
+    auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } });
+    auth.getSession.mockResolvedValue(sessionWith('opaque-no-jwt'));
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      meResponse(200, { role: 'admin', mfaEnrolled: true }),
+    );
+
+    const res = await middleware(req('/'));
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toContain('/mfa-challenge');
   });
 
   it('lets an enrolled member through', async () => {

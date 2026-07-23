@@ -16,7 +16,9 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
  *      TTL — we forward the same bearer so the API hits cache). 401
  *      ACCOUNT_DEACTIVATED or 401 NO_STAFF_ROW → sign out + /login?error=deactivated;
  *   d. admin/manager without MFA, not already on /mfa-setup → /mfa-setup;
- *   e. otherwise pass.
+ *   e. admin/manager WITH MFA but a session that hasn't cleared the TOTP step
+ *      (aal ≠ aal2), not already on /mfa-challenge → /mfa-challenge;
+ *   f. otherwise pass.
  *
  * Unexpected /me failures (network, 5xx) fail open — a transient API hiccup
  * shouldn't lock everyone out, and the API re-checks on every real call.
@@ -76,13 +78,22 @@ export async function middleware(request: NextRequest) {
 
     if (res.ok) {
       const me = (await res.json()) as StaffMeResponse;
+      const privileged = me.role === 'admin' || me.role === 'manager';
       // d. Admin/manager must finish MFA enrollment before entering the portal.
-      if (
-        (me.role === 'admin' || me.role === 'manager') &&
-        me.mfaEnrolled === false &&
-        path !== '/mfa-setup'
-      ) {
+      if (privileged && me.mfaEnrolled === false && path !== '/mfa-setup') {
         return redirectTo(request, response, '/mfa-setup');
+      }
+      // e. An enrolled admin/manager must have stepped the session up to aal2 (the
+      // TOTP challenge). A bare password login is aal1 — bounce to /mfa-challenge.
+      // Fail closed: an unreadable/absent aal is treated as not-aal2. No loop —
+      // /mfa-challenge is outside the matcher and guarded here too.
+      if (
+        privileged &&
+        me.mfaEnrolled === true &&
+        path !== '/mfa-challenge' &&
+        readAal(session?.access_token) !== 'aal2'
+      ) {
+        return redirectTo(request, response, '/mfa-challenge');
       }
     }
     // Any other status (e.g. 5xx) falls through and passes — fail open.
@@ -92,6 +103,27 @@ export async function middleware(request: NextRequest) {
 
   // e. Pass, carrying any refreshed Set-Cookie headers.
   return response;
+}
+
+/**
+ * Read the `aal` (authenticator assurance level) claim from a Supabase access
+ * token, without verifying the signature — getUser() already validated the
+ * session; we only need the claim to decide whether the TOTP step is done.
+ * Edge-runtime safe (atob + TextDecoder, no Buffer). Any decode failure returns
+ * undefined, which the caller treats as "not aal2" (fail closed).
+ */
+function readAal(token: string | undefined): string | undefined {
+  const segment = token?.split('.')[1];
+  if (!segment) return undefined;
+  try {
+    const b64 = segment.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), '=');
+    const bytes = Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+    const payload = JSON.parse(new TextDecoder().decode(bytes));
+    return typeof payload.aal === 'string' ? payload.aal : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -117,12 +149,12 @@ export const config = {
    * Run on the protected surface — (portal) routes, /settings, and / — but not
    * the public auth pages, Next internals, the API proxy, or static files.
    *
-   * /mfa-setup is excluded: it's an (auth)-group page reached via the (d)
-   * redirect, and it self-protects (its enroll call 401s without a session). The
-   * path !== '/mfa-setup' guard in (d) is the belt-and-suspenders counterpart —
-   * it keeps the redirect idempotent even if this matcher ever widens.
+   * /mfa-setup and /mfa-challenge are excluded: they're (auth)-group pages reached
+   * via the (d)/(e) redirects, and they self-protect (their Supabase calls need a
+   * session). The path !== guards in (d)/(e) are the belt-and-suspenders
+   * counterpart — they keep each redirect idempotent even if this matcher widens.
    */
   matcher: [
-    '/((?!login|signup|forgot-password|reset-password|mfa-setup|auth|api|_next/static|_next/image|favicon.ico|brand|.*\\.).*)',
+    '/((?!login|signup|forgot-password|reset-password|mfa-setup|mfa-challenge|auth|api|_next/static|_next/image|favicon.ico|brand|.*\\.).*)',
   ],
 };
