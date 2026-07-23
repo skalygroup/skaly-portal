@@ -19,6 +19,7 @@ import { sql } from 'kysely';
 import { AppError } from '../lib/errors.js';
 
 import type { Executor } from './BaseService.js';
+import type { Role } from '@skaly/shared/schemas/auth';
 
 /** The audit_log.action CHECK enum (05-BACKEND-SCHEMA §6). */
 export const AUDIT_ACTIONS = ['INSERT', 'UPDATE', 'DELETE', 'LOCK', 'UNLOCK', 'DEACTIVATE'] as const;
@@ -48,7 +49,13 @@ export interface AuditLogInput {
   trx: Executor;
 }
 
-/** A read-side audit row (get_audit_log tool / settings audit view). */
+/**
+ * A read-side audit row (get_audit_log tool + the Sprint 11 /settings/audit-log
+ * UI). Deliberately projected — id/who/table/record/action/when + a short human
+ * `summary`. The raw old_value/new_value JSONB is NEVER included: it carries DOB,
+ * mobile, CV keys, and signup rejection notes (NFR §4.2, never-transmitted), and
+ * the bot tool result leaves our infrastructure into the model's context.
+ */
 export interface AuditEntry {
   id: string;
   staffId: string;
@@ -58,15 +65,46 @@ export interface AuditEntry {
   recordId: string | null;
   source: string;
   createdAt: string;
+  summary: string;
 }
+
+export interface AuditQuery {
+  /** Caller's role — asserted admin HERE, not only at the bot tool gate. */
+  callerRole: Role;
+  limit?: number;
+  offset?: number;
+  tableName?: string;
+  action?: string;
+}
+
+export interface AuditPage {
+  entries: AuditEntry[];
+  /** True if more rows exist past this page (detected without a COUNT). */
+  hasMore: boolean;
+}
+
+const AUDIT_VERBS: Record<string, string> = {
+  INSERT: 'created',
+  UPDATE: 'updated',
+  DELETE: 'deleted',
+  LOCK: 'locked',
+  UNLOCK: 'unlocked',
+  DEACTIVATE: 'deactivated',
+};
 
 export class AuditService {
   /**
-   * Recent audit_log entries, newest first (get_audit_log — admin only; the bot
-   * tool filter already excludes it for others and the handler asserts too).
-   * Read-only SELECT with the actor name joined; append-only table, no writes.
+   * Recent audit_log entries, newest first — admin only (asserted here). Paginated
+   * (default 20, max 50) with optional table/action filters, sized for both the bot
+   * tool and the Sprint 11 settings UI. Append-only table, read-only SELECT.
    */
-  async query(opts: { limit?: number; tableName?: string }, db: Executor): Promise<AuditEntry[]> {
+  async query(opts: AuditQuery, db: Executor): Promise<AuditPage> {
+    if (opts.callerRole !== 'admin') {
+      throw new AppError('PERMISSION_DENIED', 'The audit log is available to admins only.');
+    }
+    const limit = Math.min(Math.max(opts.limit ?? 20, 1), 50);
+    const offset = Math.max(opts.offset ?? 0, 0);
+
     let q = db
       .selectFrom('audit_log')
       .leftJoin('staff', 'staff.id', 'audit_log.staff_id')
@@ -81,14 +119,21 @@ export class AuditService {
         'audit_log.created_at as createdAt',
       ])
       .orderBy('audit_log.created_at', 'desc')
-      .limit(Math.min(Math.max(opts.limit ?? 20, 1), 100));
+      .limit(limit + 1) // +1 row detects hasMore without a COUNT
+      .offset(offset);
     if (opts.tableName) q = q.where('audit_log.table_name', '=', opts.tableName);
+    if (opts.action) q = q.where('audit_log.action', '=', opts.action);
 
     const rows = await q.execute();
-    return rows.map((r) => ({
-      ...r,
-      createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
-    }));
+    const hasMore = rows.length > limit;
+    const entries = rows.slice(0, limit).map((r) => {
+      const createdAt = r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt);
+      const who = r.staffName ?? 'System';
+      const verb = AUDIT_VERBS[r.action] ?? r.action.toLowerCase();
+      const rec = r.recordId ? ` (${r.recordId})` : '';
+      return { ...r, createdAt, summary: `${who} ${verb} ${r.tableName}${rec}` };
+    });
+    return { entries, hasMore };
   }
 
   /**

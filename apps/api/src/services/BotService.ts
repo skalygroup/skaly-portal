@@ -49,7 +49,32 @@ export interface BotSession {
   lastActivityAt: string;
 }
 
+/** The GET /v1/bot/session/current shape (API-Contract §Bot, reconciliation #8).
+ *  A conversational projection — tool plumbing is filtered out. */
+export interface BotSessionView {
+  sessionId: string | null;
+  messages: Array<{ role: string; content: string }>;
+  turnCount: number;
+  lastActivityAt: string | null;
+}
+
+/** Plain text of a stored message: the string as-is, or the joined text blocks
+ *  (tool_use / tool_result blocks yield '', so they drop out of the view). */
+function extractText(content: Anthropic.MessageParam['content']): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((b): b is Anthropic.TextBlockParam => (b as { type: string }).type === 'text')
+      .map((b) => b.text)
+      .join('');
+  }
+  return '';
+}
+
 export interface HandleMessageArgs {
+  /** Pre-loaded by the route (so its sessionId is in the 202 and a Redis failure
+   *  surfaces BEFORE the 202, never as an unhandled rejection in fire-and-forget). */
+  session: BotSession;
   staffId: string;
   role: Role;
   userText: string;
@@ -115,13 +140,25 @@ export class BotService {
     await this.redis.del(this.sessionKey(staffId));
   }
 
+  /** Read-only conversational view for GET — never creates a session; returns the
+   *  null-session shape when none exists. */
+  async sessionView(staffId: string): Promise<BotSessionView> {
+    const raw = await this.redis.get(this.sessionKey(staffId));
+    if (!raw) return { sessionId: null, messages: [], turnCount: 0, lastActivityAt: null };
+    const s = JSON.parse(raw) as BotSession;
+    const messages = s.messages
+      .map((m) => ({ role: m.role, content: extractText(m.content) }))
+      .filter((m) => m.content.length > 0);
+    return { sessionId: s.sessionId, messages, turnCount: s.turnCount, lastActivityAt: s.lastActivityAt };
+  }
+
   private emit(staffId: string, event: 'bot:token' | 'bot:message', payload: Record<string, unknown>): void {
     this.io.of('/ws/notify').to(`user:${staffId}`).emit(event, payload);
   }
 
-  async handleMessage({ staffId, role, userText, db }: HandleMessageArgs): Promise<void> {
-    const session = await this.loadSession(staffId);
+  async handleMessage({ session, staffId, role, userText, db }: HandleMessageArgs): Promise<void> {
     const { sessionId } = session;
+    let fullText = '';
 
     try {
       const currentUser: CurrentUser = { staffId, role };
@@ -132,7 +169,6 @@ export class BotService {
 
       const messages: Anthropic.MessageParam[] = [...session.messages, { role: 'user', content: userText }];
 
-      let fullText = '';
       const onText = (delta: string): void => {
         fullText += delta;
         this.emit(staffId, 'bot:token', { sessionId, delta });
@@ -170,13 +206,17 @@ export class BotService {
       await this.persistSession(staffId, sessionId, session.turnCount, messages).catch((err) =>
         logger.error({ err, staffId }, 'bot session persist failed'),
       );
-      await this.archive(staffId, userText, fullText, db).catch((err) =>
+      await this.archiveBotMessage(staffId, fullText, db).catch((err) =>
         logger.error({ err, staffId }, 'bot message archive failed'),
       );
     } catch (err) {
-      // Anthropic unreachable after the SDK's built-in 429/529 retries, etc.
+      // Anthropic unreachable after the SDK's built-in 429/529 retries, or a
+      // mid-stream failure. Mid-stream is NOT retryable (a restart would duplicate
+      // already-streamed text), so finalize with whatever streamed + the friendly
+      // error rather than restarting the stream.
       logger.error({ err, staffId }, 'bot handleMessage failed');
-      this.emit(staffId, 'bot:message', { sessionId, content: ANTHROPIC_ERROR_COPY, toolsUsed: [] });
+      const content = fullText ? `${fullText}\n\n${ANTHROPIC_ERROR_COPY}` : ANTHROPIC_ERROR_COPY;
+      this.emit(staffId, 'bot:message', { sessionId, content, toolsUsed: [] });
     }
   }
 
@@ -264,13 +304,21 @@ export class BotService {
     await this.redis.set(this.sessionKey(staffId), JSON.stringify(updated), 'EX', SESSION_TTL_SECONDS);
   }
 
-  private async archive(staffId: string, userText: string, botText: string, db: Kysely<DB>): Promise<void> {
+  /** Archive the user's message and return its row id — the C-01 `messageId`. The
+   *  route calls this SYNCHRONOUSLY before sending the 202 (TRD §9.1). */
+  async archiveUserMessage(staffId: string, content: string, db: Kysely<DB>): Promise<string> {
+    const row = await db
+      .insertInto('messages')
+      .values({ channel: 'bot', sender_id: staffId, sender_type: 'user', content, content_type: 'text' })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    return row.id;
+  }
+
+  private async archiveBotMessage(staffId: string, content: string, db: Kysely<DB>): Promise<void> {
     await db
       .insertInto('messages')
-      .values([
-        { channel: 'bot', sender_id: staffId, sender_type: 'user', content: userText, content_type: 'text' },
-        { channel: 'bot', sender_id: staffId, sender_type: 'bot', content: botText, content_type: 'text' },
-      ])
+      .values({ channel: 'bot', sender_id: staffId, sender_type: 'bot', content, content_type: 'text' })
       .execute();
   }
 }

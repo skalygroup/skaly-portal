@@ -27,6 +27,7 @@ import authPlugin from './middleware/auth.plugin.js';
 import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import attendanceRoutes from './routes/attendance/index.js';
 import authRoutes from './routes/auth/index.js';
+import botRoutes from './routes/bot/index.js';
 import clientsRoutes from './routes/clients/index.js';
 import contentCalendarRoutes from './routes/content-calendar/index.js';
 import contentDropperRoutes from './routes/content-dropper/index.js';
@@ -183,6 +184,7 @@ export async function buildApp(
   // every route path. Health stays unversioned-by-convention at /v1/health.
   await app.register(healthRoutes);
   await app.register(authRoutes, { prefix: '/v1' });
+  await app.register(botRoutes, { prefix: '/v1' });
   await app.register(staffRoutes, { prefix: '/v1' });
   await app.register(clientsRoutes, { prefix: '/v1' });
   await app.register(monthsRoutes, { prefix: '/v1' });

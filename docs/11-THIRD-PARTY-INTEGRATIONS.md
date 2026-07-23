@@ -129,6 +129,16 @@ async function callWithRetry(params, retries = 3): Promise<Message> {
 }
 ```
 
+> **Sprint 8 amendment (recorded decision).** The bot uses the `@anthropic-ai/sdk`
+> client's **built-in** retry (`maxRetries: 3`, `apps/api/src/lib/anthropic.ts`)
+> instead of this hand-rolled `callWithRetry`. The SDK's backoff respects the
+> `Retry-After` header on 429/529 and is better tested than a hand loop. **Caveat
+> the SDK does not cover:** retries apply to call *establishment* only — once
+> `bot:token` deltas have been emitted, a mid-stream failure is not retryable
+> (restarting would duplicate streamed text), so `BotService` finalizes gracefully
+> with the partial text plus the friendly `ANTHROPIC_ERROR` copy rather than
+> restarting the stream. The friendly-copy mapping above is unchanged.
+
 ---
 
 ## 4. CLOUDFLARE R2

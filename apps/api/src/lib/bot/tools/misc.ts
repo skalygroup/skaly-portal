@@ -74,13 +74,20 @@ export const getAuditLogTool = defineTool({
   },
   isMutation: false,
   async handler(input, currentUser, db) {
+    // Defence in depth — the service asserts admin too (for the Sprint 11 UI path).
     if (currentUser.role !== 'admin') {
       throw new AppError('PERMISSION_DENIED', 'The audit log is available to admins only.');
     }
-    const entries = await audit.query({ limit: input.limit, tableName: input.tableName }, db);
+    const { entries, hasMore } = await audit.query(
+      { callerRole: currentUser.role, limit: input.limit, tableName: input.tableName },
+      db,
+    );
+    // Feed the model the projected human summaries — never the raw JSONB diffs.
     const text = entries.length
-      ? `${entries.length} audit entr(y/ies):\n${JSON.stringify(entries)}`
+      ? `${entries.length} audit entr${entries.length === 1 ? 'y' : 'ies'}${hasMore ? ' (more available)' : ''}:\n${entries
+          .map((e) => `${e.summary} — ${e.createdAt}`)
+          .join('\n')}`
       : 'No audit entries found.';
-    return { text, card: { type: 'audit_log', entries } };
+    return { text, card: { type: 'audit_log', entries, hasMore } };
   },
 });

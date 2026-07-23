@@ -125,9 +125,15 @@ export const getUserWorkloadTool = defineTool({
 
 export const getProjectStatusTool = defineTool({
   name: 'get_project_status',
-  // ponytail: TRD §9 lists this tool but does not pin its shape. Lazy, defensible
-  // reading — per-client task health for the month (total / done / overdue / open),
-  // built from getTasks. Revisit if UX wants pipeline/calendar rolled in.
+  // ponytail: TRD §9 lists this tool but does not pin its shape. Task-only BY
+  // DESIGN, via the aggregate-subset rule: an aggregate tool's payload must be a
+  // subset of what the LEAST-privileged role holding that tool can already see
+  // elsewhere. A team_member has get_project_status (✅) but NOT get_content_pipeline
+  // (❌), so rolling pipeline stage in would make the bot a side channel around its
+  // own permission table. Safe ceiling = tools team_member already holds: tasks,
+  // content_calendar, shoot_schedule. In-bounds enrichments if UX wants them: next
+  // shoot date, posts scheduled/posted this month. Out of bounds: pipeline stage,
+  // client summary, audit. Left as task-health until that call is made.
   description:
     'Report per-project (per-client) status for a month: task totals with done, overdue, and open counts.',
   inputSchema: z.object({ period: periodField }),

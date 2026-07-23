@@ -114,7 +114,8 @@ describe('BotService.handleMessage — list_tasks smoke (mocked Anthropic)', () 
     const emitted: Emitted[] = [];
     const svc = new BotService(mockAnthropic(), redis, mockIo(emitted));
 
-    await svc.handleMessage({ staffId: ADMIN, role: 'admin', userText: 'list my tasks', db });
+    const session = await svc.loadSession(ADMIN);
+    await svc.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'list my tasks', db });
 
     const tokens = emitted.filter((e) => e.event === 'bot:token');
     const terminals = emitted.filter((e) => e.event === 'bot:message');
@@ -138,7 +139,12 @@ describe('BotService.handleMessage — list_tasks smoke (mocked Anthropic)', () 
 
   test('archives both the user and bot message to messages (channel=bot)', async () => {
     const svc = new BotService(mockAnthropic(), redis, mockIo([]));
-    await svc.handleMessage({ staffId: ADMIN, role: 'admin', userText: 'list my tasks', db });
+    // Mirror the route: user message archived synchronously (→ messageId), bot
+    // reply archived by handleMessage.
+    const messageId = await svc.archiveUserMessage(ADMIN, 'list my tasks', db);
+    expect(messageId).toBeTruthy();
+    const session = await svc.loadSession(ADMIN);
+    await svc.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'list my tasks', db });
 
     const rows = await db
       .selectFrom('messages')
@@ -155,12 +161,13 @@ describe('BotService.handleMessage — list_tasks smoke (mocked Anthropic)', () 
 
   test('persists the Redis session with an incremented turnCount', async () => {
     const svc = new BotService(mockAnthropic(), redis, mockIo([]));
-    await svc.handleMessage({ staffId: ADMIN, role: 'admin', userText: 'list my tasks', db });
+    const loaded = await svc.loadSession(ADMIN);
+    await svc.handleMessage({ session: loaded, staffId: ADMIN, role: 'admin', userText: 'list my tasks', db });
 
     const raw = await redis.get(`bot:session:${ADMIN}`);
     expect(raw).toBeTruthy();
-    const session = JSON.parse(raw!) as { turnCount: number; messages: unknown[] };
-    expect(session.turnCount).toBe(1);
-    expect(session.messages.length).toBeGreaterThan(0);
+    const persisted = JSON.parse(raw!) as { turnCount: number; messages: unknown[] };
+    expect(persisted.turnCount).toBe(1);
+    expect(persisted.messages.length).toBeGreaterThan(0);
   });
 });
