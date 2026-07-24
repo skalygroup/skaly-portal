@@ -68,8 +68,16 @@ export default function LoginPage() {
         return;
       }
 
-      // Enrolled admin/manager still owe an AAL2 MFA challenge — the dedicated
-      // /mfa-challenge page lands in STEP 13. For now, proceed to home.
+      // Enrolled users owe an AAL2 TOTP challenge before entering. Supabase reports
+      // it via the assurance level: a verified factor makes nextLevel 'aal2' while a
+      // fresh password sign-in is still 'aal1'. The middleware enforces this too —
+      // this is the friendly path that sends them straight to the challenge.
+      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+      if (aal?.nextLevel === 'aal2' && aal.currentLevel !== 'aal2') {
+        router.push('/mfa-challenge');
+        return;
+      }
+
       router.push('/');
     } catch (err) {
       if (err instanceof ApiError && err.code === 'ACCOUNT_DEACTIVATED') {

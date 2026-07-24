@@ -28,7 +28,7 @@ export type Numeric = ColumnType<string, number | string, number | string>;
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export interface AttendanceLogs {
-  date: Timestamp;
+  date: string;
   day_type: Generated<string>;
   id: Generated<string>;
   period: string;
@@ -88,7 +88,7 @@ export interface Comments {
 
 export interface ContentCalendar {
   client_id: string;
-  date: Timestamp;
+  date: string;
   id: Generated<string>;
   note: string | null;
   period: string;
@@ -101,11 +101,11 @@ export interface ContentCalendar {
 
 export interface ContentPipelines {
   client_id: string;
-  coming_shoot_date: Timestamp | null;
+  coming_shoot_date: string | null;
   coming_shoot_source: string | null;
   finals_ready_at: Timestamp | null;
   id: Generated<string>;
-  last_shoot_date: Timestamp | null;
+  last_shoot_date: string | null;
   period: string;
   posted_at: Timestamp | null;
   raw_received_at: Timestamp | null;
@@ -133,7 +133,7 @@ export interface Holidays {
   active: Generated<boolean>;
   added_by: string;
   created_at: Generated<Timestamp>;
-  date: Timestamp;
+  date: string;
   id: Generated<string>;
   name: string;
   period: string;
@@ -270,7 +270,7 @@ export interface ShootSchedules {
   id: Generated<string>;
   period: string;
   pieces_expected: Generated<number>;
-  slot_date: Timestamp | null;
+  slot_date: string | null;
   slot_index: number;
   slot_status: Generated<string>;
   updated_at: Timestamp | null;
@@ -280,7 +280,7 @@ export interface ShootSchedules {
 export interface SignupRequests {
   created_at: Generated<Timestamp>;
   cv_file_key: string | null;
-  date_of_birth: Timestamp;
+  date_of_birth: string;
   email: string;
   google_uid: string | null;
   id: Generated<string>;
@@ -301,7 +301,7 @@ export interface Staff {
   avatar_url: string | null;
   created_at: Generated<Timestamp>;
   cv_file_key: string | null;
-  date_of_birth: Timestamp | null;
+  date_of_birth: string | null;
   deleted_at: Timestamp | null;
   email: string;
   id: Generated<string>;
@@ -336,8 +336,8 @@ export interface Tasks {
   client_id: string | null;
   created_at: Generated<Timestamp>;
   created_by: string;
-  date: Timestamp;
-  deadline: Timestamp | null;
+  date: string;
+  deadline: string | null;
   deleted_at: Timestamp | null;
   dependency_id: string | null;
   description: string;

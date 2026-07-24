@@ -23,3 +23,25 @@ The backend **emits from the sprint that owns the event**; the frontend **consum
 
 ## Rationale
 One socket client built once, alongside the C-05 refresh handshake it depends on, is cleaner and less error-prone than piecemeal per-module clients. Emitting early keeps Sprint 10 additive (attach consumers) rather than retrofitting emits across five modules.
+
+## Amendment (pre-Sprint 8) — socket client scope revised
+**Status:** Accepted • Pre-Sprint 8 (executed in Sprint 8 STEP 1 + STEP 6)
+
+C-01 delivers the bot's entire response (streaming tokens, tool results, cards) exclusively
+via Socket.io to `user:{staffId}` on `/ws/notify`. Deferring the frontend socket client to
+Sprint 10 would leave Sprint 8's bot unable to receive a single token. Revised split:
+
+- **Sprint 8 builds (minimal):** the `/ws/notify` client connection (`lib/socket.ts` singleton);
+  the C-05 client handshake (`auth:refresh_required` → refresh → `auth:refresh`) — required
+  because a 1-hour JWT expires mid-session and would drop the bot socket; the `bot:token` +
+  `bot:message` subscriptions feeding the bot chat UI.
+- **Sprint 10 still builds (unchanged):** all grid live-update subscriptions (the
+  `// TODO(Sprint 10)` markers remain valid); the bell/notification UI + `notify:new`
+  subscription; common chat.
+
+**Streaming shape:** `bot:token { sessionId, delta }` for deltas + terminal
+`bot:message { sessionId, content, card?, toolsUsed? }` on completion (two events, not one
+overloaded event — avoids flickering half-rendered cards).
+
+Rationale unchanged: the client is still built once, with C-05. Moving it earlier only makes
+Sprint 8's bot end-to-end testable; Sprint 10 becomes "attach remaining consumers" (additive).

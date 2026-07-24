@@ -19,6 +19,7 @@ import { sql } from 'kysely';
 import { AppError } from '../lib/errors.js';
 
 import type { Executor } from './BaseService.js';
+import type { Role } from '@skaly/shared/schemas/auth';
 
 /** The audit_log.action CHECK enum (05-BACKEND-SCHEMA §6). */
 export const AUDIT_ACTIONS = ['INSERT', 'UPDATE', 'DELETE', 'LOCK', 'UNLOCK', 'DEACTIVATE'] as const;
@@ -48,7 +49,93 @@ export interface AuditLogInput {
   trx: Executor;
 }
 
+/**
+ * A read-side audit row (get_audit_log tool + the Sprint 11 /settings/audit-log
+ * UI). Deliberately projected — id/who/table/record/action/when + a short human
+ * `summary`. The raw old_value/new_value JSONB is NEVER included: it carries DOB,
+ * mobile, CV keys, and signup rejection notes (NFR §4.2, never-transmitted), and
+ * the bot tool result leaves our infrastructure into the model's context.
+ */
+export interface AuditEntry {
+  id: string;
+  staffId: string;
+  staffName: string | null;
+  tableName: string;
+  action: string;
+  recordId: string | null;
+  source: string;
+  createdAt: string;
+  summary: string;
+}
+
+export interface AuditQuery {
+  /** Caller's role — asserted admin HERE, not only at the bot tool gate. */
+  callerRole: Role;
+  limit?: number;
+  offset?: number;
+  tableName?: string;
+  action?: string;
+}
+
+export interface AuditPage {
+  entries: AuditEntry[];
+  /** True if more rows exist past this page (detected without a COUNT). */
+  hasMore: boolean;
+}
+
+const AUDIT_VERBS: Record<string, string> = {
+  INSERT: 'created',
+  UPDATE: 'updated',
+  DELETE: 'deleted',
+  LOCK: 'locked',
+  UNLOCK: 'unlocked',
+  DEACTIVATE: 'deactivated',
+};
+
 export class AuditService {
+  /**
+   * Recent audit_log entries, newest first — admin only (asserted here). Paginated
+   * (default 20, max 50) with optional table/action filters, sized for both the bot
+   * tool and the Sprint 11 settings UI. Append-only table, read-only SELECT.
+   */
+  async query(opts: AuditQuery, db: Executor): Promise<AuditPage> {
+    if (opts.callerRole !== 'admin') {
+      throw new AppError('PERMISSION_DENIED', 'The audit log is available to admins only.');
+    }
+    const limit = Math.min(Math.max(opts.limit ?? 20, 1), 50);
+    const offset = Math.max(opts.offset ?? 0, 0);
+
+    let q = db
+      .selectFrom('audit_log')
+      .leftJoin('staff', 'staff.id', 'audit_log.staff_id')
+      .select([
+        'audit_log.id as id',
+        'audit_log.staff_id as staffId',
+        'staff.name as staffName',
+        'audit_log.table_name as tableName',
+        'audit_log.action as action',
+        'audit_log.record_id as recordId',
+        'audit_log.changed_by_source as source',
+        'audit_log.created_at as createdAt',
+      ])
+      .orderBy('audit_log.created_at', 'desc')
+      .limit(limit + 1) // +1 row detects hasMore without a COUNT
+      .offset(offset);
+    if (opts.tableName) q = q.where('audit_log.table_name', '=', opts.tableName);
+    if (opts.action) q = q.where('audit_log.action', '=', opts.action);
+
+    const rows = await q.execute();
+    const hasMore = rows.length > limit;
+    const entries = rows.slice(0, limit).map((r) => {
+      const createdAt = r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt);
+      const who = r.staffName ?? 'System';
+      const verb = AUDIT_VERBS[r.action] ?? r.action.toLowerCase();
+      const rec = r.recordId ? ` (${r.recordId})` : '';
+      return { ...r, createdAt, summary: `${who} ${verb} ${r.tableName}${rec}` };
+    });
+    return { entries, hasMore };
+  }
+
   /**
    * Append one audit_log row via the SECURITY DEFINER function. Returns the new
    * row's id. Runs inside the caller's transaction — never opens its own.

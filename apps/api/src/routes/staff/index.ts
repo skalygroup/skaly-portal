@@ -1,3 +1,4 @@
+import { ROLE_DEFAULTS } from '@skaly/shared';
 import { StaffMeResponseSchema } from '@skaly/shared/schemas/auth';
 import { z } from 'zod';
 
@@ -7,6 +8,7 @@ import { getEffectivePermissions } from '../../lib/permissions.js';
 import { getR2Client, getR2Bucket } from '../../lib/r2.js';
 import { supabaseAdmin } from '../../lib/supabase.js';
 import { AuthService, AuthError } from '../../services/AuthService.js';
+import { PermissionService } from '../../services/PermissionService.js';
 import { StaffService } from '../../services/StaffService.js';
 
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -67,6 +69,7 @@ export default async function staffRoutes(app: FastifyInstance) {
     getR2Bucket(),
   );
   const staffService = new StaffService();
+  const permissionService = new PermissionService(app.redis);
   const r = app.withTypeProvider<ZodTypeProvider>();
 
   // ── List: limited fields for all roles (field filtering server-side) ─
@@ -152,6 +155,39 @@ export default async function staffRoutes(app: FastifyInstance) {
       } catch (err) {
         return sendAuthError(err, reply);
       }
+    },
+  );
+
+  // ── Admin: set a per-user permission override (AUTH-MATRIX §4/§6) ────
+  // Upserts user_permissions, audits, and busts perms:{staffId} so the change
+  // takes effect on the next resolve. The resolver's floor is ROLE_DEFAULTS.
+  r.put(
+    '/staff/:id/permissions/:key',
+    {
+      preHandler: [app.verifyJwt, app.requireRole('admin')],
+      schema: {
+        params: z.object({
+          id: z.string().uuid(),
+          key: z.string().refine((k) => k in ROLE_DEFAULTS, 'Unknown permission key'),
+        }),
+        body: z.object({ value: z.boolean() }),
+        response: {
+          200: z.object({
+            data: z.object({
+              staffId: z.string(),
+              permissionKey: z.string(),
+              value: z.boolean(),
+            }),
+          }),
+        },
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request) => {
+      const { id, key } = request.params;
+      const { value } = request.body;
+      const updated = await permissionService.setOverride(id, key, value, request.user.id, app.db);
+      return { data: updated };
     },
   );
 }
