@@ -48,6 +48,18 @@ export const BOT_QUERY_TOOL_NAMES = [
   'get_client_summary',
 ] as const;
 
+/**
+ * Is this a permission key the system knows about?
+ *
+ * Lives here so the override endpoint can validate its `:key` param without
+ * importing ROLE_DEFAULTS directly — that import is lint-restricted to this file
+ * precisely because reading the defaults elsewhere is how the second, override-
+ * blind implementation arose (Sprint 8.1 Defect 1).
+ */
+export function isPermissionKey(key: string): boolean {
+  return key in ROLE_DEFAULTS;
+}
+
 /** perms:{staffId} — the per-staff override set, JSON array of { permissionKey, value }. */
 const permsKey = (staffId: string): string => `perms:${staffId}`;
 /** AUTH-MATRIX §6.3: 5-minute TTL. An override write busts the key so a change
@@ -69,8 +81,69 @@ export class PermissionService {
   constructor(private readonly redis: Redis) {}
 
   /**
+   * THE override loader — the only place user_permissions is read for a resolve.
+   * Everything below merges on top of this; nothing else queries the table.
+   *
+   * `keys` narrows the DB read-through to the keys the caller actually needs (the
+   * single-key path passes one, the batch path passes none = all). It never
+   * narrows correctness: a cache that is loaded but missing a key still reads
+   * through, because "absent from the cache" ≠ "not overridden" (rule 1).
+   *
+   * One Redis read + at most one DB query. Redis failures degrade to DB → floor
+   * and are never thrown or allowed to grant.
+   */
+  private async loadOverrides(
+    staffId: string,
+    db: Executor,
+    keys?: readonly string[],
+  ): Promise<Map<string, boolean>> {
+    const { cached, redisUp } = await this.readCache(staffId);
+
+    // A loaded cache is authoritative ONLY for the keys present in it.
+    const merged = new Map((cached ?? []).map((o) => [o.permissionKey, o.value]));
+    const missing = keys ? keys.filter((k) => !merged.has(k)) : undefined;
+    // Nothing left to look up: every requested key was already cached.
+    if (missing && missing.length === 0) return merged;
+
+    let query = db
+      .selectFrom('user_permissions')
+      .select(['permission_key', 'value'])
+      .where('staff_id', '=', staffId);
+    if (missing) query = query.where('permission_key', 'in', missing);
+    const rows = await query.execute();
+    for (const r of rows) merged.set(r.permission_key, r.value);
+
+    // Refresh the cache when the DB actually had overrides and Redis is up —
+    // best-effort, and never on the path that decides the answer.
+    if (redisUp && rows.length > 0) await this.loadCache(staffId, db).catch(() => undefined);
+    return merged;
+  }
+
+  /**
+   * THE precedence merge (AUTH-MATRIX §6.1), implemented exactly once: an explicit
+   * override wins; otherwise ROLE_DEFAULTS[key][role] is the floor; an unknown key
+   * is `false`. Every other entry point delegates here or to loadOverrides.
+   *
+   * Covers ALL permission families — module.*, chat.*, report.*, months.* as well
+   * as bot.tool.* — because /v1/staff/me hands the whole map to the frontend.
+   */
+  async getEffectivePermissions(
+    staffId: string,
+    role: Role,
+    db: Executor,
+  ): Promise<Record<string, boolean>> {
+    const overrides = await this.loadOverrides(staffId, db);
+    const out: Record<string, boolean> = {};
+    for (const key in ROLE_DEFAULTS) {
+      out[key] = overrides.get(key) ?? ROLE_DEFAULTS[key]![role];
+    }
+    return out;
+  }
+
+  /**
    * Resolve one permission for a caller. `role` is the JWT role (no DB lookup for
-   * the floor). Precedence: override (cache → DB read-through) → ROLE_DEFAULTS floor.
+   * the floor). Single-key fast path — same loader, same precedence, narrowed to
+   * one key so a per-tool check stays one round trip.
    */
   async resolvePermission(
     staffId: string,
@@ -78,62 +151,34 @@ export class PermissionService {
     permissionKey: string,
     db: Executor,
   ): Promise<boolean> {
-    const { cached, redisUp } = await this.readCache(staffId);
-
-    // 1. Cache HIT for this key is authoritative.
-    if (cached) {
-      const hit = cached.find((o) => o.permissionKey === permissionKey);
-      if (hit) return hit.value;
-      // Key absent from a loaded cache is NOT authoritative — read through (rule 1).
-    }
-
-    // 2. DB read-through.
-    const row = await db
-      .selectFrom('user_permissions')
-      .select('value')
-      .where('staff_id', '=', staffId)
-      .where('permission_key', '=', permissionKey)
-      .executeTakeFirst();
-    if (row) {
-      // Populate/refresh the cache when Redis is reachable (best-effort).
-      if (redisUp) await this.loadCache(staffId, db).catch(() => undefined);
-      return row.value;
-    }
-
-    // 3. Safe floor (unknown key → false). Never fail-open.
-    return ROLE_DEFAULTS[permissionKey]?.[role] ?? false;
+    const overrides = await this.loadOverrides(staffId, db, [permissionKey]);
+    // Safe floor (unknown key → false). Never fail-open.
+    return overrides.get(permissionKey) ?? ROLE_DEFAULTS[permissionKey]?.[role] ?? false;
   }
 
   /**
-   * The permitted subset of the 11 query tools for a caller — one Redis read plus
-   * a single DB query for the keys not already in the cache, not 11 round-trips.
+   * Split the 11 query tools into what this caller may and may not use.
+   *
+   * Both halves are returned from one computation: Sprint 8.1 needs `denied` to
+   * build the system prompt's TOOL ACCESS section, and deriving the complement
+   * anywhere else would be a second source of truth for the same split.
    */
-  async getPermittedBotTools(staffId: string, role: Role, db: Executor): Promise<string[]> {
-    const { cached } = await this.readCache(staffId);
-    const cachedMap = new Map((cached ?? []).map((o) => [o.permissionKey, o.value]));
+  async getPermittedBotTools(
+    staffId: string,
+    role: Role,
+    db: Executor,
+  ): Promise<{ permitted: string[]; denied: string[] }> {
+    const keys = BOT_QUERY_TOOL_NAMES.map((n) => `bot.tool.${n}`);
+    const overrides = await this.loadOverrides(staffId, db, keys);
 
-    const resolved = new Map<string, boolean>();
-    const missing: string[] = [];
+    const permitted: string[] = [];
+    const denied: string[] = [];
     for (const name of BOT_QUERY_TOOL_NAMES) {
       const key = `bot.tool.${name}`;
-      if (cachedMap.has(key)) resolved.set(key, cachedMap.get(key)!);
-      else missing.push(key);
+      const allowed = overrides.get(key) ?? ROLE_DEFAULTS[key]?.[role] ?? false;
+      (allowed ? permitted : denied).push(name);
     }
-
-    if (missing.length > 0) {
-      const rows = await db
-        .selectFrom('user_permissions')
-        .select(['permission_key', 'value'])
-        .where('staff_id', '=', staffId)
-        .where('permission_key', 'in', missing)
-        .execute();
-      const dbMap = new Map(rows.map((r) => [r.permission_key, r.value]));
-      for (const key of missing) {
-        resolved.set(key, dbMap.get(key) ?? ROLE_DEFAULTS[key]?.[role] ?? false);
-      }
-    }
-
-    return BOT_QUERY_TOOL_NAMES.filter((name) => resolved.get(`bot.tool.${name}`) === true);
+    return { permitted, denied };
   }
 
   /**

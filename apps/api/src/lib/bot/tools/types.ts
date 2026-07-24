@@ -35,6 +35,16 @@ export interface BotToolResult {
 export interface BotTool {
   name: string;
   description: string;
+  /**
+   * A short human-readable phrase for what this tool does ("viewing attendance
+   * records"), used to name DENIED capabilities in the system prompt (Sprint 8.1).
+   *
+   * Separate from `description` on purpose: `description` is model-facing prose
+   * that explains scoping rules, and some of them name a role outright ("a team
+   * member sees only their own column") — injecting that into the denial list
+   * would breach APPFLOW §9's "never state which role is required".
+   */
+  capability: string;
   inputSchema: z.ZodTypeAny;
   /** Anthropic tool `input_schema` (hand-written; the inputs are tiny). */
   jsonSchema: Anthropic.Tool['input_schema'];
@@ -50,6 +60,7 @@ export interface BotTool {
 export function defineTool<S extends z.ZodTypeAny>(t: {
   name: string;
   description: string;
+  capability: string;
   inputSchema: S;
   jsonSchema: Anthropic.Tool['input_schema'];
   isMutation: boolean;

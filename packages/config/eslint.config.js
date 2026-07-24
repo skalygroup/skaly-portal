@@ -109,6 +109,29 @@ export default [
       '@typescript-eslint/no-empty-object-type': 'off',
     },
   },
+  // API permission resolution has exactly ONE implementation (Auth-Matrix §6.1).
+  //
+  // It previously had two — lib/permissions.ts returned the role baseline and
+  // silently ignored user_permissions overrides, so an admin could revoke a
+  // capability and /v1/staff/me would keep reporting it as granted (Sprint 8.1
+  // Defect 1). Both claimed ownership in contradictory comments. This guard is
+  // what stops a third from appearing: ROLE_DEFAULTS is the FLOOR, applied after
+  // overrides — reading it directly skips the override layer by construction.
+  {
+    files: ['apps/api/**/*.ts'],
+    ignores: ['apps/api/src/services/PermissionService.ts', 'apps/api/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [{
+          name: '@skaly/shared',
+          importNames: ['ROLE_DEFAULTS'],
+          message:
+            'Import permissions via PermissionService.getEffectivePermissions — ROLE_DEFAULTS is the floor, not the answer (Auth-Matrix §6.1).',
+        }],
+      }],
+    },
+  },
+
   // Next.js app — registers the Next plugin so `next build` stops warning
   // that it can't find it in the ESLint config.
   {

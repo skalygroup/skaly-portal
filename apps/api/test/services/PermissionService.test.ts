@@ -1,9 +1,11 @@
+import { ROLE_DEFAULTS } from '@skaly/shared';
 import { Redis } from 'ioredis';
 import { Kysely, PostgresDialect } from 'kysely';
 import pg from 'pg';
 import { describe, test, expect, beforeAll, afterEach, afterAll } from 'vitest';
 
-import { PermissionService } from '../../src/services/PermissionService.js';
+
+import { BOT_QUERY_TOOL_NAMES, PermissionService } from '../../src/services/PermissionService.js';
 
 import type { DB } from '@skaly/shared';
 
@@ -131,18 +133,61 @@ describe('setOverride — busts perms:{staffId} on write', () => {
 
 describe('getPermittedBotTools — per-role subset', () => {
   test('a freelancer gets only get_shoot_schedule', async () => {
-    expect(await svc.getPermittedBotTools(FREELANCER, 'freelancer', db)).toEqual(['get_shoot_schedule']);
+    const { permitted } = await svc.getPermittedBotTools(FREELANCER, 'freelancer', db);
+    expect(permitted).toEqual(['get_shoot_schedule']);
   });
 
   test('an override is reflected in the permitted subset', async () => {
     // team_member normally has no attendance? — it does (🔐 own). Revoke it and
     // confirm the batch helper drops it while keeping the rest.
     const before = await svc.getPermittedBotTools(MEMBER, 'team_member', db);
-    expect(before).toContain('get_attendance');
+    expect(before.permitted).toContain('get_attendance');
 
     await svc.setOverride(MEMBER, 'bot.tool.get_attendance', false, ADMIN, db);
     const after = await svc.getPermittedBotTools(MEMBER, 'team_member', db);
-    expect(after).not.toContain('get_attendance');
-    expect(after).toContain('list_tasks');
+    expect(after.permitted).not.toContain('get_attendance');
+    expect(after.permitted).toContain('list_tasks');
+    // The complement moves with it — Sprint 8.1 builds the prompt's denial
+    // section from `denied`, so a tool must never fall out of both halves.
+    expect(after.denied).toContain('get_attendance');
+  });
+
+  test('permitted and denied are complementary and cover the whole query registry', async () => {
+    for (const [id, role] of [[ADMIN, 'admin'], [MEMBER, 'team_member'], [FREELANCER, 'freelancer']] as const) {
+      const { permitted, denied } = await svc.getPermittedBotTools(id, role, db);
+      expect(permitted.filter((n) => denied.includes(n))).toEqual([]); // disjoint
+      expect([...permitted, ...denied].sort()).toEqual([...BOT_QUERY_TOOL_NAMES].sort());
+    }
+  });
+});
+
+describe('getEffectivePermissions — the single Auth-Matrix §6.1 merge (Sprint 8.1)', () => {
+  test('the reported bug: a revoked bot tool reads false, not the role default', async () => {
+    // Exactly the /v1/staff/me symptom — this returned the role default `true`
+    // before the consolidation, while the bot correctly refused.
+    await svc.setOverride(MEMBER, 'bot.tool.get_attendance', false, ADMIN, db);
+    const perms = await svc.getEffectivePermissions(MEMBER, 'team_member', db);
+    expect(perms['bot.tool.get_attendance']).toBe(false);
+  });
+
+  test('the granting direction: default false + override true → true', async () => {
+    expect(ROLE_DEFAULTS['bot.tool.get_content_pipeline']!.team_member).toBe(false);
+    await svc.setOverride(MEMBER, 'bot.tool.get_content_pipeline', true, ADMIN, db);
+    const perms = await svc.getEffectivePermissions(MEMBER, 'team_member', db);
+    expect(perms['bot.tool.get_content_pipeline']).toBe(true);
+  });
+
+  test('covers every key family, not just bot.tool.* (the frontend reads the lot)', async () => {
+    const perms = await svc.getEffectivePermissions(MEMBER, 'team_member', db);
+    expect(Object.keys(perms).sort()).toEqual(Object.keys(ROLE_DEFAULTS).sort());
+    const families = new Set(Object.keys(perms).map((k) => k.split('.')[0]));
+    expect(families.size).toBeGreaterThan(1);
+  });
+
+  test('no override → the ROLE_DEFAULTS floor, unchanged', async () => {
+    const perms = await svc.getEffectivePermissions(FREELANCER, 'freelancer', db);
+    for (const key in ROLE_DEFAULTS) {
+      expect(perms[key]).toBe(ROLE_DEFAULTS[key]!.freelancer);
+    }
   });
 });

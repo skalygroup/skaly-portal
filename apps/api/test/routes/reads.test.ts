@@ -48,6 +48,14 @@ function authUser(over: Partial<AuthUser>): AuthUser {
 
 async function cleanup() {
   await db.deleteFrom('clients').where('name', 'like', `${CLIENT_MARKER}%`).execute();
+  // Drop what REFERENCES staff before staff itself. The permission-override test
+  // writes user_permissions + an audit_log row, and audit_log.staff_id is a
+  // non-null FK — leaving those behind makes the NEXT run's cleanup fail on the
+  // constraint, not on anything to do with the test that wrote them. Matched by
+  // sub-select because the ids are regenerated each run.
+  const staffOfThisSuite = db.selectFrom('staff').select('id').where('email', 'like', `%${DOMAIN}`);
+  await db.deleteFrom('audit_log').where('staff_id', 'in', staffOfThisSuite).execute();
+  await db.deleteFrom('user_permissions').where('staff_id', 'in', staffOfThisSuite).execute();
   await db.deleteFrom('staff').where('email', 'like', `%${DOMAIN}`).execute();
 }
 
@@ -195,5 +203,56 @@ describe('GET /v1/staff/me', () => {
     expect(body.email).toBe(`member${DOMAIN}`);
     expect(body).toHaveProperty('createdAt');
     expect(body).toHaveProperty('permissions');
+  });
+
+  /**
+   * Sprint 8.1 Defect 1, as the symptom that was actually reported: an admin
+   * revokes a capability, the bot correctly refuses — and /staff/me kept saying
+   * the user still had it, because the route read a second, override-blind
+   * resolver. This test fails on the pre-8.1 code.
+   *
+   * Note app.redis is `{}` in this harness, so it also covers the Redis-down
+   * path: the resolver must degrade to DB → floor, never fail open.
+   */
+  test('reflects an admin override — the value that was previously stale', async () => {
+    const KEY = 'bot.tool.get_attendance';
+
+    // Baseline: the role default for a team_member is `true`.
+    asUser = authUser({ id: memberId, role: 'team_member' });
+    const before = JSON.parse((await app.inject({ method: 'GET', url: '/v1/staff/me' })).payload);
+    expect(before.permissions[KEY]).toBe(true);
+
+    // Admin revokes it through the real endpoint (writes + audits + busts cache).
+    asUser = authUser({ id: adminId, role: 'admin' });
+    const put = await app.inject({
+      method: 'PUT',
+      url: `/v1/staff/${memberId}/permissions/${KEY}`,
+      payload: { value: false },
+    });
+    expect(put.statusCode).toBe(200);
+
+    asUser = authUser({ id: memberId, role: 'team_member' });
+    const after = JSON.parse((await app.inject({ method: 'GET', url: '/v1/staff/me' })).payload);
+    expect(after.permissions[KEY]).toBe(false);
+
+    // The SHAPE the frontend consumes is untouched — this fix corrects values only.
+    expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
+    expect(typeof after.permissions).toBe('object');
+    // …and only the revoked key moved.
+    for (const k of Object.keys(before.permissions)) {
+      if (k !== KEY) expect(after.permissions[k]).toBe(before.permissions[k]);
+    }
+
+    await db.deleteFrom('user_permissions').where('staff_id', '=', memberId).execute();
+  });
+
+  test('an unknown permission key is rejected by the override endpoint', async () => {
+    asUser = authUser({ id: adminId, role: 'admin' });
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/v1/staff/${memberId}/permissions/not.a.real.key`,
+      payload: { value: false },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });

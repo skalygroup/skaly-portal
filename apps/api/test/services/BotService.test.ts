@@ -315,9 +315,10 @@ describe('BotService — permission filter (get_attendance overridden off)', () 
 
     // Confirm the filter itself first.
     const perms = new PermissionService(redis);
-    const permitted = await perms.getPermittedBotTools(MEMBER, 'team_member', db);
+    const { permitted, denied } = await perms.getPermittedBotTools(MEMBER, 'team_member', db);
     expect(permitted).not.toContain('get_attendance');
     expect(permitted).toContain('list_tasks');
+    expect(denied).toContain('get_attendance');
 
     // The model asks for get_attendance anyway → defence in depth must refuse it.
     const { client, calls } = scriptedAnthropic([
@@ -385,5 +386,57 @@ describe('trimToTurns — 50-turn cap drops the oldest', () => {
     expect(userTurns).toHaveLength(50);
     expect(userTurns[0]!.content).toBe('turn 10'); // 0–9 dropped
     expect(trimmed[0]!.role).toBe('user'); // valid user-first history
+  });
+});
+
+/**
+ * Sprint 8.1 Defect 2 — the DETERMINISTIC half of the denial contract.
+ *
+ * The model's actual prose is probabilistic, so what's pinned here is the prompt
+ * it receives. Before this, denied tools were simply absent from the tool list
+ * and the model improvised a refusal — which could be unhelpful, wrong, or leak
+ * the permission model.
+ */
+describe('buildSystemPrompt — TOOL ACCESS denial section', () => {
+  // buildSystemPrompt needs no I/O; a bare instance is enough to reach it.
+  const svc = new BotService({} as unknown as Anthropic, redis, mockIo([]));
+
+  test('a non-empty denied list yields the verbatim canonical sentence', () => {
+    const prompt = svc.buildSystemPrompt('Asha', 'team_member', ['get_attendance']);
+    expect(prompt).toContain('TOOL ACCESS');
+    expect(prompt).toContain(
+      "I don't have permission to [action] on your behalf. Ask an admin to update your bot access settings.",
+    );
+  });
+
+  test('carries the never-state-the-role constraint (APPFLOW §9)', () => {
+    const prompt = svc.buildSystemPrompt('Asha', 'team_member', ['get_attendance']);
+    expect(prompt).toContain('Never state which role or permission level is required.');
+    expect(prompt).toContain('Never attempt a different tool to work around it.');
+  });
+
+  test('keeps the out-of-scope carve-out, so "what is the weather" is not a permission refusal', () => {
+    const prompt = svc.buildSystemPrompt('Asha', 'team_member', ['get_attendance']);
+    expect(prompt).toMatch(/portal does not cover at all/);
+  });
+
+  test('an empty denied list omits the section entirely — no wasted tokens', () => {
+    const prompt = svc.buildSystemPrompt('Asha', 'admin', []);
+    expect(prompt).not.toContain('TOOL ACCESS');
+    expect(prompt).not.toContain('Ask an admin to update your bot access settings');
+  });
+
+  test('denied tools render as capability phrases, never raw tool names', () => {
+    const prompt = svc.buildSystemPrompt('Asha', 'freelancer', ['get_attendance', 'get_audit_log']);
+    expect(prompt).toContain('viewing attendance records');
+    expect(prompt).toContain('viewing the audit log');
+    expect(prompt).not.toContain('get_attendance');
+    expect(prompt).not.toContain('get_audit_log');
+  });
+
+  test('an unknown tool name is dropped rather than echoed into the prompt', () => {
+    const prompt = svc.buildSystemPrompt('Asha', 'admin', ['not_a_real_tool']);
+    expect(prompt).not.toContain('not_a_real_tool');
+    expect(prompt).not.toContain('TOOL ACCESS'); // nothing resolvable → no section
   });
 });

@@ -40,6 +40,15 @@ export function getBotTool(name: string): BotTool | undefined {
   return byName.get(name);
 }
 
+/**
+ * Human-readable capability phrases for a set of tool names — what the system
+ * prompt names as DENIED (Sprint 8.1). Unknown names are dropped rather than
+ * echoed: a raw tool name in the prompt would leak the internal tool surface.
+ */
+export function capabilityPhrases(names: readonly string[]): string[] {
+  return names.map((n) => byName.get(n)?.capability).filter((c): c is string => Boolean(c));
+}
+
 /** Anthropic tool definitions for the permitted subset (by tool name). */
 export function anthropicToolDefs(permittedNames: readonly string[]): Anthropic.Tool[] {
   const permitted = new Set(permittedNames);

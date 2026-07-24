@@ -33,6 +33,7 @@ function line(t: TaskDTO): string {
 
 export const listTasksTool = defineTool({
   name: 'list_tasks',
+  capability: 'listing tasks',
   description:
     'List tasks for a month, optionally filtered by status or client. Returns only what the caller is authorised to see.',
   inputSchema: z.object({
@@ -66,6 +67,7 @@ export const listTasksTool = defineTool({
 
 export const listOverdueTasksTool = defineTool({
   name: 'list_overdue_tasks',
+  capability: 'listing overdue tasks',
   description:
     'List tasks whose deadline has passed and are not yet Done or Cancelled, for a month (defaults to current).',
   inputSchema: z.object({ period: periodField }),
@@ -85,6 +87,7 @@ export const listOverdueTasksTool = defineTool({
 
 export const getUserWorkloadTool = defineTool({
   name: 'get_user_workload',
+  capability: 'viewing workload summaries',
   description:
     'Summarise task workload per assignee for a month: open, overdue, and done counts. A team member sees only their own workload.',
   inputSchema: z.object({ period: periodField }),
@@ -125,6 +128,7 @@ export const getUserWorkloadTool = defineTool({
 
 export const getProjectStatusTool = defineTool({
   name: 'get_project_status',
+  capability: 'viewing project status',
   // ponytail: TRD §9 lists this tool but does not pin its shape. Task-only BY
   // DESIGN, via the aggregate-subset rule: an aggregate tool's payload must be a
   // subset of what the LEAST-privileged role holding that tool can already see
