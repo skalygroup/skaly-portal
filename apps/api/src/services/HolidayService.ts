@@ -82,7 +82,7 @@ export class HolidayService {
       .updateTable('attendance_logs')
       .set({ day_type: 'holiday' })
       .where('period', '=', period)
-      .where('date', '=', sql<Date>`${date}::date`)
+      .where('date', '=', sql<string>`${date}::date`)
       .where('day_type', '=', 'working')
       .execute();
 
@@ -136,7 +136,7 @@ export class HolidayService {
       .updateTable('attendance_logs')
       .set({ day_type: 'working' })
       .where('period', '=', holiday.period)
-      .where('date', '=', sql<Date>`${holiday.date}::date`)
+      .where('date', '=', sql<string>`${holiday.date}::date`)
       .where('day_type', '=', 'holiday')
       .execute();
 

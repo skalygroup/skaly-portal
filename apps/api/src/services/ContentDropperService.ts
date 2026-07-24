@@ -265,7 +265,7 @@ export class ContentDropperService {
         .where('client_id', '=', clientId)
         .where('period', '=', period)
         .where('slot_status', '=', 'Confirmed')
-        .where('slot_date', '>=', sql<Date>`CURRENT_DATE`)
+        .where('slot_date', '>=', sql<string>`CURRENT_DATE`)
         .executeTakeFirst();
       const nextDate = agg?.next_date ?? null;
 
