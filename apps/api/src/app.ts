@@ -103,6 +103,23 @@ export async function buildApp(
       });
     }
 
+    // Fastify's OWN client errors — malformed JSON, an empty body declaring
+    // application/json, unsupported media type, payload too large. They already
+    // carry the right 4xx, but nothing claimed them, so they fell through to the
+    // 500 branch below and a bad REQUEST was reported as a server fault. That
+    // sends whoever is debugging looking at the server instead of their call
+    // (it cost us exactly that during the Sprint 8 STEP 10 walk-through).
+    //
+    // The status is Fastify's; the code stays VALIDATION_ERROR (Error-Handling
+    // §Data Integrity) so FST_ERR_* internals never reach a client. 5xx still
+    // falls through and is sanitised below.
+    if (typeof error.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 500) {
+      request.log.warn({ err: error, url: request.url }, 'Client error');
+      return reply.status(error.statusCode).send({
+        error: { code: 'VALIDATION_ERROR', message: error.message },
+      });
+    }
+
     // Unexpected — sanitise, log with a correlation id, never leak internals.
     const traceId = randomUUID();
     request.log.error({ err: error, traceId, url: request.url }, 'Unhandled error');
