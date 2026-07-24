@@ -1,5 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
+import { totp } from './totp';
+
 /**
  * Shared E2E auth helpers.
  *
@@ -54,6 +56,47 @@ export async function login(page: Page, email: string, password: string): Promis
   await expect(passwordField).toHaveValue(password);
   await page.getByRole('button', { name: /Sign in/i }).click();
   await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 15_000 });
+  await clearMfaChallenge(page);
+}
+
+/**
+ * Step an enrolled admin/manager session up to aal2.
+ *
+ * Sprint 8 STEP 8 put a TOTP challenge in front of the portal: a password login
+ * is aal1, and the middleware bounces privileged aal1 sessions to
+ * /mfa-challenge (src/middleware.ts, guard (e)). Every admin spec written before
+ * that gate — attendance, tasks, shoot-planner, content-* — signed in, landed on
+ * /mfa-challenge, and then timed out hunting for grid controls on a page that
+ * was never the portal. `login()` only waited for "not /login", so the challenge
+ * page counted as a successful sign-in and the real failure surfaced 30 seconds
+ * later as a missing button.
+ *
+ * Rather than teach each spec about MFA, the barrier lives here: the code is
+ * computed from TEST_ADMIN_TOTP_SECRET exactly as an authenticator app would.
+ * Non-privileged roles never see the challenge, so this is a no-op for them.
+ */
+export async function clearMfaChallenge(page: Page): Promise<void> {
+  if (!new URL(page.url()).pathname.startsWith('/mfa-challenge')) return;
+
+  const secret = process.env.TEST_ADMIN_TOTP_SECRET;
+  if (!secret) {
+    throw new Error(
+      'Signed-in user was sent to /mfa-challenge but TEST_ADMIN_TOTP_SECRET is not set. ' +
+        'The E2E admin must be an account whose TOTP secret this suite owns.',
+    );
+  }
+
+  // A code minted in the last moments of its 30s window can expire between the
+  // fill and Supabase validating it. Rather than retry (a retry must wait out the
+  // whole window for a genuinely new code, and a 30s sleep cannot fit inside a
+  // 30s test timeout), step over the boundary BEFORE minting: if the current
+  // window has under 3s left, wait it out so the code we submit is always fresh.
+  const remainingMs = 30_000 - (Date.now() % 30_000);
+  if (remainingMs < 3_000) await page.waitForTimeout(remainingMs + 500);
+
+  // The page auto-submits on the 6th digit — no submit button to click.
+  await page.getByLabel('6-digit verification code').fill(totp(secret));
+  await page.waitForURL((u) => !u.pathname.startsWith('/mfa-challenge'), { timeout: 15_000 });
 }
 
 /**
