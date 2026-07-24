@@ -6,19 +6,19 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-        ".": {
-                "types": "./dist/index.d.ts",
-                "default": "./dist/index.js"
-        },
-        "./schemas/*": {
-                "types": "./dist/schemas/*.d.ts",
-                "default": "./dist/schemas/*.js"
-        }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schemas/*": {
+      "types": "./dist/schemas/*.d.ts",
+      "default": "./dist/schemas/*.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepare": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "pnpm run build"
   },
   "dependencies": {
     "kysely": "^0.29",
@@ -27,5 +27,6 @@
   "devDependencies": {
     "typescript": "^5.9.3",
     "@types/node": "^22.19.21"
-  }
+  },
+  "scriptsComment": "typecheck runs build on purpose. apps/* consume this package through dist/*.d.ts (see exports), so a --noEmit typecheck here would leave a stale dist in place and every downstream typecheck would validate against outdated types. That is not hypothetical: it hid five sql<Date> errors until CI, which installs clean, caught them. Emitting here keeps pnpm -r typecheck honest, since pnpm runs it topologically before the apps."
 }
