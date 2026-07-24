@@ -1,14 +1,12 @@
-import { ROLE_DEFAULTS } from '@skaly/shared';
 import { StaffMeResponseSchema } from '@skaly/shared/schemas/auth';
 import { z } from 'zod';
 
 import { AppError } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
-import { getEffectivePermissions } from '../../lib/permissions.js';
 import { getR2Client, getR2Bucket } from '../../lib/r2.js';
 import { supabaseAdmin } from '../../lib/supabase.js';
 import { AuthService, AuthError } from '../../services/AuthService.js';
-import { PermissionService } from '../../services/PermissionService.js';
+import { PermissionService, isPermissionKey } from '../../services/PermissionService.js';
 import { StaffService } from '../../services/StaffService.js';
 
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -96,7 +94,20 @@ export default async function staffRoutes(app: FastifyInstance) {
       const profile = await staffService.getFullProfile(request.user.id, app.db);
       // verifyJwt already resolved this row, but stay honest about the type.
       if (!profile) throw new AppError('RESOURCE_NOT_FOUND', 'Staff not found.');
-      const permissions = await getEffectivePermissions(app.db, request.user.id);
+      // One resolver, so this reflects admin overrides exactly as the bot's tool
+      // filter does (Sprint 8.1). The response SHAPE is unchanged — only the
+      // values are now correct.
+      //
+      // The sidebar reads this via TanStack Query, so a permission an admin just
+      // changed lands on the affected user's next refetch/reload; the override
+      // endpoint already busts the Redis cache server-side.
+      // Sprint 10 may push a permission-changed event; until then the sidebar
+      // refreshes on refetch.
+      const permissions = await permissionService.getEffectivePermissions(
+        request.user.id,
+        profile.role,
+        app.db,
+      );
       return { ...profile, permissions };
     },
   );
@@ -168,7 +179,7 @@ export default async function staffRoutes(app: FastifyInstance) {
       schema: {
         params: z.object({
           id: z.string().uuid(),
-          key: z.string().refine((k) => k in ROLE_DEFAULTS, 'Unknown permission key'),
+          key: z.string().refine(isPermissionKey, 'Unknown permission key'),
         }),
         body: z.object({ value: z.boolean() }),
         response: {

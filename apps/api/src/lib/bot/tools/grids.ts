@@ -37,6 +37,7 @@ function asText(header: string, data: unknown): string {
 
 export const getAttendanceTool = defineTool({
   name: 'get_attendance',
+  capability: 'viewing attendance records',
   description: 'Get the attendance grid for a month. A team member sees only their own column.',
   inputSchema: z.object({ period: periodField }),
   jsonSchema: periodSchema,
@@ -50,6 +51,7 @@ export const getAttendanceTool = defineTool({
 
 export const getShootScheduleTool = defineTool({
   name: 'get_shoot_schedule',
+  capability: 'viewing the shoot schedule',
   description: 'Get the shoot schedule for a month. A freelancer sees only their own slots (ADR-011).',
   inputSchema: z.object({ period: periodField }),
   jsonSchema: periodSchema,
@@ -63,6 +65,7 @@ export const getShootScheduleTool = defineTool({
 
 export const getContentPipelineTool = defineTool({
   name: 'get_content_pipeline',
+  capability: 'viewing the content pipeline',
   description: 'Get the content pipeline (per-client production stages) for a month.',
   inputSchema: z.object({ period: periodField }),
   jsonSchema: periodSchema,
@@ -76,6 +79,7 @@ export const getContentPipelineTool = defineTool({
 
 export const getContentCalendarTool = defineTool({
   name: 'get_content_calendar',
+  capability: 'viewing the content calendar',
   description: 'Get the content calendar for a month.',
   inputSchema: z.object({ period: periodField }),
   jsonSchema: periodSchema,

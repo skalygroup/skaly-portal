@@ -174,22 +174,22 @@ test.describe('bot — live smoke', () => {
   });
 
   /**
-   * NOTE ON WHAT THIS ASSERTS. STEP 9.1 asks for the canned "Ask your admin"
-   * refusal here. That string (BotService.ts:40) is reached from runTool, i.e.
-   * only when the model CALLS a tool it may not use — but getPermittedBotTools
-   * strips unpermitted tools from the definitions before the model ever sees
-   * them, so with a plain override the model simply has no attendance tool and
-   * improvises its own refusal ("I don't have a tool available to check
-   * attendance records…"). The canned copy is the backstop for a hallucinated
-   * tool name, not the normal path.
+   * NOTE ON WHAT THIS ASSERTS (updated in Sprint 8.1).
    *
-   * Improvised prose is different on every run, so asserting on it would assert
-   * on a coin flip. The two things that actually matter here are deterministic,
-   * and they are what this test checks: the override really reached the resolver
-   * (visible on /v1/staff/me, which proves the perms:{staffId} bust), and no
-   * attendance data reached the user (no card).
+   * Sprint 8 shipped this asserting only "no card", because a denied tool was
+   * simply absent from the model's tool list and the model improvised its own
+   * refusal — prose that differs every run, so the canonical copy could not be
+   * asserted honestly. Sprint 8.1 puts the denied capabilities and the exact
+   * sentence into the system prompt, so the copy is now instructed.
+   *
+   * Model output is still probabilistic, so the split is deliberate: the strict
+   * word-for-word contract is pinned in the buildSystemPrompt unit tests, and
+   * here we assert loosely (a substring) plus the constraint that actually
+   * protects the user — that no role is ever named (APPFLOW §9).
    */
-  test('team_member: a denied tool yields no attendance data and no card', async ({ page }) => {
+  test('team_member: a denied tool refuses in our copy, names no role, and renders no card', async ({
+    page,
+  }) => {
     const memberId = await withDb((c) => staffIdByEmail(c, MEMBER_EMAIL));
 
     // Turn get_attendance off for the member via the admin override endpoint —
@@ -205,30 +205,42 @@ test.describe('bot — live smoke', () => {
     await adminPage.close();
 
     try {
-      // The override persisted, so getPermittedBotTools will read it and strip
-      // the tool. NOT asserted via /v1/staff/me: that endpoint is backed by
-      // getEffectivePermissions (lib/permissions.ts), which still returns the
-      // role baseline and ignores user_permissions entirely — so it reports
-      // get_attendance as true here even though the bot correctly refuses. See
-      // the Sprint 8 close-out note; the bot's own path (PermissionService) is
-      // the one under test.
-      const stored = await withDb((c) =>
-        c.query('SELECT value FROM user_permissions WHERE staff_id=$1 AND permission_key=$2', [
-          memberId,
-          'bot.tool.get_attendance',
-        ]),
-      );
-      expect(stored.rows[0]?.value).toBe(false);
-
       await login(page, MEMBER_EMAIL, MEMBER_PASSWORD);
-      await page.goto('/bot');
+      const token = await captureApiToken(page, () => page.goto('/bot'));
+
+      // Since Sprint 8.1 there is ONE resolver, so the value the bot gates on is
+      // the value /v1/staff/me reports. (Pre-8.1 this said `true` here while the
+      // bot correctly refused — that divergence was Defect 1.)
+      const me = await page.request.get(`${API_BASE}/v1/staff/me`, {
+        headers: { authorization: token },
+      });
+      expect((await me.json()).permissions['bot.tool.get_attendance']).toBe(false);
+
       await ask(page, `What is my attendance for ${PERIOD}?`);
 
+      const reply = assistantBubbles(page).last();
       // The bot still answers — a denied tool is a normal conversation, not an error.
-      await expect(assistantBubbles(page).last()).toHaveText(/\S/, { timeout: BOT_TIMEOUT });
-      // …but no attendance data comes back, and no error code is leaked.
+      await expect(reply).toHaveText(/\S/, { timeout: BOT_TIMEOUT });
+      // Our copy, matched loosely: the strict wording lives in the
+      // buildSystemPrompt unit tests, where it is deterministic.
+      await expect(reply).toHaveText(/ask an admin/i, { timeout: BOT_TIMEOUT });
+      // APPFLOW §9's constraint — the refusal must never reveal the permission
+      // model. This is the assertion that would catch a regression in the prompt.
+      await expect(reply).not.toHaveText(
+        /\b(admin|manager|team.?member|freelancer)\s+(role|permission|access|level)/i,
+      );
+      // …and no attendance data comes back, and no error code is leaked.
       await expect(page.getByText(/^Attendance · /)).toHaveCount(0);
-      await expect(assistantBubbles(page).last()).not.toHaveText(/PERMISSION_DENIED|\b[45]\d\d\b/);
+      await expect(reply).not.toHaveText(/PERMISSION_DENIED|\b[45]\d\d\b/);
+
+      // The carve-out, asked in the SAME turn-context so the TOOL ACCESS section
+      // is definitely in play: something the portal doesn't cover at all must get
+      // a plain can't-help answer, NOT the permission sentence. Without the last
+      // prompt paragraph the model over-applies the refusal to everything.
+      await ask(page, 'What is the weather in Mumbai today?');
+      const offTopic = assistantBubbles(page).last();
+      await expect(offTopic).toHaveText(/\S/, { timeout: BOT_TIMEOUT });
+      await expect(offTopic).not.toHaveText(/ask an admin/i);
     } finally {
       // Restore the override whatever happened — a left-behind false would
       // silently break every later attendance assertion in the suite.

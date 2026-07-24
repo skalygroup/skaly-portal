@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 
 import { currentIstDate, currentIstPeriod } from './BaseService.js';
 import { PermissionService } from './PermissionService.js';
-import { anthropicToolDefs, getBotTool } from '../lib/bot/tools/registry.js';
+import { anthropicToolDefs, capabilityPhrases, getBotTool } from '../lib/bot/tools/registry.js';
 import { env } from '../lib/env.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
@@ -36,8 +36,16 @@ const MAX_TURNS = 50; // 50-turn cap, drop oldest (TRD §9.4)
 const MAX_TOKENS = 1024;
 
 // Friendly copy only — never a code or stack (Error-Handling §6, reconciliation #10).
+//
+// Backstop only — unpermitted tools are filtered before the model sees them, so
+// this fires only if the model invents a tool name. The normal denial path is the
+// system prompt's TOOL ACCESS section (Sprint 8.1).
 const PERMISSION_DENIED_COPY =
   "I don't have permission to do that on your behalf. Ask an admin to update your bot access settings.";
+/** The same sentence in its canonical templated form (Error-Handling §6 /
+ *  APPFLOW §9) — the model fills [action] with what was actually asked for. */
+const PERMISSION_DENIED_TEMPLATE =
+  "I don't have permission to [action] on your behalf. Ask an admin to update your bot access settings.";
 const GENERIC_TOOL_ERROR_COPY =
   'Something went wrong. Please try again or make the change directly in the portal.';
 const ANTHROPIC_ERROR_COPY = "I'm having trouble connecting right now. Please try again.";
@@ -161,9 +169,16 @@ export class BotService {
     try {
       const currentUser: CurrentUser = { staffId, role };
       const name = await this.staffName(staffId, db);
-      const permittedNames = await this.permissions.getPermittedBotTools(staffId, role, db);
+      // Only `permitted` reaches the model; `denied` never becomes a tool def —
+      // it goes into the prompt so the refusal is our copy, not the model's
+      // improvisation (Sprint 8.1 Defect 2).
+      const { permitted: permittedNames, denied } = await this.permissions.getPermittedBotTools(
+        staffId,
+        role,
+        db,
+      );
       const tools = anthropicToolDefs(permittedNames);
-      const system = this.buildSystemPrompt(name, role);
+      const system = this.buildSystemPrompt(name, role, denied);
 
       const messages: Anthropic.MessageParam[] = [...session.messages, { role: 'user', content: userText }];
 
@@ -272,13 +287,57 @@ export class BotService {
     }
   }
 
-  private buildSystemPrompt(name: string, role: Role): string {
-    return [
+  /**
+   * The system prompt. `denied` carries the tools this caller may NOT use.
+   *
+   * Those tools are stripped from the Anthropic `tools` array before the model
+   * sees them, so without this section the model has no idea a capability was
+   * withheld and improvises a refusal — which may be unhelpful, factually wrong
+   * ("attendance isn't tracked here"), or leak the permission model. Naming them
+   * here makes the denial OUR copy (Error-Handling §6 / APPFLOW §9) instead.
+   */
+  buildSystemPrompt(name: string, role: Role, denied: readonly string[] = []): string {
+    const base = [
       'You are the AI assistant for the Scaly business management portal.',
       `Current date (IST): ${currentIstDate()}. Current period: ${currentIstPeriod()}.`,
       `You are assisting ${name} (role: ${role}).`,
       'Only use the provided tools to answer questions about portal data. If the data is unavailable or you have no tool for it, say so plainly — never invent data.',
       'You can only see data this user is authorised for; do not claim access to anything outside the tools you were given.',
+      // TTFT (NFR §1.2/§1.3). A tool-calling turn is two streams, and phase 1
+      // returns a bare tool_use block — measured: it emits NO text at all, so
+      // nothing reaches the user until the tool has run and phase 2 begins. That
+      // put the first visible token at ~2s median, 4.5s worst.
+      //
+      // Asking for one sentence up front gives phase 1 something to stream while
+      // the tool runs, which is also just what a person does ("let me check…").
+      // It is real output, not a spinner dressed up as text.
+      'Before you call a tool, first write ONE short sentence (under 12 words) saying what you are about to look up, then call the tool.',
+    ];
+
+    // Omitted entirely when nothing is denied — no wasted tokens, and no
+    // invitation to refuse things this caller can actually do.
+    const phrases = capabilityPhrases(denied);
+    if (phrases.length === 0) return base.join('\n');
+
+    return [
+      ...base,
+      '',
+      'TOOL ACCESS',
+      `This user does not have access to the following capabilities: ${phrases.join(', ')}.`,
+      '',
+      'If the user asks for something that would require one of these, reply with exactly this',
+      'sentence and nothing more:',
+      `"${PERMISSION_DENIED_TEMPLATE}"`,
+      'Replace [action] with a short description of what they asked for.',
+      '',
+      'Never state which role or permission level is required. Never explain why access is denied.',
+      'Never attempt a different tool to work around it.',
+      '',
+      // Load-bearing: without it the bot answers "what's the weather?" with a
+      // permission refusal, which is both wrong and confusing.
+      'This applies only to the capabilities listed above. If the user asks about something the',
+      'portal does not cover at all, say you can’t help with that instead — do not use the',
+      'permission sentence.',
     ].join('\n');
   }
 
