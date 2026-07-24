@@ -420,6 +420,20 @@ describe('buildSystemPrompt — TOOL ACCESS denial section', () => {
     expect(prompt).toMatch(/portal does not cover at all/);
   });
 
+  /**
+   * The TTFT lever (NFR §1.2/§1.3), so it is pinned rather than left to drift.
+   * A tool-calling turn is two streams and phase 1 returns a bare tool_use block
+   * that emits no text — measured — so without this instruction nothing reaches
+   * the user until the tool has run. Removing it silently doubles TTFT (measured
+   * 959ms median with it, 1946ms without), and no other test would notice.
+   */
+  test('always instructs a short preamble before a tool call — the TTFT lever', () => {
+    for (const denied of [[], ['get_attendance']]) {
+      const prompt = svc.buildSystemPrompt('Asha', 'admin', denied);
+      expect(prompt).toMatch(/before you call a tool/i);
+    }
+  });
+
   test('an empty denied list omits the section entirely — no wasted tokens', () => {
     const prompt = svc.buildSystemPrompt('Asha', 'admin', []);
     expect(prompt).not.toContain('TOOL ACCESS');

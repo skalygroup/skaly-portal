@@ -179,7 +179,7 @@ export class TaskService {
       .where('tasks.deleted_at', 'is', null)
       .where('tasks.period', '=', filters.period);
 
-    if (filters.date) q = q.where('tasks.date', '=', sql<Date>`${filters.date}::date`);
+    if (filters.date) q = q.where('tasks.date', '=', sql<string>`${filters.date}::date`);
     if (filters.status) q = q.where('tasks.status', '=', filters.status);
     if (filters.clientId) q = q.where('tasks.client_id', '=', filters.clientId);
     if (filters.priority) q = q.where('tasks.priority', '=', filters.priority);

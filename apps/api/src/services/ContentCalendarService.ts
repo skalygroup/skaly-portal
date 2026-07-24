@@ -295,7 +295,7 @@ export class ContentCalendarService {
       .where('content_calendar.period', '=', targetPeriod)
       // Explicit ::date cast — postedAt is a 'YYYY-MM-DD' string and the column
       // is DATE; never build a JS Date here, that would reintroduce a timezone.
-      .where('content_calendar.date', '=', sql<Date>`${postedAt}::date`)
+      .where('content_calendar.date', '=', sql<string>`${postedAt}::date`)
       .executeTakeFirst();
 
     // Rule 3.

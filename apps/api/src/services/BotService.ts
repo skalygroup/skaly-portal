@@ -303,6 +303,15 @@ export class BotService {
       `You are assisting ${name} (role: ${role}).`,
       'Only use the provided tools to answer questions about portal data. If the data is unavailable or you have no tool for it, say so plainly — never invent data.',
       'You can only see data this user is authorised for; do not claim access to anything outside the tools you were given.',
+      // TTFT (NFR §1.2/§1.3). A tool-calling turn is two streams, and phase 1
+      // returns a bare tool_use block — measured: it emits NO text at all, so
+      // nothing reaches the user until the tool has run and phase 2 begins. That
+      // put the first visible token at ~2s median, 4.5s worst.
+      //
+      // Asking for one sentence up front gives phase 1 something to stream while
+      // the tool runs, which is also just what a person does ("let me check…").
+      // It is real output, not a spinner dressed up as text.
+      'Before you call a tool, first write ONE short sentence (under 12 words) saying what you are about to look up, then call the tool.',
     ];
 
     // Omitted entirely when nothing is denied — no wasted tokens, and no
