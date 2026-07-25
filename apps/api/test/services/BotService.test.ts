@@ -493,6 +493,18 @@ describe('buildSystemPrompt — TOOL ACCESS denial section', () => {
     expect(prompt).toMatch(/portal does not cover at all/);
   });
 
+  test('the "no tool for it" line carries the TOOL ACCESS exception, but only when something is denied', () => {
+    // The two instructions compete, and the general one wins by default: it comes
+    // first and covers the same situation. The exception has to be attached WHERE
+    // that instruction is given, not restated louder further down.
+    const denied = svc.buildSystemPrompt('Asha', 'team_member', ['get_attendance']);
+    expect(denied).toMatch(/EXCEPTION: for the capabilities listed under TOOL ACCESS/);
+
+    // Nothing denied → no TOOL ACCESS section, so a reference to one would be a
+    // dangling pointer in the prompt.
+    expect(svc.buildSystemPrompt('Asha', 'admin', [])).not.toMatch(/EXCEPTION/);
+  });
+
   /**
    * The TTFT lever (NFR §1.2/§1.3), so it is pinned rather than left to drift.
    * A tool-calling turn is two streams and phase 1 returns a bare tool_use block

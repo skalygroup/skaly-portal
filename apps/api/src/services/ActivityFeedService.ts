@@ -52,7 +52,14 @@ interface TemplateContext {
 interface Template {
   /** Returns null to skip this row (e.g. an UPDATE that touched nothing readable). */
   text: (ctx: TemplateContext) => string | null;
-  link?: (ctx: TemplateContext) => string | null;
+  /**
+   * The module page this event belongs to. A bare path gets `?period=` appended
+   * when the payload carried one — that was ten identical closures before, one
+   * per template, all writing the same ternary.
+   */
+  link?: string;
+  /** Only for events that deep-link to a ROW rather than a page (APPFLOW §12). */
+  rowLink?: (ctx: TemplateContext) => string | null;
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
@@ -67,8 +74,9 @@ const TEMPLATES: Record<string, Template> = {
       const description = str(after?.description);
       return description ? `${actor} created "${description}"` : `${actor} created a task`;
     },
-    link: ({ period, recordId }) =>
-      period && recordId ? `/tasks?period=${period}&highlight=${recordId}` : '/tasks',
+    link: '/tasks',
+    rowLink: ({ period, recordId }) =>
+      period && recordId ? `/tasks?period=${period}&highlight=${recordId}` : null,
   },
   'tasks:UPDATE': {
     text: ({ actor, after }) => {
@@ -77,58 +85,60 @@ const TEMPLATES: Record<string, Template> = {
       // rather than emit "someone updated a task".
       return status ? `${actor} marked a task as ${status}` : null;
     },
-    link: ({ period, recordId }) =>
-      period && recordId ? `/tasks?period=${period}&highlight=${recordId}` : '/tasks',
+    link: '/tasks',
+    rowLink: ({ period, recordId }) =>
+      period && recordId ? `/tasks?period=${period}&highlight=${recordId}` : null,
   },
   'tasks:DELETE': {
     text: ({ actor }) => `${actor} deleted a task`,
-    link: ({ period }) => (period ? `/tasks?period=${period}` : '/tasks'),
+    link: '/tasks',
   },
   'holidays:INSERT': {
     text: ({ actor, after }) => {
       const name = str(after?.name);
       return name ? `${actor} added the holiday ${name}` : `${actor} added a holiday`;
     },
-    link: ({ period }) => (period ? `/attendance?period=${period}` : '/attendance'),
+    link: '/attendance',
   },
   'holidays:DELETE': {
     text: ({ actor, before }) => {
       const name = str(before?.name);
       return name ? `${actor} removed the holiday ${name}` : `${actor} removed a holiday`;
     },
-    link: ({ period }) => (period ? `/attendance?period=${period}` : '/attendance'),
+    link: '/attendance',
   },
   'content_pipelines:UPDATE': {
     text: ({ actor }) => `${actor} moved a client's content pipeline forward`,
-    link: ({ period }) => (period ? `/content-dropper?period=${period}` : '/content-dropper'),
+    link: '/content-dropper',
   },
   'content_calendar:UPDATE': {
     text: ({ actor, after }) => {
       const status = str(after?.status);
       return status ? `${actor} set a calendar day to ${status}` : null;
     },
-    link: ({ period }) => (period ? `/content-calendar?period=${period}` : '/content-calendar'),
+    link: '/content-calendar',
   },
   'shoot_schedules:UPDATE': {
     text: ({ actor, after }) => {
       const status = str(after?.slot_status);
       return status ? `${actor} set a shoot slot to ${status}` : `${actor} updated a shoot slot`;
     },
-    link: ({ period }) => (period ? `/shoot-planner?period=${period}` : '/shoot-planner'),
+    link: '/shoot-planner',
   },
   'clients:INSERT': {
     text: ({ actor, after }) => {
       const name = str(after?.name);
       return name ? `${actor} added the client ${name}` : `${actor} added a client`;
     },
-    link: () => '/settings/clients',
+    // Clients are not period-scoped, so no ?period= is appended for them.
+    link: '/settings/clients',
   },
   'clients:DELETE': {
     text: ({ actor, before }) => {
       const name = str(before?.name);
       return name ? `${actor} deactivated ${name}` : `${actor} deactivated a client`;
     },
-    link: () => '/settings/clients',
+    link: '/settings/clients',
   },
   // Month events are the one 'system'-sourced thing worth surfacing — a locked or
   // rolled-over month changes what everyone can do.
@@ -226,11 +236,20 @@ export class ActivityFeedService {
       const text = template.text(ctx);
       if (text === null) continue; // the renderer decided this row says nothing
 
+      // A row-level deep link when the template has one, else the module page —
+      // with ?period= only when the payload carried a period, which is exactly the
+      // period-scoped tables (a clients row has no period column, so it stays bare).
+      const page = template.link
+        ? ctx.period
+          ? `${template.link}?period=${ctx.period}`
+          : template.link
+        : null;
+
       items.push({
         id: row.id,
         actor: ctx.actor,
         text,
-        link: template.link?.(ctx) ?? null,
+        link: template.rowLink?.(ctx) ?? page,
         at: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
       });
       if (items.length === limit) break;

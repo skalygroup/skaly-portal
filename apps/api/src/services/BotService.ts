@@ -806,7 +806,19 @@ export class BotService {
     if (phrases.length === 0) return base.join('\n');
 
     return [
-      ...base,
+      // THE BASE PROMPT COMPETES WITH THE DENIAL BLOCK, and the base line wins by
+      // default — it is more general and it comes first. Measured: with attendance
+      // denied, the model answered "I don't have access to attendance records
+      // through the portal tools available to me", which is precisely the
+      // "no tool for it, say so plainly" instruction being followed. Naming the
+      // exception where that instruction is given is what resolves it; adding more
+      // emphasis to the TOOL ACCESS block below does not, because the model is not
+      // ignoring an instruction, it is obeying a different one.
+      ...base.map((line) =>
+        line.startsWith('Only use the provided tools')
+          ? `${line} EXCEPTION: for the capabilities listed under TOOL ACCESS below, do not say you have no tool — use the exact sentence given there.`
+          : line,
+      ),
       '',
       'TOOL ACCESS',
       `This user does not have access to the following capabilities: ${phrases.join(', ')}.`,

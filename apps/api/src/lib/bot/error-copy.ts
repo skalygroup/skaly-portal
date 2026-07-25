@@ -31,14 +31,17 @@ const GENERIC = 'Something went wrong. Please try again or make the change direc
 
 type CopyFn = (ctx: ErrorCopyContext) => string;
 
+const denied: CopyFn = ({ action }) =>
+  `I don't have permission to ${action ?? 'do that'} on your behalf. Ask an admin to update your bot access settings.`;
+
 const COPY: Record<string, CopyFn> = {
   PERIOD_LOCKED: ({ month }) =>
     `I can't update that record — ${month ?? 'that month'} is locked. Ask an admin to unlock it if a correction is needed.`,
 
-  PERMISSION_DENIED: ({ action }) =>
-    `I don't have permission to ${action ?? 'do that'} on your behalf. Ask an admin to update your bot access settings.`,
-  BOT_TOOL_DENIED: ({ action }) =>
-    `I don't have permission to ${action ?? 'do that'} on your behalf. Ask an admin to update your bot access settings.`,
+  // Two codes, one sentence — deliberately the same object, so they cannot drift
+  // into two subtly different refusals.
+  PERMISSION_DENIED: denied,
+  BOT_TOOL_DENIED: denied,
 
   DEPENDENCY_UNRESOLVED: ({ dependency }) =>
     dependency

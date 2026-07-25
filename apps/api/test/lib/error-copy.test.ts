@@ -146,7 +146,10 @@ describe('the denial block, re-tuned for 22 tools', () => {
     const denied = MUTATION_TOOLS.map((t) => t.name);
     const prompt = svc().buildSystemPrompt('Rahul', 'team_member', denied);
 
-    const section = prompt.slice(prompt.indexOf('TOOL ACCESS'));
+    // Anchored on the section HEADING, not the first mention of the words: the
+    // base prompt now names TOOL ACCESS when it points at the exception, and
+    // slicing from there measured most of the prompt rather than the section.
+    const section = prompt.slice(prompt.indexOf('\nTOOL ACCESS\n'));
     expect(section).toBeTruthy();
 
     // No raw tool name anywhere in the prompt.
