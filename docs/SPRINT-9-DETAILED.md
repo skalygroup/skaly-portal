@@ -365,7 +365,7 @@ git checkout -b sprint-9-bot-mutation-search
 >
 > 2. **`deactivate(id, currentUser, db)`** — **admin only** (mirrors staff deactivation; Auth-Matrix §5 gives `deactivate_client` to admin only). One transaction:
 >    a. Load the client (404 if missing or already soft-deleted).
->    b. `BaseService.softDelete('clients', id, currentUser.staffId, trx)` — sets `deleted_at`; also set `active = false`.
+>    b. `softDelete('clients', id, currentUser.staffId, trx)` from `apps/api/src/lib/queries.ts` — sets `deleted_at`; also set `active = false`. **(Corrected: it is not on `BaseService`. `lib/queries.ts` owns both `softDelete` and the `softDeletable` SELECT filter.)**
 >    c. **Do not touch historical rows.** Past `shoot_schedules` / `content_pipelines` / `content_calendar` / `tasks` stay exactly as they are — the client disappears from *future* generation and from `softDeletable` reads, and history remains intact and auditable. Add a comment saying so.
 >    d. `AuditService.log({ entity: 'clients', action: 'DELETE', … })`.
 >    e. Return `{ deactivated: true }`.
@@ -558,7 +558,24 @@ pnpm typecheck
 
 ## SPRINT 9 — STEP 5: `BotService` integration — turn 1 interceptor, turn 2 executor
 
-**Goal:** Wire the machine into the Sprint 8 loop **without changing that loop's shape**.
+**Goal:** Wire the machine into the Sprint 8 loop.
+
+> ### ⚠️ SUPERSEDED IN PART BY ADR-018 — "without changing that loop's shape" was wrong
+>
+> This step originally said to preserve the Sprint 8 loop shape, and §B.7 below still
+> refers to "the existing **second stream**". That instruction assumed the two-phase
+> loop was sound. **It was not.** It could only service one round of tools, while
+> §D's "look the id up first" instruction *guarantees* the mutation lands in round 2 —
+> so mutations were unreachable, and the unserviced `tool_use` was persisted with no
+> `tool_result`, which 400s the API on the user's next message and poisons the session
+> for its whole 12h TTL.
+>
+> **Read `docs/decisions/ADR-018-bot-tool-loop.md` before implementing this step.** The
+> loop is a bounded multi-round `while`-loop (cap 4) that graceful-finalises on the cap,
+> and `stripDanglingToolUse` runs on both the persist and the read path, in both
+> directions. Everything else in this step stands verbatim: **the turn-1 interceptor
+> below is unchanged and lives inside the new loop** — only the control flow around it
+> changed. Turn 2 still makes zero model calls and never enters the loop.
 
 **Prompt:**
 
@@ -729,6 +746,13 @@ pnpm typecheck
 >    - `create_task` with 3 assignees → exactly **3** `task_assigned` rows (ADR-006 inherited).
 >
 > 4. **Attribution (ADR-016):** after any bot mutation, the `audit_log` row has `staff_id` = the **human caller** and `changed_by_source = 'bot'` — **not** the System Actor, **not** `'user'`. Assert on at least three different tools. *(First-ever use of this enum value.)*
+>
+> 4b. **The loop and the id contract (ADR-018 / ADR-019)** — these are the regression locks for the two blockers that only surfaced when the real UI was driven:
+>    - **Multi-round tool use:** a message needing lookup-then-act drives **≥2** tool rounds and terminates on `end_turn` with **no dangling `tool_use` persisted**.
+>    - **Session recovery:** seed a Redis session with a dangling `tool_use` *and* an orphan `tool_result` (a simulated pre-fix poisoned session) → the next message succeeds and neither block reaches the API. *(This is the test that would have caught the loop bug.)*
+>    - **Cap:** a mock that calls a tool every round hits the 4-round cap and finalises with the streamed text + friendly copy — **no throw**, no extra closing stream.
+>    - **Interceptor-in-loop:** a mutation `tool_use` inside the loop yields the synthetic `AWAITING_USER_CONFIRMATION` result, the next round emits the confirmation question, pending is set, nothing executed.
+>    - **ID contract (ADR-019):** for each of the 11 mutation tools, assert it is either a create or has a named `{ idField, queryTool }` pair, and that the paired query tool's serialised output contains the id — driven across `list_tasks`/`list_overdue_tasks` → task id, `get_content_pipeline` → pipeline id, `get_shoot_schedule` → slot id, `get_content_calendar` → cell id, `get_holiday_list` → holiday id, `get_client_summary` → client id.
 >
 > 5. **Route tests** (`apps/api/test/routes/bot.test.ts` additions): `POST /v1/bot/message` with `{ decision, confirmationId }` still returns **202** (C-01 unchanged); a `decision` without a `confirmationId` → `400 VALIDATION_ERROR`; the schema is `.strict()` so an unknown field is rejected.
 >
@@ -1037,7 +1061,8 @@ CARRIED DEBT + PRE-SPRINT DECISIONS
   [ ] The 4 pre-existing Playwright failures FIXED (classified (a)/(b), no skips, no weakened assertions)
   [ ] ENTIRE Playwright suite green
   [ ] Model strings re-verified against GET /v1/models
-  [ ] ADR-014 / ADR-015 / ADR-016 committed
+  [ ] ADR-014 / ADR-015 / ADR-016 committed (+ ADR-017 onboarding atomicity, ADR-018 tool
+      loop, ADR-019 id contract — the last two written mid-sprint from the codebase)
 
 CLIENT SERVICE (the gap)
   [ ] ClientService.create — admin+manager; shootSlotsPerMonth required (CLIENT_SHOOT_SLOTS_REQUIRED)
@@ -1062,6 +1087,20 @@ CONFIRMATION MACHINE (ADR-014)
   [ ] Hallucinated id → not-found, NO pending created (TESTED)
   [ ] Synthetic tool_result returned for the turn-1 tool_use (no API 400 on the next message)
   [ ] Persist-then-emit: terminal turn written to the session before the socket emit
+
+THE TOOL LOOP (ADR-018) + THE ID CONTRACT (ADR-019)
+  [ ] Bot loop is a bounded multi-round loop, cap 4 (ADR-018)
+  [ ] stripDangling runs on the READ path as well as persist, BOTH directions; poisoned
+      sessions self-heal (TESTED)
+  [ ] Cap-hit + mid-stream failure finalise gracefully with partial text + friendly copy,
+      never throw, never restart the stream (TESTED)
+  [ ] Turn-1 interceptor retained INSIDE the loop; turn 2 makes zero model calls and skips
+      the loop entirely (TESTED)
+  [ ] Every query tool serialises record ids (ADR-019); id-contract test green for all 11
+      mutation tools
+  [ ] The hand-built query tools audited for id omission (list_tasks, list_overdue_tasks,
+      get_content_pipeline, get_content_calendar, get_shoot_schedule, get_holiday_list,
+      get_client_summary)
 
 MUTATION TOOLS
   [ ] 11 tools, each calling its existing mutating service method with the JWT currentUser
@@ -1149,6 +1188,8 @@ Sprint 10 attaches the **remaining** socket consumers to the `lib/socket.ts` cli
 
 ### The next message after a confirmation summary returns HTTP 400 from Anthropic
 The turn-1 interceptor didn't return a synthetic `tool_result` for the `tool_use` block it intercepted. Every `tool_use` **must** have a matching `tool_result` in the following turn. Add the `AWAITING_USER_CONFIRMATION` result (STEP 5, B.6). This failure looks unrelated to confirmations, which is why it wastes an afternoon.
+
+**Or the loop persisted a dangling block** (ADR-018) — the same 400, from the other direction. Symptom: the session 400s on *every* message from then on, surfacing as "I'm having trouble connecting" until a new conversation is started. Check that the loop answers every `tool_use` on every round, and that `stripDanglingToolUse` runs on the **read** path in **both** directions — an orphan `tool_result` is rejected just as hard as a dangling `tool_use`, and without the read-path pass an already-poisoned session stays broken for its whole 12h TTL.
 
 ### The bot executes on "yes, but change the date"
 `isAffirmative` is doing substring or fuzzy matching. It must be **exact match after normalisation**. That phrase returning `false` is the design, not a gap — it clears the pending state and gets re-planned.

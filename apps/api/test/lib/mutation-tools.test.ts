@@ -129,28 +129,112 @@ describe('a query tool must surface the id its mutation counterpart needs', () =
     }
   });
 
-  test('the grid tools already carry ids — they serialise their DTOs', async () => {
-    // No fix needed here; asserted so a future "tidy the output" change cannot
-    // quietly reintroduce the same gap on the versioned targets.
-    const period = '2091-11';
-    const client = await db
-      .insertInto('clients')
-      .values({ name: 'Grid Id Co', shoot_slots_per_month: 1, active: true })
-      .returning('id')
-      .executeTakeFirstOrThrow();
-    const pipeline = await db
-      .insertInto('content_pipelines')
-      .values({ period, client_id: client.id, version: 1 })
-      .returning('id')
-      .executeTakeFirstOrThrow();
+  /**
+   * ADR-019, driven across every mutation tool rather than the one that broke.
+   *
+   * The gap was structural: a mutation consumes an id, and the only sanctioned way
+   * to obtain one is a query tool's output. Any hand-built line that drops the id
+   * makes that mutation unreachable by name. This is the lock.
+   */
+  describe('ADR-019 — the id contract, for all 11 mutation tools', () => {
+    /** mutation tool → the id it consumes, and the query tool that must surface it. */
+    // `rest` is the tool's other required input — just enough for the round-trip.
+    const ID_SOURCE: Record<
+      string,
+      { field: string; queryTool: string; rest: Record<string, unknown> }
+    > = {
+      update_task_status: { field: 'taskId', queryTool: 'list_tasks', rest: { status: 'Done' } },
+      set_deadline: { field: 'taskId', queryTool: 'list_tasks', rest: { deadline: '2091-12-09' } },
+      assign_task: { field: 'taskId', queryTool: 'list_tasks', rest: { staffIds: [ADMIN_ID] } },
+      update_pipeline_stage: { field: 'pipelineId', queryTool: 'get_content_pipeline', rest: { stage: 'raw' } },
+      update_shoot_slot: { field: 'slotId', queryTool: 'get_shoot_schedule', rest: { slotStatus: 'Confirmed' } },
+      update_calendar_cell: { field: 'cellId', queryTool: 'get_content_calendar', rest: { status: 'Posted' } },
+      remove_holiday: { field: 'holidayId', queryTool: 'get_holiday_list', rest: {} },
+      deactivate_client: { field: 'clientId', queryTool: 'get_client_summary', rest: {} },
+    };
+    /** Creates — there is no record to look up yet, so no id to surface. */
+    const NO_TARGET = ['create_task', 'add_holiday', 'add_client'];
 
-    try {
-      const grid = await getBotTool('get_content_pipeline')!.handler({ period }, admin, db);
-      expect(grid.text).toContain(pipeline.id);
-    } finally {
-      await db.deleteFrom('content_pipelines').where('id', '=', pipeline.id).execute();
-      await db.deleteFrom('clients').where('id', '=', client.id).execute();
-    }
+    test('every mutation tool is either id-consuming with a named source, or a create', () => {
+      // Structural: a new mutation tool cannot be added without deciding which
+      // query tool resolves its target.
+      for (const tool of MUTATION_TOOLS) {
+        const source = ID_SOURCE[tool.name];
+        expect(Boolean(source) !== NO_TARGET.includes(tool.name), tool.name).toBe(true);
+        if (!source) continue;
+        const schema = tool.jsonSchema as { required?: string[] };
+        expect(schema.required, tool.name).toContain(source.field);
+        expect(getBotTool(source.queryTool), source.queryTool).toBeDefined();
+      }
+    });
+
+    test("each source tool's output carries the id, and it round-trips as tool input", async () => {
+      const period = '2091-12';
+      await db
+        .insertInto('months')
+        .values({ period, label: period, locked: false })
+        .onConflict((oc) => oc.column('period').doNothing())
+        .execute();
+      const client = await db
+        .insertInto('clients')
+        .values({ name: 'Id Contract Co', shoot_slots_per_month: 1, active: true })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      const task = await db
+        .insertInto('tasks')
+        .values({ period, date: `${period}-04`, description: 'Id contract task', created_by: ADMIN_ID })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      const pipeline = await db
+        .insertInto('content_pipelines')
+        .values({ period, client_id: client.id, version: 1 })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      const slot = await db
+        .insertInto('shoot_schedules')
+        .values({ period, client_id: client.id, slot_index: 1, slot_status: 'Unset', pieces_expected: 1 })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      const cell = await db
+        .insertInto('content_calendar')
+        .values({ period, client_id: client.id, date: `${period}-04`, status: 'No Activity', version: 1 })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      const holiday = await db
+        .insertInto('holidays')
+        .values({ period, date: `${period}-05`, name: 'Id Contract Day', active: true, added_by: ADMIN_ID })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+
+      const ids: Record<string, string> = {
+        taskId: task.id,
+        pipelineId: pipeline.id,
+        slotId: slot.id,
+        cellId: cell.id,
+        holidayId: holiday.id,
+        clientId: client.id,
+      };
+
+      try {
+        for (const [name, { field, queryTool, rest }] of Object.entries(ID_SOURCE)) {
+          const id = ids[field]!;
+          const { text } = await getBotTool(queryTool)!.handler({ period }, admin, db);
+          expect(text, `${queryTool} must surface the ${field} that ${name} consumes`).toContain(id);
+
+          // The id read out of that text is a valid input for the mutation — the
+          // whole resolution path, end to end.
+          const parsed = getBotTool(name)!.inputSchema.safeParse({ [field]: id, ...rest });
+          expect(parsed.success, name).toBe(true);
+        }
+      } finally {
+        await db.deleteFrom('holidays').where('id', '=', ids.holidayId!).execute();
+        await db.deleteFrom('content_calendar').where('id', '=', ids.cellId!).execute();
+        await db.deleteFrom('shoot_schedules').where('id', '=', ids.slotId!).execute();
+        await db.deleteFrom('content_pipelines').where('id', '=', ids.pipelineId!).execute();
+        await db.deleteFrom('tasks').where('id', '=', ids.taskId!).execute();
+        await db.deleteFrom('clients').where('id', '=', client.id).execute();
+      }
+    });
   });
 });
 

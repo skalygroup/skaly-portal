@@ -264,7 +264,7 @@ describe('the tool loop is bounded, not two-phase', () => {
     // normal completed turn has.
   });
 
-  test('a model that never stops asking for tools is cut off, still with no dangling block', async () => {
+  test('a model that never stops asking for tools is cut off and finalised gracefully', async () => {
     // The cap is what keeps this a loop and not an agent.
     const calls: Array<{ messages: Anthropic.MessageParam[] }> = [];
     const client = {
@@ -285,18 +285,66 @@ describe('the tool loop is bounded, not two-phase', () => {
       },
     } as unknown as Anthropic;
 
-    const s = svc({ client, calls }, []);
+    const sink: Emitted[] = [];
+    const s = svc({ client, calls }, sink);
     const session = await s.loadSession(ADMIN);
+    // Never throws — a hard error at the cap reads to the user as the very
+    // "trouble connecting" bug this loop was rewritten to fix (ADR-018 §2).
     await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'loop forever', db });
 
-    // Bounded: 4 rounds + the tool-less closing stream.
-    expect(calls.length).toBeLessThanOrEqual(6);
+    expect(calls.length).toBe(4); // MAX_TOOL_ROUNDS, and no extra closing stream
+
+    // The partial text the model DID stream, plus the friendly copy.
+    const terminal = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload;
+    expect(terminal.content).toContain('again');
+    expect(terminal.content).toContain('Something went wrong');
 
     const stored = JSON.parse((await redis.get(`bot:session:${ADMIN}`))!) as {
       messages: Anthropic.MessageParam[];
     };
     // The invariant that matters, even for a model behaving badly.
     assertNoDanglingToolUse(stored.messages);
+  });
+
+  test('a session already poisoned with unpaired blocks heals on the next message', async () => {
+    // THE test that would have caught the original bug. A session stored by the
+    // pre-fix build stays broken for its whole 12h TTL unless the replayed history
+    // is sanitised on the READ path too (ADR-018 §3) — every message 400s.
+    await redis.set(
+      `bot:session:${ADMIN}`,
+      JSON.stringify({
+        sessionId: 'poisoned-session',
+        turnCount: 1,
+        lastActivityAt: new Date().toISOString(),
+        messages: [
+          { role: 'user', content: 'what is going on' },
+          // A tool_use nothing ever answered — what Sprint 8's second stream stored.
+          {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'toolu_dead', name: 'list_tasks', input: {} }],
+          },
+          // And the mirror image the API rejects just as hard: a tool_result with
+          // no tool_use to match.
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_ghost', content: 'orphan' }],
+          },
+        ],
+      }),
+      'EX',
+      3600,
+    );
+
+    const spy = mockPlainAnthropic();
+    const s = svc(spy, []);
+    const session = await s.loadSession(ADMIN);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'try again', db });
+
+    // What went to the API is what the API validates.
+    const sent = JSON.stringify(spy.calls[0]!.messages);
+    expect(sent).not.toContain('toolu_dead');
+    expect(sent).not.toContain('toolu_ghost');
+    assertNoDanglingToolUse(spy.calls[0]!.messages);
   });
 
   test('a mutation is reachable in ONE user turn: look up, then stage', async () => {

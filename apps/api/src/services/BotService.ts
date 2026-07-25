@@ -5,9 +5,10 @@
  *   load Redis session → build the system prompt (IST date + period + role + name
  *   + anti-hallucination) → filter the 11 query tools by resolvePermission →
  *   stream from Anthropic, emitting `bot:token { sessionId, delta }` per delta on
- *   /ws/notify room user:{staffId} → if the model asked for tools, run each via
- *   its isolating service method with the JWT currentUser, then a SECOND stream →
- *   a terminal `bot:message { sessionId, content, card?, toolsUsed? }`.
+ *   /ws/notify room user:{staffId} → while the model asks for tools, run each via
+ *   its isolating service method with the JWT currentUser and stream again, up to
+ *   MAX_TOOL_ROUNDS (ADR-018 — Sprint 8's fixed two-phase loop poisoned the
+ *   session) → a terminal `bot:message { sessionId, content, card?, toolsUsed? }`.
  *
  * Reconciliations honoured here: two socket events, never one overloaded (#3);
  * tools reuse isolating services with currentUser (#4); friendly errors only,
@@ -137,46 +138,62 @@ function botModel(): string {
  *  (Anthropic requires the first message to be role:'user' — slicing after the
  *  dropped turn would orphan its assistant reply and start with 'assistant'). */
 /**
- * Drop any `tool_use` block that has no `tool_result` in the following message.
+ * Enforce `tool_use` ⇄ `tool_result` pairing in BOTH directions, keyed on
+ * `tool_use_id`: drop a `tool_use` with no `tool_result` in the following message,
+ * and drop a `tool_result` whose `tool_use` is not there (or was just dropped).
  *
- * The Anthropic API rejects a request whose transcript contains one, so persisting
- * it poisons the session permanently: every later message 400s and the user sees
+ * The Anthropic API rejects a transcript containing either, so persisting one
+ * poisons the session permanently: every later message 400s and the user sees
  * "I'm having trouble connecting" until they start a new conversation. Sprint 8 did
  * exactly that whenever its second stream asked for another tool.
  *
- * Applied at the PERSIST boundary rather than on each branch of the loop. The
- * invariant is about what we store — one choke point every path already passes
- * through beats auditing every path for a rule it could quietly stop following. A
- * message left with no content at all is dropped entirely.
+ * Runs at BOTH boundaries, deliberately (ADR-018 §3):
+ *   - persist, so a bad transcript is never stored; and
+ *   - READ, before the first API call of every message, so a session poisoned by an
+ *     older build heals itself on the user's next message instead of staying broken
+ *     for its whole 12h TTL.
+ * Two choke points every path already passes through, rather than auditing each
+ * branch for a rule it could quietly stop following. A message left with no content
+ * at all is dropped entirely.
  */
 export function stripDanglingToolUse(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
   const out: Anthropic.MessageParam[] = [];
+  /** tool_use ids we KEPT — a tool_result is an orphan unless its id is in here. */
+  const issued = new Set<string>();
 
   for (const [i, m] of messages.entries()) {
-    if (m.role !== 'assistant' || !Array.isArray(m.content)) {
+    if (!Array.isArray(m.content)) {
       out.push(m);
       continue;
     }
 
     const next = messages[i + 1];
-    const answered = new Set(
-      next && Array.isArray(next.content)
-        ? next.content
-            .filter((b) => (b as { type?: string }).type === 'tool_result')
-            .map((b) => (b as { tool_use_id: string }).tool_use_id)
-        : [],
-    );
+    const kept = m.content.filter((b) => {
+      const block = b as { type?: string; id?: string; tool_use_id?: string };
 
-    const kept = m.content.filter(
-      (b) =>
-        (b as { type?: string }).type !== 'tool_use' || answered.has((b as { id: string }).id),
-    );
+      if (block.type === 'tool_use') {
+        const answered =
+          Array.isArray(next?.content) &&
+          next.content.some(
+            (r) =>
+              (r as { type?: string }).type === 'tool_result' &&
+              (r as { tool_use_id?: string }).tool_use_id === block.id,
+          );
+        if (answered && block.id !== undefined) issued.add(block.id);
+        return answered;
+      }
+      if (block.type === 'tool_result') {
+        return block.tool_use_id !== undefined && issued.has(block.tool_use_id);
+      }
+      return true;
+    });
+
     if (kept.length === m.content.length) {
       out.push(m);
     } else if (kept.length > 0) {
       out.push({ ...m, content: kept });
     }
-    // else: nothing but unanswered tool_use — drop the message.
+    // else: nothing but unpaired blocks — drop the message.
   }
 
   return out;
@@ -502,7 +519,14 @@ export class BotService {
       const tools = anthropicToolDefs(permittedNames);
       const system = this.buildSystemPrompt(name, role, denied);
 
-      const messages: Anthropic.MessageParam[] = [...session.messages, { role: 'user', content: userText }];
+      // Sanitise the REPLAYED history, not just what we are about to store: a
+      // session poisoned before this fix shipped would otherwise 400 on every
+      // message until its TTL expired (ADR-018 §3). Every later call in the loop
+      // builds on this array, so one pass here covers all of them.
+      const messages: Anthropic.MessageParam[] = [
+        ...stripDanglingToolUse(session.messages),
+        { role: 'user', content: userText },
+      ];
 
       const onText = (delta: string): void => {
         fullText += delta;
@@ -530,6 +554,7 @@ export class BotService {
       // The cap is what keeps this a loop and not an agent: a handful of rounds is
       // ample for look-up-then-act, and it bounds both cost and latency.
       let staged = false; // a confirmation was staged — see below
+      let capped = true; // still true only if every round asked for another tool
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const reply = await this.stream(system, tools, messages, onText);
         messages.push({ role: 'assistant', content: reply.content });
@@ -537,7 +562,10 @@ export class BotService {
         const toolBlocks = reply.content.filter(
           (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
         );
-        if (reply.stop_reason !== 'tool_use' || toolBlocks.length === 0) break;
+        if (reply.stop_reason !== 'tool_use' || toolBlocks.length === 0) {
+          capped = false;
+          break;
+        }
 
         // Every tool_use gets a tool_result in the very next message — including
         // the synthetic one the confirmation interceptor returns. That invariant is
@@ -578,17 +606,18 @@ export class BotService {
               })),
             });
           }
+          capped = false;
           break;
         }
       }
 
-      // The transcript MUST end with an assistant turn. It will not if the round cap
-      // was hit mid-tool-use: the last message would be a tool_result, which is both
-      // an invalid shape to append the next user message to and an empty answer for
-      // the user. A tool-less stream forces prose.
-      if (messages.at(-1)?.role === 'user') {
-        const closing = await this.stream(system, [], messages, onText);
-        messages.push({ role: 'assistant', content: closing.content });
+      // Cap hit: the model still wanted tools. Finalise with whatever it streamed
+      // plus the friendly copy — the same graceful finalisation the mid-stream
+      // failure path uses (11-THIRD-PARTY §3.4). NOT another stream: a throw here,
+      // or a retry that duplicates already-streamed text, reads to the user as
+      // exactly the "trouble connecting" bug this loop was rewritten to fix.
+      if (capped) {
+        fullText = fullText ? `${fullText}\n\n${GENERIC_TOOL_ERROR_COPY}` : GENERIC_TOOL_ERROR_COPY;
       }
 
       // ── Terminal message — persist, THEN emit (see finalise) ─────────────
