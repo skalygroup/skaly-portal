@@ -1056,9 +1056,10 @@ docker compose up -d && pnpm dev
 
 Do not start Sprint 10 until **every** box is checked.
 
-**Status as of the STEP 12 run.** A box is ticked only where a green test proves it —
-API suite 489/489, web suite 102/102, typecheck + lint clean, and Playwright
-`bot.spec.ts` + `search.spec.ts` green on chromium **and** webkit. Everything still
+**Status as of the STEP 13 run.** A box is ticked only where a green test proves it —
+API suite 490/490, web suite 102/102, typecheck + lint clean, the whole Playwright
+suite green on chromium (65 passed, 2 perf tests skipped behind `E2E_PERF`), and
+`bot.spec.ts` + `search.spec.ts` green on webkit too. Everything still
 unticked needs the 13.1 manual walk-through (expiry, double-click, the manual
 version-capture race, H-01 through the bot, the client tools, and the Anthropic-down
 case), which is a human at a keyboard by design.
@@ -1175,9 +1176,10 @@ REMAINING — the 13.1 manual walk-through (a human at a keyboard, by design)
   [ ] Activity feed as a team_member: only their own events
   [ ] Anthropic down: bad key → friendly copy on turn 1; re-key → a PENDING confirmation still
       executes on turn 2 (proves ADR-014 §5 — turn 2 makes no model call)
-  [ ] ENTIRE Playwright suite green in one run on BOTH engines (chromium last measured
-      63 passed / 2 failed / 2 skipped — one was the denial prompt defect now fixed, the
-      other was an API restart mid-run from editing source while the suite was live)
+  [ ] ENTIRE Playwright suite green in one run on WEBKIT (chromium is done: 65 passed,
+      0 failed, 2 skipped — the two skips are the NFR perf tests, gated behind E2E_PERF.
+      bot.spec + search.spec are green on webkit; the other files have not been run
+      end-to-end on it this sprint)
 ```
 
 ### 13.3 — Final commit
