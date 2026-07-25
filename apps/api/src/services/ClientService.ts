@@ -8,7 +8,7 @@
  * The service is the security boundary.
  */
 import { AuditService } from './AuditService.js';
-import { getCurrentPeriod } from './BaseService.js';
+import { assertPeriodNotLocked, getCurrentPeriod } from './BaseService.js';
 import { backfillClientPeriodRows } from './period-generation.js';
 import { AppError } from '../lib/errors.js';
 import { softDelete, softDeletable } from '../lib/queries.js';
@@ -16,7 +16,7 @@ import { broadcastToOrg } from '../sockets/index.js';
 
 import type { CurrentUser } from './AttendanceService.js';
 import type { Executor } from './BaseService.js';
-import type { ClientCreateBody, Clients, DB } from '@skaly/shared';
+import type { ClientCreateInput, Clients, DB } from '@skaly/shared';
 import type { Selectable , Kysely } from 'kysely';
 
 export interface ClientListItem {
@@ -69,8 +69,14 @@ export class ClientService {
    * `backfillClientPeriodRows` is the single call that covers all three row sets
    * (shoot slots + pipeline row + calendar cells) and already no-ops for an
    * inactive or internal client — so there is no is_internal guard here.
+   *
+   * Refused with 423 when the CURRENT month is locked (ADR-017). Onboarding is
+   * atomic with its scaffolding: nothing backfills the current period
+   * retroactively (rollover only generates the next month), so a client created
+   * without its rows would be permanently half-onboarded with no error to signal
+   * it. All-or-nothing is the only sound option.
    */
-  async create(input: ClientCreateBody, currentUser: CurrentUser, db: Kysely<DB>): Promise<ClientListItem> {
+  async create(input: ClientCreateInput, currentUser: CurrentUser, db: Kysely<DB>): Promise<ClientListItem> {
     if (currentUser.role !== 'admin' && currentUser.role !== 'manager') {
       throw new AppError('PERMISSION_DENIED', 'Only admins and managers can create clients.');
     }
@@ -86,6 +92,16 @@ export class ClientService {
       );
     }
 
+    // Before the transaction opens: if the current month is locked there is
+    // nothing to attempt. The scaffolding would be an illegal write into a locked
+    // period, and skipping it is not an option (see above).
+    const month = await getCurrentPeriod(db);
+    await assertPeriodNotLocked(
+      month.period,
+      db,
+      `Can't onboard a client into a locked month — unlock ${month.label} first, or wait for the new month to open.`,
+    );
+
     return db.transaction().execute(async (trx) => {
       const created = await trx
         .insertInto('clients')
@@ -100,8 +116,7 @@ export class ClientService {
         .returningAll()
         .executeTakeFirstOrThrow();
 
-      const { period } = await getCurrentPeriod(trx);
-      await backfillClientPeriodRows(created.id, period, trx);
+      await backfillClientPeriodRows(created.id, month.period, trx);
 
       await this.audit.log({
         actorId: currentUser.staffId,

@@ -67,7 +67,7 @@ export type {
 
 // Client request schemas — shared by API validation + web forms.
 export { ClientNameSchema, ClientCreateSchema } from './schemas/clients';
-export type { ClientNameBody, ClientCreateBody } from './schemas/clients';
+export type { ClientNameBody, ClientCreateBody, ClientCreateInput } from './schemas/clients';
 
 // Content Calendar — status vocabulary + request schemas (API + web dropdown).
 export {

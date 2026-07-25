@@ -31,4 +31,12 @@ export const ClientCreateSchema = z
   .strict();
 
 export type ClientNameBody = z.infer<typeof ClientNameSchema>;
+/** Parsed body — defaults applied. What a route handler receives. */
 export type ClientCreateBody = z.infer<typeof ClientCreateSchema>;
+/**
+ * Pre-parse shape — defaulted fields still optional. `ClientService.create` takes
+ * this: it applies its own `?? 1` / `?? false` fallbacks, so demanding the parsed
+ * shape would force every non-route caller (tests, the Sprint 9 `add_client` tool)
+ * to hand-fill values the service is about to default anyway.
+ */
+export type ClientCreateInput = z.input<typeof ClientCreateSchema>;

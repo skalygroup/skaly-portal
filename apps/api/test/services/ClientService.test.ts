@@ -157,6 +157,29 @@ describe('ClientService.create', () => {
     expect(row.staff_id).toBe(ADMIN_ID);
   });
 
+  test('locked current month → 423 PERIOD_LOCKED, and no client row is left behind (ADR-017)', async () => {
+    await db.updateTable('months').set({ locked: true }).where('period', '=', PERIOD).execute();
+    try {
+      await expect(
+        svc.create({ name: 'Locked Month Co', shootSlotsPerMonth: 2 }, admin, db),
+      ).rejects.toMatchObject({
+        code: 'PERIOD_LOCKED',
+        // Explains the refusal rather than restating the lock (ADR-017 §3).
+        message: expect.stringContaining('onboard'),
+      });
+
+      // All-or-nothing: the guard runs before the transaction opens.
+      const orphan = await db
+        .selectFrom('clients')
+        .select('id')
+        .where('name', '=', 'Locked Month Co')
+        .executeTakeFirst();
+      expect(orphan).toBeUndefined();
+    } finally {
+      await db.updateTable('months').set({ locked: false }).where('period', '=', PERIOD).execute();
+    }
+  });
+
   test('manager may create; team_member is refused', async () => {
     const client = await createTracked({ name: 'Manager Made Co', shootSlotsPerMonth: 2 }, manager);
     expect(client.name).toBe('Manager Made Co');
