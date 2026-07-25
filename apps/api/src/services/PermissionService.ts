@@ -32,8 +32,7 @@ import type { Role } from '@skaly/shared/schemas/auth';
 import type { Redis } from 'ioredis';
 import type { Kysely } from 'kysely';
 
-/** The 11 read-only bot tools this sprint ships (AUTH-MATRIX §5). Mutation tools
- *  (Sprint 9) are gated by the same resolver but not filtered here. */
+/** The 11 read-only bot tools (AUTH-MATRIX §5). */
 export const BOT_QUERY_TOOL_NAMES = [
   'get_project_status',
   'list_tasks',
@@ -47,6 +46,26 @@ export const BOT_QUERY_TOOL_NAMES = [
   'get_holiday_list',
   'get_client_summary',
 ] as const;
+
+/** The 11 mutation bot tools (Sprint 9, AUTH-MATRIX §5). Their ROLE_DEFAULTS keys
+ *  have existed since Sprint 8; this is the list that makes them resolvable. */
+export const BOT_MUTATION_TOOL_NAMES = [
+  'update_task_status',
+  'create_task',
+  'assign_task',
+  'set_deadline',
+  'update_pipeline_stage',
+  'update_shoot_slot',
+  'update_calendar_cell',
+  'add_holiday',
+  'remove_holiday',
+  'add_client',
+  'deactivate_client',
+] as const;
+
+/** All 22. The resolver treats reads and writes identically — one gate, one
+ *  default map, no second code path for the dangerous half. */
+export const BOT_TOOL_NAMES = [...BOT_QUERY_TOOL_NAMES, ...BOT_MUTATION_TOOL_NAMES] as const;
 
 /**
  * Is this a permission key the system knows about?
@@ -168,12 +187,12 @@ export class PermissionService {
     role: Role,
     db: Executor,
   ): Promise<{ permitted: string[]; denied: string[] }> {
-    const keys = BOT_QUERY_TOOL_NAMES.map((n) => `bot.tool.${n}`);
+    const keys = BOT_TOOL_NAMES.map((n) => `bot.tool.${n}`);
     const overrides = await this.loadOverrides(staffId, db, keys);
 
     const permitted: string[] = [];
     const denied: string[] = [];
-    for (const name of BOT_QUERY_TOOL_NAMES) {
+    for (const name of BOT_TOOL_NAMES) {
       const key = `bot.tool.${name}`;
       const allowed = overrides.get(key) ?? ROLE_DEFAULTS[key]?.[role] ?? false;
       (allowed ? permitted : denied).push(name);

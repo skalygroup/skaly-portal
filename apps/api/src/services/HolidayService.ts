@@ -51,6 +51,23 @@ export interface HolidayCreateInput {
 export class HolidayService {
   private readonly audit = new AuditService();
 
+  /**
+   * admin/manager (AUTH-MATRIX §4, FR-ATT-09). Until Sprint 9 this lived ONLY on
+   * the routes (`requireRole('admin','manager')`), which was enough while HTTP was
+   * the only caller. The `add_holiday` / `remove_holiday` bot tools call these
+   * methods directly with the JWT caller, so a route-only gate would let the bot
+   * write what REST refuses — the service is the security boundary.
+   *
+   * ponytail: fifth private copy of this check (TaskService, ShootPlannerService,
+   * ContentDropperService, ContentCalendarService have their own). Hoist to
+   * BaseService when something other than a sweep is touching all five.
+   */
+  private assertAdminOrManager(currentUser: CurrentUser): void {
+    if (currentUser.role !== 'admin' && currentUser.role !== 'manager') {
+      throw new AppError('PERMISSION_DENIED', 'Only admins and managers can manage holidays.');
+    }
+  }
+
   /** Active holidays for a period, date-ascending (GET /v1/holidays). */
   async list(period: string, trx: Executor): Promise<HolidayItem[]> {
     return trx
@@ -69,6 +86,7 @@ export class HolidayService {
   async create(input: HolidayCreateInput): Promise<Selectable<Holidays>> {
     const { period, date, name, currentUser, trx } = input;
 
+    this.assertAdminOrManager(currentUser);
     await assertPeriodNotLocked(period, trx);
 
     const holiday = await trx
@@ -108,6 +126,7 @@ export class HolidayService {
     currentUser: CurrentUser,
     trx: Transaction<DB>,
   ): Promise<{ removed: true }> {
+    this.assertAdminOrManager(currentUser);
     // date as a stable 'YYYY-MM-DD' string for the revert filter + the broadcast.
     const holiday = await trx
       .selectFrom('holidays')

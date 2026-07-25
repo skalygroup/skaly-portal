@@ -5,7 +5,7 @@ import pg from 'pg';
 import { describe, test, expect, beforeAll, afterEach, afterAll } from 'vitest';
 
 
-import { BOT_QUERY_TOOL_NAMES, PermissionService } from '../../src/services/PermissionService.js';
+import { BOT_TOOL_NAMES, PermissionService } from '../../src/services/PermissionService.js';
 
 import type { DB } from '@skaly/shared';
 
@@ -27,11 +27,12 @@ const permsKey = (staffId: string): string => `perms:${staffId}`;
 const ADMIN = 'e0000000-0000-4000-8000-00000000e001';
 const MEMBER = 'e0000000-0000-4000-8000-00000000e002';
 const FREELANCER = 'e0000000-0000-4000-8000-00000000e003';
+const MANAGER = 'e0000000-0000-4000-8000-00000000e004';
 const DOMAIN = '@perm.itest';
 
 async function clearOverrides(): Promise<void> {
-  await db.deleteFrom('user_permissions').where('staff_id', 'in', [ADMIN, MEMBER, FREELANCER]).execute();
-  await redis.del(permsKey(ADMIN), permsKey(MEMBER), permsKey(FREELANCER));
+  await db.deleteFrom('user_permissions').where('staff_id', 'in', [ADMIN, MEMBER, FREELANCER, MANAGER]).execute();
+  await redis.del(permsKey(ADMIN), permsKey(MEMBER), permsKey(FREELANCER), permsKey(MANAGER));
 }
 
 beforeAll(async () => {
@@ -41,6 +42,7 @@ beforeAll(async () => {
       { id: ADMIN, name: 'Perm Admin', email: `admin-${ADMIN}${DOMAIN}`, role: 'admin', active: true },
       { id: MEMBER, name: 'Perm Member', email: `member-${MEMBER}${DOMAIN}`, role: 'team_member', active: true },
       { id: FREELANCER, name: 'Perm Freelancer', email: `free-${FREELANCER}${DOMAIN}`, role: 'freelancer', active: true },
+      { id: MANAGER, name: 'Perm Manager', email: `mgr-${MANAGER}${DOMAIN}`, role: 'manager', active: true },
     ])
     .onConflict((oc) => oc.column('id').doNothing())
     .execute();
@@ -152,12 +154,30 @@ describe('getPermittedBotTools — per-role subset', () => {
     expect(after.denied).toContain('get_attendance');
   });
 
-  test('permitted and denied are complementary and cover the whole query registry', async () => {
+  // Sprint 9 STEP 4 widened this from the 11 query tools to all 22: mutation tools
+  // go through the SAME resolver and the same ROLE_DEFAULTS map, with no second
+  // code path for the dangerous half.
+  test('permitted and denied are complementary and cover the whole 22-tool registry', async () => {
     for (const [id, role] of [[ADMIN, 'admin'], [MEMBER, 'team_member'], [FREELANCER, 'freelancer']] as const) {
       const { permitted, denied } = await svc.getPermittedBotTools(id, role, db);
       expect(permitted.filter((n) => denied.includes(n))).toEqual([]); // disjoint
-      expect([...permitted, ...denied].sort()).toEqual([...BOT_QUERY_TOOL_NAMES].sort());
+      expect([...permitted, ...denied].sort()).toEqual([...BOT_TOOL_NAMES].sort());
     }
+  });
+
+  test('a mutation tool resolves off ROLE_DEFAULTS like any other (AUTH-MATRIX §5)', async () => {
+    const member = await svc.getPermittedBotTools(MEMBER, 'team_member', db);
+    // 🔧 in the matrix — default OFF, override-able. It must be denied, not absent.
+    expect(member.denied).toContain('update_task_status');
+    expect(member.permitted).not.toContain('update_task_status');
+
+    const admin = await svc.getPermittedBotTools(ADMIN, 'admin', db);
+    expect(admin.permitted).toContain('deactivate_client');
+
+    // deactivate_client is admin-only, unlike every other mutation tool.
+    const manager = await svc.getPermittedBotTools(MANAGER, 'manager', db);
+    expect(manager.permitted).toContain('add_client');
+    expect(manager.denied).toContain('deactivate_client');
   });
 });
 

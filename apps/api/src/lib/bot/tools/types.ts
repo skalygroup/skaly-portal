@@ -12,6 +12,7 @@
  *     loop without unpicking it.
  */
 import type { CurrentUser } from '../../../services/AttendanceService.js';
+import type { SummarySpec } from '../confirmation.js';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { DB } from '@skaly/shared';
 import type { Kysely } from 'kysely';
@@ -28,6 +29,15 @@ export interface BotToolResult {
   text: string;
   /** Attached to the terminal bot:message for the frontend to render. */
   card?: BotCard;
+}
+
+/** The current state of a mutation target, read at turn 1. */
+export interface ToolCurrentState {
+  /** Whatever the summary needs — the loaded row, projected. */
+  state: Record<string, unknown>;
+  /** Present only for versioned targets (content_pipelines, content_calendar).
+   *  ADR-008: tasks and shoot_schedules are unversioned and return none. */
+  version?: number;
 }
 
 /** Storage/registry shape — input erased to `unknown`; BotService validates it
@@ -49,7 +59,27 @@ export interface BotTool {
   /** Anthropic tool `input_schema` (hand-written; the inputs are tiny). */
   jsonSchema: Anthropic.Tool['input_schema'];
   isMutation: boolean;
-  handler(input: unknown, currentUser: CurrentUser, db: Kysely<DB>): Promise<BotToolResult>;
+  /**
+   * MUTATION TOOLS ONLY (Sprint 9). Load the target for the turn-1 summary and
+   * capture its version. A missing target throws RESOURCE_NOT_FOUND *here* — so a
+   * hallucinated id fails before any pending state exists.
+   */
+  readCurrent?(input: unknown, currentUser: CurrentUser, db: Kysely<DB>): Promise<ToolCurrentState>;
+  /** MUTATION TOOLS ONLY. How this tool renders its confirmation summary. */
+  summary?: SummarySpec;
+  /**
+   * MUTATION TOOLS ONLY. The deep link for the outcome message (APPFLOW §12).
+   * Takes the service's return value because `create_task` / `add_client` only
+   * learn their id from it.
+   */
+  link?(result: unknown, state: Record<string, unknown>): string;
+  /** `expectedVersion` is passed only for versioned targets, from the pending record. */
+  handler(
+    input: unknown,
+    currentUser: CurrentUser,
+    db: Kysely<DB>,
+    expectedVersion?: number,
+  ): Promise<BotToolResult>;
 }
 
 /**
@@ -67,4 +97,46 @@ export function defineTool<S extends z.ZodTypeAny>(t: {
   handler(input: z.infer<S>, currentUser: CurrentUser, db: Kysely<DB>): Promise<BotToolResult>;
 }): BotTool {
   return t as unknown as BotTool;
+}
+
+/**
+ * The mutation counterpart. `isMutation: true` is set here rather than written out
+ * eleven times — a mutation tool that forgot the flag would skip the confirmation
+ * gate entirely and execute on turn 1, which is the single worst bug available in
+ * this sprint. It is not a field worth trusting to copy-paste.
+ *
+ * `State` is the shape `readCurrent` returns, so `summary`/`link` are typed against
+ * it at the definition site.
+ */
+export function defineMutationTool<S extends z.ZodTypeAny, State extends Record<string, unknown>>(t: {
+  name: string;
+  description: string;
+  capability: string;
+  inputSchema: S;
+  jsonSchema: Anthropic.Tool['input_schema'];
+  readCurrent(
+    input: z.infer<S>,
+    currentUser: CurrentUser,
+    db: Kysely<DB>,
+  ): Promise<{ state: State; version?: number }>;
+  summary: {
+    entity: string;
+    action: (input: z.infer<S>) => string;
+    target: (state: State) => string;
+    period?: (input: z.infer<S>, state: State) => string | undefined;
+    changes: ReadonlyArray<{
+      field: string;
+      from: (state: State) => unknown;
+      to: (input: z.infer<S>) => unknown;
+    }>;
+  };
+  link(result: never, state: State): string;
+  handler(
+    input: z.infer<S>,
+    currentUser: CurrentUser,
+    db: Kysely<DB>,
+    expectedVersion?: number,
+  ): Promise<BotToolResult>;
+}): BotTool {
+  return { ...t, isMutation: true } as unknown as BotTool;
 }

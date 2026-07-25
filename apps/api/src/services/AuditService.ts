@@ -12,10 +12,13 @@
  *     and the source becomes 'system' (audit C-04).
  *   - action must be one of the six enum values; a stale dotted string (e.g.
  *     'invite.create') is rejected before it can hit the DB CHECK.
+ *   - changed_by_source comes from the caller, else the ambient bot-execution
+ *     source (ADR-016), else 'user'/'system' by whether there is an actor.
  */
 import { SYSTEM_ACTOR_UUID } from '@skaly/shared';
 import { sql } from 'kysely';
 
+import { currentActorSource } from '../lib/bot/actor-context.js';
 import { AppError } from '../lib/errors.js';
 
 import type { Executor } from './BaseService.js';
@@ -153,7 +156,15 @@ export class AuditService {
 
     // Audit C-04: staff_id is never null. No actor ⇒ System Actor + 'system'.
     const staffId = input.actorId ?? SYSTEM_ACTOR_UUID;
-    const source: ChangedBySource = actorSource ?? (input.actorId ? 'user' : 'system');
+    // Precedence: an explicit actorSource, then the ambient bot-execution source
+    // (ADR-016 — set by withActorSource around a mutation tool's handler, so nested
+    // writes inside the service are attributed too), then the default.
+    //
+    // A genuinely unattended write has no actorId and stays 'system' + the System
+    // Actor regardless of ambient state; ADR-016 reserves that for rollover and
+    // trigger recomputes, never for "the bot did it".
+    const source: ChangedBySource =
+      actorSource ?? (input.actorId ? currentActorSource() ?? 'user' : 'system');
 
     const oldValue = before === undefined ? null : JSON.stringify(before);
     const newValue = after === undefined ? null : JSON.stringify(after);

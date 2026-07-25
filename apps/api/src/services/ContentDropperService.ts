@@ -311,8 +311,16 @@ export class ContentDropperService {
     });
   }
 
-  /** Single pipeline row (with derived status), or 404. */
-  private async getRow(id: string, trx: Executor): Promise<PipelineDTO> {
+  /**
+   * Single pipeline row (with derived status), or 404.
+   *
+   * Public since Sprint 9: `update_pipeline_stage`'s turn-1 read needs the row AND
+   * its `version` to capture (ADR-014 §2), and the alternative was a raw query in
+   * the tool. Carries no role filter of its own — the Dropper is admin/manager at
+   * every layer (ROLE_DEFAULTS, the route, and `updateStage`), so there is no
+   * lower-privileged caller for it to leak to.
+   */
+  async getRow(id: string, trx: Executor): Promise<PipelineDTO> {
     const row = await this.pipelineQuery(trx).where('content_pipelines.id', '=', id).executeTakeFirst();
     if (!row) {
       throw new AppError('RESOURCE_NOT_FOUND', `content_pipelines row ${id} does not exist.`);
