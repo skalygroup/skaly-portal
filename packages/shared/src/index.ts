@@ -69,6 +69,15 @@ export type {
 export { ClientNameSchema, ClientCreateSchema } from './schemas/clients';
 export type { ClientNameBody, ClientCreateBody, ClientCreateInput } from './schemas/clients';
 
+// Search + activity feed — shared by API validation + the CMD+K palette.
+export {
+  SEARCH_SCOPES,
+  SearchScopeSchema,
+  SearchQuerySchema,
+  ActivityFeedQuerySchema,
+} from './schemas/search';
+export type { SearchScope, SearchQuery, ActivityFeedQuery } from './schemas/search';
+
 // Content Calendar — status vocabulary + request schemas (API + web dropdown).
 export {
   CALENDAR_STATUSES,
