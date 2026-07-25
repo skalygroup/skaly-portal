@@ -35,7 +35,16 @@ export interface ChatState {
 
 export type ChatAction =
   | { type: 'restore'; sessionId: string | null; messages: Array<{ role: string; content: string }> }
-  | { type: 'send'; userId: string; assistantId: string; text: string }
+  | {
+      type: 'send';
+      userId: string;
+      assistantId: string;
+      text: string;
+      /** Set when this send came from a confirmation card's buttons (ADR-014). It
+       *  stamps the OUTGOING card as resolved so the buttons can render their
+       *  outcome — see the note on ChatMessage.card. */
+      decision?: 'confirm' | 'cancel';
+    }
   | { type: 'session'; sessionId: string }
   | { type: 'token'; sessionId: string; delta: string }
   | { type: 'message'; sessionId: string; content: string; card?: BotCard }
@@ -64,16 +73,33 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         })),
       };
 
-    case 'send':
+    case 'send': {
+      // A confirmation card's buttons stamp their outcome onto the card they belong
+      // to — the LAST message, which is the one carrying it. Held here rather than in
+      // the component so the resolved state cannot drift from the transcript, and so
+      // it survives a re-render without a useState per card.
+      //
+      // Whether the buttons are still CLICKABLE is not stored at all: it derives from
+      // "is this the last message", which covers the button path, a typed "yes", and
+      // an unrelated new question with one rule instead of three.
+      const messages = action.decision
+        ? state.messages.map((m, i) =>
+            i === state.messages.length - 1 && m.card
+              ? { ...m, card: { ...m.card, resolved: action.decision } }
+              : m,
+          )
+        : state.messages;
+
       return {
         ...state,
         busy: true,
         messages: [
-          ...state.messages,
+          ...messages,
           { id: action.userId, role: 'user', content: action.text },
           { id: action.assistantId, role: 'assistant', content: '', streaming: true },
         ],
       };
+    }
 
     case 'session':
       // Adopt the id from the 202 ack (only meaningful on a fresh session).

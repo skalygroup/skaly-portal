@@ -84,6 +84,40 @@ export function BotChat() {
     }
   }, [input, state.busy, state.sessionId]);
 
+  /**
+   * A confirmation card's [Confirm] / [Cancel] (ADR-014).
+   *
+   * The body carries ONLY `confirmationId` + `decision`. `content` is the display
+   * line archived to the transcript — the server's gate never reads it when
+   * `decision` is present, which is what makes consent structured rather than
+   * inferred from prose.
+   *
+   * Not routed through `send()`: that would put the words in the composer and make
+   * them look typed, and it would be blocked by its own `busy` guard.
+   */
+  const decide = useCallback(
+    async (decision: 'confirm' | 'cancel', confirmationId: string) => {
+      if (state.busy) return;
+      const text = decision === 'confirm' ? 'Yes, go ahead' : 'Cancel';
+      dispatch({ type: 'send', userId: uid(), assistantId: uid(), text, decision });
+      try {
+        const { data } = await api<{ data: { messageId: string; sessionId: string } }>('/v1/bot/message', {
+          method: 'POST',
+          body: JSON.stringify({ content: text, confirmationId, decision }),
+        });
+        dispatch({ type: 'session', sessionId: data.sessionId });
+      } catch {
+        // The outcome normally streams over the socket; only a failed ACK lands here.
+        dispatch({
+          type: 'message',
+          sessionId: state.sessionId ?? '',
+          content: "I couldn't send that just now. Please try again.",
+        });
+      }
+    },
+    [state.busy, state.sessionId],
+  );
+
   const newConversation = useCallback(async () => {
     setConfirmClear(false);
     try {
@@ -132,8 +166,17 @@ export function BotChat() {
           </p>
         ) : (
           <ul className="mx-auto flex max-w-2xl flex-col gap-4">
-            {state.messages.map((m) => (
-              <MessageBubble key={m.id} message={m} />
+            {state.messages.map((m, i) => (
+              <MessageBubble
+                key={m.id}
+                message={m}
+                // A confirmation is actionable only on the LAST message. Any newer
+                // turn — a button press, a typed "yes", an unrelated question —
+                // moves it off the end and the buttons go inert. One rule, and it
+                // needs no per-card state to enforce.
+                isLast={i === state.messages.length - 1}
+                onDecision={decide}
+              />
             ))}
           </ul>
         )}
@@ -170,7 +213,15 @@ export function BotChat() {
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message,
+  isLast = false,
+  onDecision,
+}: {
+  message: ChatMessage;
+  isLast?: boolean;
+  onDecision?: (decision: 'confirm' | 'cancel', confirmationId: string) => void;
+}) {
   const isUser = message.role === 'user';
   return (
     <li className={isUser ? 'self-end' : 'self-start'} style={{ maxWidth: '85%' }}>
@@ -183,7 +234,9 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       >
         {message.streaming && message.content.length === 0 ? <ThinkingDots /> : message.content}
       </div>
-      {message.card ? <BotCard payload={message.card} /> : null}
+      {message.card ? (
+        <BotCard payload={message.card} actionable={isLast} onDecision={onDecision} />
+      ) : null}
     </li>
   );
 }

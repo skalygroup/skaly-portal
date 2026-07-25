@@ -63,6 +63,64 @@ describe('chatReducer', () => {
     expect(s.busy).toBe(true);
   });
 
+  it('a decision stamps the outgoing card as resolved (ADR-014 turn 2)', () => {
+    // Turn 1 finishes with a confirmation card on the last message.
+    let s = send(initialChatState);
+    s = chatReducer(s, {
+      type: 'message',
+      sessionId: 'sess-1',
+      content: 'Ready — confirm?',
+      card: { type: 'confirmation', confirmationId: 'c-1' },
+    });
+    expect(s.messages.at(-1)!.card!.resolved).toBeUndefined();
+
+    // Pressing Confirm sends the next turn AND resolves the card it belonged to, so
+    // the buttons can render their outcome without any per-card component state.
+    s = chatReducer(s, { type: 'send', userId: 'u2', assistantId: 'a2', text: 'Yes, go ahead', decision: 'confirm' });
+    expect(s.messages[1]!.card!.resolved).toBe('confirm');
+    expect(s.messages).toHaveLength(4);
+  });
+
+  it('cancel stamps cancel', () => {
+    let s = send(initialChatState);
+    s = chatReducer(s, {
+      type: 'message',
+      sessionId: 'sess-1',
+      content: 'Ready — confirm?',
+      card: { type: 'confirmation', confirmationId: 'c-1' },
+    });
+    s = chatReducer(s, { type: 'send', userId: 'u2', assistantId: 'a2', text: 'Cancel', decision: 'cancel' });
+    expect(s.messages[1]!.card!.resolved).toBe('cancel');
+  });
+
+  it('an ordinary send stamps nothing — a typed "yes" leaves the card unresolved', () => {
+    // It still becomes inert, because the card is no longer the LAST message. That
+    // is derived at render time, not stored here.
+    let s = send(initialChatState);
+    s = chatReducer(s, {
+      type: 'message',
+      sessionId: 'sess-1',
+      content: 'Ready — confirm?',
+      card: { type: 'confirmation', confirmationId: 'c-1' },
+    });
+    s = chatReducer(s, { type: 'send', userId: 'u2', assistantId: 'a2', text: 'yes' });
+    expect(s.messages[1]!.card!.resolved).toBeUndefined();
+    // …and it is no longer last.
+    expect(s.messages.at(-1)!.card).toBeUndefined();
+  });
+
+  it('a decision on a card-less last message changes nothing', () => {
+    const s = chatReducer(initialChatState, {
+      type: 'send',
+      userId: 'u1',
+      assistantId: 'a1',
+      text: 'Yes, go ahead',
+      decision: 'confirm',
+    });
+    expect(s.messages).toHaveLength(2);
+    expect(s.messages.every((m) => m.card === undefined)).toBe(true);
+  });
+
   it('restore rebuilds history and reset clears the panel', () => {
     let s = chatReducer(initialChatState, {
       type: 'restore',
