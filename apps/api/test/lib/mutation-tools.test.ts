@@ -1,3 +1,4 @@
+import { CALENDAR_STATUSES, SLOT_STATUS_VALUES, STAGE_VALUES } from '@skaly/shared';
 import { Kysely, PostgresDialect } from 'kysely';
 import pg from 'pg';
 import { describe, test, expect, beforeAll, afterAll } from 'vitest';
@@ -106,6 +107,31 @@ describe('input validation', () => {
 
     const cell = getBotTool('update_calendar_cell')!.inputSchema;
     expect(cell.safeParse({ cellId: '11111111-1111-4111-8111-111111111111' }).success).toBe(false);
+  });
+
+  test('status vocabularies come from the shared constants, not a hand-copied list', () => {
+    // Regression guard. These were hand-copied once and the calendar list was wrong:
+    // invented values the service rejects, while the real ones were unreachable — a
+    // schema that advertises a vocabulary to the model that the write then refuses.
+    const id = '11111111-1111-4111-8111-111111111111';
+
+    const cell = getBotTool('update_calendar_cell')!.inputSchema;
+    for (const status of CALENDAR_STATUSES) {
+      expect(cell.safeParse({ cellId: id, status }).success, status).toBe(true);
+    }
+    for (const status of ['Shoot Day', 'Editing', 'Ready to Post', 'Cancelled']) {
+      expect(cell.safeParse({ cellId: id, status }).success, status).toBe(false);
+    }
+
+    const slot = getBotTool('update_shoot_slot')!.inputSchema;
+    for (const slotStatus of SLOT_STATUS_VALUES) {
+      expect(slot.safeParse({ slotId: id, slotStatus }).success, slotStatus).toBe(true);
+    }
+
+    const stage = getBotTool('update_pipeline_stage')!.inputSchema;
+    for (const s of STAGE_VALUES) {
+      expect(stage.safeParse({ pipelineId: id, stage: s }).success, s).toBe(true);
+    }
   });
 
   test('add_client refuses a missing or out-of-range shootSlotsPerMonth at the schema', () => {
