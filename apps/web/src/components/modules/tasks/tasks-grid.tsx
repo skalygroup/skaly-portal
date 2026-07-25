@@ -447,8 +447,13 @@ function TaskGroupTable({ tasks, edit, flashId }: { tasks: Task[]; edit: EditApi
  * `?highlight={taskId}` (APPFLOW §12) — how a search result lands on its row.
  *
  * The param is stripped as soon as it is read, so a refresh (or a back/forward)
- * doesn't re-flash a row the user has already been shown; the id is held in
- * state for the 2s the flash lasts.
+ * doesn't re-flash a row the user has already been shown.
+ *
+ * The 2s duration is the CSS animation's, not a timer's, deliberately: the rows
+ * only exist once the tasks query resolves, so a timer started here would burn
+ * its 2s while the grid was still loading and the user would land on a row that
+ * had already finished flashing. The class is applied when the row mounts, which
+ * is when the animation runs.
  */
 function useHighlightFlash(): string | null {
   const searchParams = useSearchParams();
@@ -465,9 +470,6 @@ function useHighlightFlash(): string | null {
     params.delete('highlight');
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
-
-    const timer = setTimeout(() => setFlashId(null), 2000);
-    return () => clearTimeout(timer);
     // `searchParams` changes when we strip the param — keying off `highlight`
     // alone is what stops this re-running with a null value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
