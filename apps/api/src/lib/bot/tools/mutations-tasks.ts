@@ -17,6 +17,8 @@
 import { z } from 'zod';
 
 import { defineMutationTool } from './types.js';
+import { AppError } from '../../../lib/errors.js';
+import { ClientService } from '../../../services/ClientService.js';
 import { TaskService } from '../../../services/TaskService.js';
 
 import type { CurrentUser } from '../../../services/AttendanceService.js';
@@ -25,6 +27,7 @@ import type { DB } from '@skaly/shared';
 import type { Kysely } from 'kysely';
 
 const tasks = new TaskService();
+const clients = new ClientService();
 
 const TASK_STATUSES = ['To Do', 'In Progress', 'Blocked', 'Done', 'Cancelled'] as const;
 const uuid = z.string().uuid();
@@ -128,22 +131,46 @@ export const assignTaskTool = defineMutationTool({
     },
     required: ['taskId', 'staffIds'],
   },
-  readCurrent: (input, currentUser, db) => readTask(input.taskId, currentUser, db),
+  /**
+   * Resolves the requested ids to NAMES and diffs them against the current set.
+   *
+   * The card must show who (ADR-014 §4 — the user consents to specific values).
+   * "2 added" reads identically whether those are the two people they meant or two
+   * ids the model resolved wrongly, and by the time the outcome message names them
+   * the consent has already happened.
+   *
+   * Only the DELTA is shown: re-confirming an assignment that is mostly unchanged
+   * must not look like it is reassigning everyone.
+   */
+  async readCurrent(input, currentUser, db) {
+    const task = await tasks.getTask(input.taskId, currentUser, db);
+    // Same validation the write does — an inactive assignee is rejected here,
+    // before consent, rather than after it.
+    const requested = await tasks.resolveActiveStaff(input.staffIds, db);
+
+    const already = new Set(task.assignees.map((a) => a.id));
+    const added = requested.filter((s) => !already.has(s.id));
+
+    const state = {
+      description: task.description,
+      period: task.period,
+      current: task.assignees.map((a) => a.name).join(', '),
+      added: added.map((s) => `+ ${s.name}`).join(', '),
+      addedCount: added.length,
+    };
+
+    if (added.length === 0) {
+      const names = requested.map((s) => s.name).join(', ');
+      return { state, noChange: `${names} ${requested.length === 1 ? 'is' : 'are'} already assigned to that task.` };
+    }
+    return { state };
+  },
   summary: {
     entity: 'Task',
-    action: (input) => `Assign ${input.staffIds.length} ${input.staffIds.length === 1 ? 'person' : 'people'} to task`,
+    action: (_input) => 'Assign people to task',
     target: (state) => state.description,
     period: (_input, state) => state.period,
-    // `to` is left as the count: the summary is rendered server-side from the
-    // validated input, and resolving ids → names here would need a second read
-    // that TaskService.assign already does. The names land in the outcome message.
-    changes: [
-      {
-        field: 'Assignees',
-        from: (s) => s.assignees,
-        to: (i) => `${i.staffIds.length} added`,
-      },
-    ],
+    changes: [{ field: 'Assignees', from: (s) => s.current, to: (_i, s) => s.added }],
   },
   async handler(input, currentUser, db) {
     const result = await db
@@ -177,9 +204,27 @@ export const createTaskTool = defineMutationTool({
     },
     required: ['description', 'date'],
   },
-  // Nothing exists yet, so there is no target to read and no version to capture.
-  // The summary still comes from validated input — the model does not paraphrase it.
-  readCurrent: (input) => Promise.resolve({ state: { period: input.date.slice(0, 7) } }),
+  /**
+   * The task does not exist yet, so there is no target row — but the ids in the
+   * input still have to become names before the user is asked to approve them.
+   * A card reading `Client: e0000000-…` is not a value anyone can consent to.
+   */
+  async readCurrent(input, _currentUser, db) {
+    const assignees = await tasks.resolveActiveStaff(input.assigneeIds ?? [], db);
+    const client = input.clientId
+      ? (await clients.list({ includeInactive: true }, db)).find((c) => c.id === input.clientId)
+      : undefined;
+    if (input.clientId && !client) {
+      throw new AppError('RESOURCE_NOT_FOUND', `clients row ${input.clientId} does not exist.`);
+    }
+    return {
+      state: {
+        period: input.date.slice(0, 7),
+        clientName: client?.name ?? null,
+        assigneeNames: assignees.map((a) => a.name).join(', '),
+      },
+    };
+  },
   summary: {
     entity: 'Task',
     action: () => 'Create a new task',
@@ -189,7 +234,8 @@ export const createTaskTool = defineMutationTool({
       { field: 'Description', from: () => null, to: (i) => i.description },
       { field: 'Date', from: () => null, to: (i) => i.date },
       { field: 'Deadline', from: () => null, to: (i) => i.deadline },
-      { field: 'Assignees', from: () => null, to: (i) => i.assigneeIds?.length ?? 0 },
+      { field: 'Client', from: () => null, to: (_i, s) => s.clientName },
+      { field: 'Assignees', from: () => null, to: (_i, s) => s.assigneeNames },
     ],
   },
   async handler(input, currentUser, db) {

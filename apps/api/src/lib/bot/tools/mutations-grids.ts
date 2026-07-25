@@ -17,12 +17,17 @@ import { defineMutationTool } from './types.js';
 import { ContentCalendarService } from '../../../services/ContentCalendarService.js';
 import { ContentDropperService } from '../../../services/ContentDropperService.js';
 import { ShootPlannerService } from '../../../services/ShootPlannerService.js';
+import { TaskService } from '../../../services/TaskService.js';
+import { formatCalendarDate } from '../confirmation.js';
 
 import type { CalendarStatus } from '@skaly/shared';
 
 const dropper = new ContentDropperService();
 const planner = new ShootPlannerService();
 const calendar = new ContentCalendarService();
+/** Only for resolveActiveStaff — the freelancer-id → name lookup, which is the
+ *  same active-staff check the write performs. */
+const staffTasks = new TaskService();
 
 const uuid = z.string().uuid();
 const dateField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD');
@@ -123,6 +128,13 @@ export const updateShootSlotTool = defineMutationTool({
   // UNVERSIONED (ADR-008) — no version captured, last-write-wins as designed.
   async readCurrent(input, currentUser, db) {
     const slot = await planner.getSlot(input.slotId, currentUser, db);
+    // The input carries a freelancerId; the card must show the person's name.
+    // `null` is a real value here — it means "unassign" — so only a defined,
+    // non-null id needs resolving.
+    const assigned =
+      input.freelancerId != null
+        ? await staffTasks.resolveActiveStaff([input.freelancerId], db)
+        : [];
     return {
       state: {
         clientName: slot.clientName,
@@ -132,6 +144,7 @@ export const updateShootSlotTool = defineMutationTool({
         slotDate: slot.slotDate,
         freelancerName: slot.freelancerName,
         piecesExpected: slot.piecesExpected,
+        newFreelancerName: assigned[0]?.name ?? null,
       },
     };
   },
@@ -145,6 +158,12 @@ export const updateShootSlotTool = defineMutationTool({
     changes: [
       { field: 'Status', from: (s) => s.slotStatus, to: (i) => i.slotStatus },
       { field: 'Date', from: (s) => s.slotDate, to: (i) => i.slotDate },
+      {
+        field: 'Freelancer',
+        from: (s) => s.freelancerName,
+        // Untouched → show the current name back. Explicit null → unassigning.
+        to: (i, s) => (i.freelancerId === undefined ? s.freelancerName : s.newFreelancerName),
+      },
       { field: 'Pieces expected', from: (s) => s.piecesExpected, to: (i) => i.piecesExpected },
     ],
   },
@@ -196,7 +215,9 @@ export const updateCalendarCellTool = defineMutationTool({
   summary: {
     entity: 'Calendar cell',
     action: (input) => (input.status ? `Set calendar cell to ${input.status}` : 'Update calendar note'),
-    target: (state) => `${state.clientName} — ${state.date}`,
+    // Dates in `target` are formatted here: buildSummary renders `changes` values,
+    // but a target string is assembled by the spec and would otherwise show raw ISO.
+    target: (state) => `${state.clientName} — ${formatCalendarDate(state.date)}`,
     period: (_input, state) => state.period,
     changes: [
       { field: 'Status', from: (s) => s.status, to: (i) => i.status },

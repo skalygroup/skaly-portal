@@ -398,6 +398,118 @@ describe('turn 2 — execution', () => {
   });
 });
 
+describe('the card shows values a human can consent to (ADR-014 §4)', () => {
+  const RAHUL = 'e2000000-0000-4000-8000-00000000cf11';
+  const PRIYA = 'e2000000-0000-4000-8000-00000000cf12';
+
+  beforeAll(async () => {
+    await db
+      .insertInto('staff')
+      .values([
+        { id: RAHUL, name: 'Rahul', email: `rahul${RAHUL}@conf.itest`, role: 'team_member', active: true },
+        { id: PRIYA, name: 'Priya', email: `priya${PRIYA}@conf.itest`, role: 'team_member', active: true },
+      ])
+      .onConflict((oc) => oc.column('id').doNothing())
+      .execute();
+  });
+
+  /** Drive one turn-1 for an arbitrary tool call and return its confirmation card. */
+  async function cardFor(name: string, input: Record<string, unknown>) {
+    const calls: number[] = [];
+    const client = {
+      messages: {
+        stream: () => {
+          calls.push(1);
+          return calls.length === 1
+            ? fakeStream([], asMessage([{ type: 'tool_use', id: 'toolu_1', name, input }], 'tool_use'))
+            : fakeStream(['ok?'], asMessage([{ type: 'text', text: 'ok?' }], 'end_turn'));
+        },
+      },
+    } as unknown as Anthropic;
+
+    const sink: Emitted[] = [];
+    const s = new BotService(client, redis, mockIo(sink));
+    const session = await s.loadSession(ADMIN);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'do the thing', db });
+    return {
+      card: sink.filter((e) => e.event === 'bot:message').at(-1)!.payload.card as
+        | { summary: { changes: Array<{ field: string; from: string; to: string }>; target: string } }
+        | undefined,
+      content: sink.filter((e) => e.event === 'bot:message').at(-1)!.payload.content as string,
+    };
+  }
+
+  test('assign_task names the people, and shows only the DELTA', async () => {
+    // Rahul is already on the task; the call adds Priya as well.
+    await db.insertInto('task_assignees').values({ task_id: TASK, staff_id: RAHUL }).execute();
+
+    const { card } = await cardFor('assign_task', { taskId: TASK, staffIds: [RAHUL, PRIYA] });
+    const change = card!.summary.changes.find((c) => c.field === 'Assignees')!;
+
+    // Names, not a count — "2 added" reads identically whether these are the right
+    // two people or two ids the model resolved wrongly.
+    expect(change.to).toBe('+ Priya');
+    // Only the delta: re-confirming must not look like it reassigns everyone.
+    expect(change.to).not.toContain('Rahul');
+    expect(change.from).toBe('Rahul');
+  });
+
+  test('assign_task short-circuits when the delta is empty — no pending record', async () => {
+    await db.insertInto('task_assignees').values({ task_id: TASK, staff_id: RAHUL }).execute();
+
+    const { card } = await cardFor('assign_task', { taskId: TASK, staffIds: [RAHUL] });
+    // No card to confirm, because there is nothing to change.
+    expect(card).toBeUndefined();
+    expect(await svc().peekPending(ADMIN)).toBeNull();
+  });
+
+  test('assign_task rejects an inactive assignee at turn 1, before consent', async () => {
+    await db.updateTable('staff').set({ active: false }).where('id', '=', PRIYA).execute();
+    try {
+      await cardFor('assign_task', { taskId: TASK, staffIds: [PRIYA] });
+      expect(await svc().peekPending(ADMIN)).toBeNull();
+    } finally {
+      await db.updateTable('staff').set({ active: true }).where('id', '=', PRIYA).execute();
+    }
+  });
+
+  test('create_task shows the client and assignee NAMES, never their ids', async () => {
+    const client = await db
+      .insertInto('clients')
+      .values({ name: 'Naaz Furniture', shoot_slots_per_month: 2, is_internal: true, active: true })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    try {
+      const { card } = await cardFor('create_task', {
+        description: 'Edit the new reel',
+        date: `${PERIOD}-12`,
+        clientId: client.id,
+        assigneeIds: [RAHUL],
+      });
+      const changes = card!.summary.changes;
+      expect(changes.find((c) => c.field === 'Client')!.to).toBe('Naaz Furniture');
+      expect(changes.find((c) => c.field === 'Assignees')!.to).toBe('Rahul');
+      // Not a single raw uuid anywhere on the card.
+      for (const c of changes) expect(c.to).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    } finally {
+      await db.deleteFrom('clients').where('id', '=', client.id).execute();
+    }
+  });
+
+  test('add_holiday shows the weekday, so a Sunday holiday is visibly a no-op', async () => {
+    // 2097-05-05 is a Sunday.
+    const { card } = await cardFor('add_holiday', { date: '2097-05-05', name: 'Test Day' });
+    const date = card!.summary.changes.find((c) => c.field === 'Date')!;
+    expect(date.to).toBe('Sunday, 5 May 2097');
+  });
+
+  afterAll(async () => {
+    await db.deleteFrom('task_assignees').where('staff_id', 'in', [RAHUL, PRIYA]).execute();
+    await db.deleteFrom('staff').where('id', 'in', [RAHUL, PRIYA]).execute();
+  });
+});
+
 describe('turn 2 — a qualified yes is not consent', () => {
   test('"yes, but make it Friday" clears the pending record and re-plans', async () => {
     await turn1();

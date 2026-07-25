@@ -259,7 +259,7 @@ export class TaskService {
     }
 
     const assigneeIds = [...new Set(input.assigneeIds)];
-    await this.assertActiveStaff(assigneeIds, trx);
+    await this.resolveActiveStaff(assigneeIds, trx);
 
     await trx
       .insertInto('tasks')
@@ -463,7 +463,7 @@ export class TaskService {
     await assertPeriodNotLocked(task.period, trx);
 
     const requested = [...new Set(staffIds)];
-    await this.assertActiveStaff(requested, trx);
+    await this.resolveActiveStaff(requested, trx);
 
     const existing = await trx
       .selectFrom('task_assignees')
@@ -629,11 +629,20 @@ export class TaskService {
     }
   }
 
-  private async assertActiveStaff(staffIds: string[], trx: Executor): Promise<void> {
-    if (staffIds.length === 0) return;
+  /**
+   * Validate that every id is active, non-deleted staff — and return their names.
+   *
+   * Public and name-returning since Sprint 9: `assign_task`'s confirmation card has
+   * to show WHO is being assigned, not a count (ADR-014 §4 — the user consents to
+   * specific values). This is the query that already runs before the write, so
+   * calling it at turn 1 also means an inactive assignee is rejected before the
+   * user consents rather than after.
+   */
+  async resolveActiveStaff(staffIds: string[], trx: Executor): Promise<Array<{ id: string; name: string }>> {
+    if (staffIds.length === 0) return [];
     const found = await trx
       .selectFrom('staff')
-      .select('id')
+      .select(['id', 'name'])
       .where('id', 'in', staffIds)
       .where('active', '=', true)
       .where('deleted_at', 'is', null)
@@ -641,6 +650,7 @@ export class TaskService {
     if (found.length !== staffIds.length) {
       throw new AppError('VALIDATION_ERROR', 'One or more assignees are not active staff.');
     }
+    return found;
   }
 
   private async fanOutDependencyResolved(

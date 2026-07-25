@@ -47,6 +47,13 @@ export interface ToolCurrentState {
   /** Present only for versioned targets (content_pipelines, content_calendar).
    *  ADR-008: tasks and shoot_schedules are unversioned and return none. */
   version?: number;
+  /**
+   * Set when the request would change nothing (e.g. every requested assignee is
+   * already assigned). The interceptor reports this and creates NO pending record:
+   * asking someone to confirm a write with an empty diff is asking them to approve
+   * a card that says nothing, and the write itself would be a no-op.
+   */
+  noChange?: string;
 }
 
 /** Storage/registry shape — input erased to `unknown`; BotService validates it
@@ -121,7 +128,7 @@ export function defineMutationTool<S extends z.ZodTypeAny, State extends Record<
     input: z.infer<S>,
     currentUser: CurrentUser,
     db: Kysely<DB>,
-  ): Promise<{ state: State; version?: number }>;
+  ): Promise<{ state: State; version?: number; noChange?: string }>;
   summary: {
     entity: string;
     action: (input: z.infer<S>) => string;
@@ -130,7 +137,8 @@ export function defineMutationTool<S extends z.ZodTypeAny, State extends Record<
     changes: ReadonlyArray<{
       field: string;
       from: (state: State) => unknown;
-      to: (input: z.infer<S>) => unknown;
+      /** Gets the state too — resolved names live there, not in the raw input. */
+      to: (input: z.infer<S>, state: State) => unknown;
     }>;
   };
   handler(

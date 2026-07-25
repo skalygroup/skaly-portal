@@ -58,6 +58,19 @@ what counts as affirmative**, and **what the stored call carries**.
 6. **Re-validate at turn 2:** re-resolve the permission and re-assert the period lock before
    executing. Both may have changed between the summary and the "yes".
 
+   *Implementation note (Sprint 9 STEP 5), so the next reader does not file this as a missed
+   requirement.* The **period re-assert is satisfied by the service-layer transactional
+   check, not duplicated in the interceptor.** Every service whose target is period-scoped
+   calls `assertPeriodNotLocked` inside its own transaction — atomic with the write, and
+   reading the real period rather than `summary.period`, which is a rendered display string.
+   Using rendering data as a security input is backwards, and a second pre-check would only
+   open a check-to-write race it cannot close. §6's intent — "do not trust the turn-1 read" —
+   is met more completely this way.
+
+   The **permission re-resolve IS duplicated** in the interceptor, because nothing else on
+   the confirmed path reads the per-user `bot.tool.*` override: the services assert role, not
+   the override, and five minutes is long enough for an admin to revoke one.
+
 ## Rule
 
 The pending confirmation is **server state**. The client may reference it by id; it may never

@@ -539,6 +539,12 @@ export class BotService {
       };
     }
 
+    // A request that changes nothing gets a plain answer, not a confirmation card
+    // for an empty diff. No pending record — there is nothing to consent to.
+    if (current.noChange) {
+      return { toolResult: mk(current.noChange), used: false };
+    }
+
     const pending = makePending({
       confirmationId: randomUUID(),
       toolName: tool.name,

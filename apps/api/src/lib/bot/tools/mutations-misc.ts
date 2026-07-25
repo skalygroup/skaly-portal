@@ -18,6 +18,7 @@ import { AppError } from '../../../lib/errors.js';
 import { getCurrentPeriod } from '../../../services/BaseService.js';
 import { ClientService } from '../../../services/ClientService.js';
 import { HolidayService } from '../../../services/HolidayService.js';
+import { formatCalendarDateWithWeekday } from '../confirmation.js';
 
 import type { ClientListItem } from '../../../services/ClientService.js';
 
@@ -50,7 +51,9 @@ export const addHolidayTool = defineMutationTool({
     target: (state) => `Everyone's attendance in ${state.period}`,
     period: (_input, state) => state.period,
     changes: [
-      { field: 'Date', from: () => null, to: (i) => i.date },
+      // With the weekday: a holiday on a Sunday flips nothing, and the user should
+      // be able to see that before approving it.
+      { field: 'Date', from: () => null, to: (i) => formatCalendarDateWithWeekday(i.date) },
       { field: 'Holiday', from: () => null, to: (i) => i.name },
     ],
   },
@@ -87,7 +90,7 @@ export const removeHolidayTool = defineMutationTool({
   summary: {
     entity: 'Holiday',
     action: (_input) => 'Remove a holiday',
-    target: (state) => `${state.name} on ${state.date}`,
+    target: (state) => `${state.name} on ${formatCalendarDateWithWeekday(state.date)}`,
     period: (_input, state) => state.period,
     changes: [{ field: 'Day type', from: () => 'Holiday', to: () => 'Working' }],
   },

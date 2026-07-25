@@ -142,7 +142,14 @@ export interface SummarySpec {
   changes: ReadonlyArray<{
     field: string;
     from: (state: Record<string, unknown>) => unknown;
-    to: (input: Record<string, unknown>) => unknown;
+    /**
+     * `to` receives the state as well as the input, because a human-meaningful
+     * value often is not IN the input: the input carries a staffId or a clientId,
+     * and the NAME was resolved by `readCurrent`. A card that shows an id, or a
+     * count standing in for names, is the lossy rendering ADR-014 §4 exists to
+     * prevent — the user consents to specific values.
+     */
+    to: (input: Record<string, unknown>, state: Record<string, unknown>) => unknown;
   }>;
 }
 
@@ -164,6 +171,25 @@ export function formatCalendarDate(value: string): string {
   const name = MONTHS[Number(month) - 1];
   if (!name) return value;
   return `${Number(day)} ${name} ${year}`;
+}
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * 'YYYY-MM-DD' → 'Saturday, 15 Aug 2026'.
+ *
+ * For dates where the day of the week changes what the change MEANS — a holiday on
+ * a Sunday flips nothing, because holiday logic only touches working rows. Someone
+ * approving "add Independence Day" should be able to see that without doing
+ * calendar arithmetic. Date.UTC keeps the arithmetic zone-free.
+ */
+export function formatCalendarDateWithWeekday(value: string): string {
+  const m = CALENDAR_DATE.exec(value);
+  if (!m) return value;
+  const [, year, month, day] = m;
+  const weekday = WEEKDAYS[new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))).getUTCDay()];
+  if (!weekday) return formatCalendarDate(value);
+  return `${weekday}, ${formatCalendarDate(value)}`;
 }
 
 /** One field value as the user reads it. Nothing renders as a bare null. */
@@ -193,7 +219,7 @@ export function buildSummary(
     changes: spec.changes.map((c) => ({
       field: c.field,
       from: renderValue(c.from(state)),
-      to: renderValue(c.to(input)),
+      to: renderValue(c.to(input, state)),
     })),
   };
 }
