@@ -30,11 +30,5 @@ export const StageUpdateSchema = z.object({
   version: z.number().int().min(1),
 });
 
-/** PATCH /v1/clients/:id — client name inline edit (admin/manager). */
-export const ClientNameSchema = z.object({
-  name: z.string().min(1).max(120),
-});
-
 export type DropperQuery = z.infer<typeof DropperQuerySchema>;
 export type StageUpdateBody = z.infer<typeof StageUpdateSchema>;
-export type ClientNameBody = z.infer<typeof ClientNameSchema>;

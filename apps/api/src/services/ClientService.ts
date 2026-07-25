@@ -1,23 +1,22 @@
 /**
- * ClientService — read side (07-API-CONTRACT §clients). Every SELECT goes
+ * ClientService — clients CRUD (07-API-CONTRACT §clients). Every SELECT goes
  * through softDeletable so soft-deleted clients never surface (audit H-02).
  *
- * TODO(client-create): POST /v1/clients and the reactivate flow do not exist
- * yet. When they are built, the insert transaction must call
- * `backfillClientPeriodRows(clientId, (await getCurrentPeriod(trx)).period, trx)`
- * — one call, already written and tested (period-generation.ts), which covers
- * all three row sets (shoot slots + pipeline row + calendar cells) and no-ops
- * for inactive/internal clients. Sprint 7 closed the generator half of the
- * carried Sprint 5/6 debt; only this call site remains.
+ * The role gates live HERE, not only on the routes: Sprint 9's `add_client` /
+ * `deactivate_client` bot tools call these methods directly with the JWT caller,
+ * so a route-only guard would let the bot write what the REST layer refuses.
+ * The service is the security boundary.
  */
 import { AuditService } from './AuditService.js';
+import { getCurrentPeriod } from './BaseService.js';
+import { backfillClientPeriodRows } from './period-generation.js';
 import { AppError } from '../lib/errors.js';
-import { softDeletable } from '../lib/queries.js';
+import { softDelete, softDeletable } from '../lib/queries.js';
 import { broadcastToOrg } from '../sockets/index.js';
 
 import type { CurrentUser } from './AttendanceService.js';
 import type { Executor } from './BaseService.js';
-import type { Clients, DB } from '@skaly/shared';
+import type { ClientCreateBody, Clients, DB } from '@skaly/shared';
 import type { Selectable , Kysely } from 'kysely';
 
 export interface ClientListItem {
@@ -58,6 +57,107 @@ export class ClientService {
     }
     const rows = await query.orderBy('name', 'asc').execute();
     return rows.map(clientToDTO);
+  }
+
+  /**
+   * Create a client (admin/manager — Auth-Matrix §3, `/settings/clients` is ✅
+   * for both) and generate its current-period operational rows in the SAME
+   * transaction. A client that commits without its period rows is invisible to
+   * Trigger 2: marking its pipeline Posted hits applyPostedTrigger's missing-cell
+   * no-op and the post is never recorded on the calendar (Sprint 7's carried debt).
+   *
+   * `backfillClientPeriodRows` is the single call that covers all three row sets
+   * (shoot slots + pipeline row + calendar cells) and already no-ops for an
+   * inactive or internal client — so there is no is_internal guard here.
+   */
+  async create(input: ClientCreateBody, currentUser: CurrentUser, db: Kysely<DB>): Promise<ClientListItem> {
+    if (currentUser.role !== 'admin' && currentUser.role !== 'manager') {
+      throw new AppError('PERMISSION_DENIED', 'Only admins and managers can create clients.');
+    }
+    // The canonical guard: clients.shoot_slots_per_month has no DEFAULT, so an
+    // absent value has nothing to fall back to. Zod catches this at the route;
+    // repeated here because the bot tool calls the service directly. Range
+    // matches adjustSlotCount, the column's other writer.
+    const slots = input.shootSlotsPerMonth;
+    if (!Number.isInteger(slots) || slots < 1 || slots > 20) {
+      throw new AppError(
+        'CLIENT_SHOOT_SLOTS_REQUIRED',
+        'shootSlotsPerMonth is required and must be an integer between 1 and 20.',
+      );
+    }
+
+    return db.transaction().execute(async (trx) => {
+      const created = await trx
+        .insertInto('clients')
+        .values({
+          name: input.name,
+          shoot_slots_per_month: slots,
+          pieces_per_visit: input.piecesPerVisit ?? 1,
+          is_internal: input.isInternal ?? false,
+          whatsapp_number: input.whatsappNumber ?? null,
+          active: true,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+      const { period } = await getCurrentPeriod(trx);
+      await backfillClientPeriodRows(created.id, period, trx);
+
+      await this.audit.log({
+        actorId: currentUser.staffId,
+        action: 'INSERT',
+        entity: 'clients',
+        entityId: created.id,
+        after: {
+          name: created.name,
+          shootSlotsPerMonth: created.shoot_slots_per_month,
+          isInternal: created.is_internal,
+        },
+        trx,
+      });
+
+      return clientToDTO(created);
+    });
+  }
+
+  /**
+   * Deactivate a client (admin only — mirrors staff deactivation; Auth-Matrix §5
+   * gives `deactivate_client` to admin alone). Soft-delete + active = false.
+   *
+   * HISTORICAL ROWS ARE NOT TOUCHED. Existing shoot_schedules / content_pipelines
+   * / content_calendar / tasks rows stay exactly as they are: the client
+   * disappears from FUTURE generation (generatePeriodRows filters on active +
+   * deleted_at) and from softDeletable reads, while the history it already
+   * produced remains intact and auditable. Cascading would destroy the record of
+   * work that actually happened.
+   */
+  async deactivate(id: string, currentUser: CurrentUser, db: Kysely<DB>): Promise<{ deactivated: true }> {
+    if (currentUser.role !== 'admin') {
+      throw new AppError('PERMISSION_DENIED', 'Only admins can deactivate clients.');
+    }
+
+    return db.transaction().execute(async (trx) => {
+      const before = await softDeletable(trx.selectFrom('clients').selectAll())
+        .where('id', '=', id)
+        .executeTakeFirst();
+      if (!before) {
+        throw new AppError('RESOURCE_NOT_FOUND', `clients row ${id} does not exist.`);
+      }
+
+      await softDelete('clients', id, currentUser.staffId, trx);
+      await trx.updateTable('clients').set({ active: false }).where('id', '=', id).execute();
+
+      await this.audit.log({
+        actorId: currentUser.staffId,
+        action: 'DELETE',
+        entity: 'clients',
+        entityId: id,
+        before: { name: before.name, active: before.active },
+        trx,
+      });
+
+      return { deactivated: true };
+    });
   }
 
   /**

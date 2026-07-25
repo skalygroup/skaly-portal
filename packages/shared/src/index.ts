@@ -59,13 +59,15 @@ export {
   StageSchema,
   DropperQuerySchema,
   StageUpdateSchema,
-  ClientNameSchema,
 } from './schemas/content-dropper';
 export type {
   DropperQuery,
   StageUpdateBody,
-  ClientNameBody,
 } from './schemas/content-dropper';
+
+// Client request schemas — shared by API validation + web forms.
+export { ClientNameSchema, ClientCreateSchema } from './schemas/clients';
+export type { ClientNameBody, ClientCreateBody } from './schemas/clients';
 
 // Content Calendar — status vocabulary + request schemas (API + web dropdown).
 export {

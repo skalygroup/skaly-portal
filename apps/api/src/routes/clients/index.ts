@@ -1,4 +1,4 @@
-import { ClientNameSchema } from '@skaly/shared';
+import { ClientCreateSchema, ClientNameSchema } from '@skaly/shared';
 import { z } from 'zod';
 
 import { AppError } from '../../lib/errors.js';
@@ -56,6 +56,42 @@ export default async function clientsRoutes(app: FastifyInstance) {
       }
       const data = await service.list({ includeInactive }, app.db);
       return { data };
+    },
+  );
+
+  // Create a client. admin/manager (Auth-Matrix §3). The service generates the
+  // current period's shoot/pipeline/calendar rows in the same transaction.
+  r.post(
+    '/clients',
+    {
+      preHandler: [app.verifyJwt, app.requireRole('admin', 'manager')],
+      schema: {
+        body: ClientCreateSchema,
+        response: { 201: z.object({ data: ClientItemSchema }) },
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      const currentUser: CurrentUser = { staffId: request.user.id, role: request.user.role };
+      const data = await service.create(request.body, currentUser, app.db);
+      return reply.status(201).send({ data });
+    },
+  );
+
+  // Deactivate a client — soft-delete + active=false. admin only; history kept.
+  r.delete(
+    '/clients/:id',
+    {
+      preHandler: [app.verifyJwt, app.requireRole('admin')],
+      schema: {
+        params: IdParam,
+        response: { 200: z.object({ data: z.object({ deactivated: z.literal(true) }) }) },
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request) => {
+      const currentUser: CurrentUser = { staffId: request.user.id, role: request.user.role };
+      return { data: await service.deactivate(request.params.id, currentUser, app.db) };
     },
   );
 
