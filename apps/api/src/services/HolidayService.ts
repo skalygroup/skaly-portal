@@ -118,6 +118,29 @@ export class HolidayService {
   }
 
   /**
+   * One ACTIVE holiday by id, or 404.
+   *
+   * Added in Sprint 9 for `remove_holiday`'s turn-1 read. `list` is per-period, so
+   * the tool's first draft resolved the current period and searched that — which
+   * meant a holiday in ANY other month reported "not found" from a perfectly valid
+   * id. Reading by id is what `remove` itself does; this exposes the same lookup so
+   * the two cannot disagree about which holidays exist.
+   */
+  async get(holidayId: string, trx: Executor): Promise<HolidayItem> {
+    const row = await trx
+      .selectFrom('holidays')
+      .select(['id', 'period', 'name', sql<string>`to_char(date, 'YYYY-MM-DD')`.as('date')])
+      .where('id', '=', holidayId)
+      .where('active', '=', true)
+      .where('removed_at', 'is', null)
+      .executeTakeFirst();
+    if (!row) {
+      throw new AppError('RESOURCE_NOT_FOUND', `Active holiday ${holidayId} does not exist.`);
+    }
+    return row;
+  }
+
+  /**
    * Remove a holiday (audit H-01). Soft-deactivate the holiday AND revert its
    * holiday attendance rows to working — atomically. admin/manager.
    */

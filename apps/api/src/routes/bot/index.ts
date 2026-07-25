@@ -24,7 +24,14 @@ const BotMessageSchema = z
     confirmationId: z.string().uuid().optional(),
     decision: z.enum(['confirm', 'cancel']).optional(),
   })
-  .strict();
+  .strict()
+  // A decision without the id it applies to is a malformed request, not a stale
+  // one. The server would resolve it to `stale_id` and answer politely, which is
+  // safe but hides a frontend bug — the buttons always bind both.
+  .refine((b) => b.decision === undefined || b.confirmationId !== undefined, {
+    message: 'confirmationId is required when decision is present.',
+    path: ['confirmationId'],
+  });
 
 const SessionViewSchema = z.object({
   sessionId: z.string().nullable(),

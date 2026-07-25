@@ -80,13 +80,11 @@ export const removeHolidayTool = defineMutationTool({
     required: ['holidayId'],
   },
   async readCurrent(input, _currentUser, db) {
-    // list() is per-period, so resolve the period from the row first. A removed or
-    // unknown id 404s here, at turn 1, before any pending state exists.
-    const { period } = await getCurrentPeriod(db);
-    const found = (await holidays.list(period, db)).find((h) => h.id === input.holidayId);
-    if (!found) {
-      throw new AppError('RESOURCE_NOT_FOUND', `Active holiday ${input.holidayId} does not exist.`);
-    }
+    // Read by id, NOT by scanning the current period's list — the first draft did
+    // the latter and a holiday in any other month reported "not found" from a
+    // perfectly valid id. An unknown or already-removed id 404s here, at turn 1,
+    // before any pending state exists.
+    const found = await holidays.get(input.holidayId, db);
     return { state: { period: found.period, date: found.date, name: found.name } };
   },
   summary: {
@@ -97,9 +95,16 @@ export const removeHolidayTool = defineMutationTool({
     changes: [{ field: 'Day type', from: () => 'Holiday', to: () => 'Working' }],
   },
   async handler(input, currentUser, db) {
+    // Read the period before the removal so the deep link lands on the right month
+    // rather than defaulting to the current one — `remove` returns only { removed }.
+    const { period } = await holidays.get(input.holidayId, db);
     // Straight through remove — the attendance revert rides its transaction (H-01).
     await db.transaction().execute((trx) => holidays.remove(input.holidayId, currentUser, trx));
-    return { text: 'Holiday removed and the day is back to working.', card: { type: 'mutation_result' }, link: '/attendance' };
+    return {
+      text: 'Holiday removed and the day is back to working.',
+      card: { type: 'mutation_result' },
+      link: `/attendance?period=${period}`,
+    };
   },
 });
 

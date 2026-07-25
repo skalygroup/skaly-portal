@@ -92,6 +92,20 @@ function mockAnthropic(toolInput: Record<string, unknown>): AnthropicSpy {
   return { client, calls };
 }
 
+/** A model that just answers, with no tool call — an ordinary question. */
+function mockPlainAnthropic(): AnthropicSpy {
+  const calls: Array<{ messages: Anthropic.MessageParam[] }> = [];
+  const client = {
+    messages: {
+      stream: (req: { messages: Anthropic.MessageParam[] }) => {
+        calls.push({ messages: req.messages });
+        return fakeStream(['You have 3 overdue tasks.'], asMessage([{ type: 'text', text: 'You have 3 overdue tasks.' }], 'end_turn'));
+      },
+    },
+  } as unknown as Anthropic;
+  return { client, calls };
+}
+
 const svc = (spy?: AnthropicSpy, sink: Emitted[] = []): BotService =>
   new BotService(spy?.client ?? ({} as Anthropic), redis, mockIo(sink));
 
@@ -510,6 +524,47 @@ describe('the card shows values a human can consent to (ADR-014 §4)', () => {
   });
 });
 
+describe('turn 2 — re-validation between the summary and the yes', () => {
+  test('a period locked between turn 1 and turn 2 refuses with the lock copy', async () => {
+    const { confirmationId } = await turn1();
+
+    // An admin locks the month while the user is reading the card. The service
+    // asserts the lock inside its own transaction, so the refusal is atomic with
+    // the write attempt rather than a pre-check that could race it.
+    await db.updateTable('months').set({ locked: true }).where('period', '=', PERIOD).execute();
+    try {
+      const sink: Emitted[] = [];
+      const s = svc(undefined, sink);
+      const session = await s.loadSession(ADMIN);
+      await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db });
+
+      expect(await taskStatus()).toBe('In Progress');
+      const content = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload.content as string;
+      expect(content).toMatch(/locked/i);
+      expect(content).toMatch(/unlock/i);
+      // Never a code or a status.
+      expect(content).not.toMatch(/423|PERIOD_LOCKED/);
+    } finally {
+      await db.updateTable('months').set({ locked: false }).where('period', '=', PERIOD).execute();
+    }
+  });
+
+  test('the pending record is consumed even when the write then fails', async () => {
+    // Consume-once is unconditional: a failed attempt must not leave a record that
+    // a second click could fire against a since-unlocked month.
+    const { confirmationId } = await turn1();
+    await db.updateTable('months').set({ locked: true }).where('period', '=', PERIOD).execute();
+    try {
+      const s = svc(undefined, []);
+      const session = await s.loadSession(ADMIN);
+      await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db });
+      expect(await s.peekPending(ADMIN)).toBeNull();
+    } finally {
+      await db.updateTable('months').set({ locked: false }).where('period', '=', PERIOD).execute();
+    }
+  });
+});
+
 describe('turn 2 — a qualified yes is not consent', () => {
   test('"yes, but make it Friday" clears the pending record and re-plans', async () => {
     await turn1();
@@ -530,6 +585,35 @@ describe('turn 2 — a qualified yes is not consent', () => {
     expect(await taskStatus()).toBe('In Progress');
     // ...and it DID reach the model (fell through as a fresh turn).
     expect(spy.calls.length).toBeGreaterThan(0);
+  });
+
+  test('an unrelated message clears the pending record rather than leaving it armed', async () => {
+    await turn1();
+    expect(await svc().peekPending(ADMIN)).not.toBeNull();
+
+    // The model answers the new question plainly — no fresh mutation intent.
+    const s = svc(mockPlainAnthropic(), []);
+    const session = await s.loadSession(ADMIN);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'what are my overdue tasks?', db });
+
+    // A stale confirmation must not survive to be answered by a later bare "yes".
+    expect(await s.peekPending(ADMIN)).toBeNull();
+    expect(await taskStatus()).toBe('In Progress');
+  });
+
+  test('after an unrelated message, a bare "yes" executes nothing', async () => {
+    await turn1();
+
+    const first = await svc(mockPlainAnthropic(), []).loadSession(ADMIN);
+    const s = svc(mockPlainAnthropic(), []);
+    await s.handleMessage({ session: first, staffId: ADMIN, role: 'admin', userText: 'never mind, what is the weather', db });
+
+    const s2 = svc(mockPlainAnthropic(), []);
+    const second = await s2.loadSession(ADMIN);
+    await s2.handleMessage({ session: second, staffId: ADMIN, role: 'admin', userText: 'yes', db });
+
+    // The "yes" is now just a message — there is nothing pending for it to confirm.
+    expect(await taskStatus()).toBe('In Progress');
   });
 });
 

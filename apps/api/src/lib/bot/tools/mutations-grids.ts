@@ -11,6 +11,7 @@
  * `shoot_schedules` is UNVERSIONED (ADR-008) and captures nothing; its forward-only
  * transition validation passes through from the service.
  */
+import { CALENDAR_STATUSES, SLOT_STATUS_VALUES, STAGE_VALUES } from '@skaly/shared';
 import { z } from 'zod';
 
 import { defineMutationTool } from './types.js';
@@ -32,21 +33,20 @@ const staffTasks = new TaskService();
 const uuid = z.string().uuid();
 const dateField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD');
 
-const STAGES = ['raw', 'finals', 'posted'] as const;
-const STAGE_LABEL: Record<(typeof STAGES)[number], string> = {
+/**
+ * Status vocabularies come from the shared constants, never hand-copied.
+ *
+ * They were hand-copied in the first draft and the calendar list was WRONG —
+ * invented values ('Shoot Day', 'Editing', 'Ready to Post', 'Cancelled') that the
+ * service rejects, while the real ones ('Under Progress', 'Ready', 'Pending',
+ * 'Rescheduled') were unreachable. The tool's schema would have advertised a
+ * vocabulary to the model that the write then refused.
+ */
+const STAGE_LABEL: Record<(typeof STAGE_VALUES)[number], string> = {
   raw: 'RAW received',
   finals: 'Finals ready',
   posted: 'Posted',
 };
-const SLOT_STATUSES = ['Unset', 'Scheduled', 'Confirmed', 'Completed'] as const;
-const CALENDAR_STATUS_VALUES = [
-  'No Activity',
-  'Shoot Day',
-  'Editing',
-  'Ready to Post',
-  'Posted',
-  'Cancelled',
-] as const;
 
 export const updatePipelineStageTool = defineMutationTool({
   name: 'update_pipeline_stage',
@@ -54,12 +54,12 @@ export const updatePipelineStageTool = defineMutationTool({
   capability: 'updating content pipeline stages',
   description:
     "Mark a content pipeline stage complete for a client's month. Stages must be completed in order (raw → finals → posted). Look the pipeline row up with get_content_pipeline first to get its id.",
-  inputSchema: z.object({ pipelineId: uuid, stage: z.enum(STAGES) }),
+  inputSchema: z.object({ pipelineId: uuid, stage: z.enum(STAGE_VALUES) }),
   jsonSchema: {
     type: 'object',
     properties: {
       pipelineId: { type: 'string', description: 'The pipeline row id, from get_content_pipeline.' },
-      stage: { type: 'string', enum: [...STAGES] },
+      stage: { type: 'string', enum: [...STAGE_VALUES] },
     },
     required: ['pipelineId', 'stage'],
   },
@@ -103,7 +103,7 @@ export const updateShootSlotTool = defineMutationTool({
   inputSchema: z
     .object({
       slotId: uuid,
-      slotStatus: z.enum(SLOT_STATUSES).optional(),
+      slotStatus: z.enum(SLOT_STATUS_VALUES).optional(),
       slotDate: dateField.optional(),
       freelancerId: uuid.nullable().optional(),
       piecesExpected: z.number().int().min(1).optional(),
@@ -120,7 +120,7 @@ export const updateShootSlotTool = defineMutationTool({
     type: 'object',
     properties: {
       slotId: { type: 'string', description: 'The shoot slot id, from get_shoot_schedule.' },
-      slotStatus: { type: 'string', enum: [...SLOT_STATUSES] },
+      slotStatus: { type: 'string', enum: [...SLOT_STATUS_VALUES] },
       slotDate: { type: 'string', description: 'Shoot date as YYYY-MM-DD.' },
       freelancerId: { type: 'string', description: 'Freelancer staff id, or null to unassign.' },
       piecesExpected: { type: 'number', description: 'Pieces expected from this shoot.' },
@@ -185,7 +185,7 @@ export const updateCalendarCellTool = defineMutationTool({
   inputSchema: z
     .object({
       cellId: uuid,
-      status: z.enum(CALENDAR_STATUS_VALUES).optional(),
+      status: z.enum(CALENDAR_STATUSES).optional(),
       note: z.string().max(500).nullable().optional(),
     })
     .refine((v) => v.status !== undefined || v.note !== undefined, {
@@ -195,7 +195,7 @@ export const updateCalendarCellTool = defineMutationTool({
     type: 'object',
     properties: {
       cellId: { type: 'string', description: 'The calendar cell id, from get_content_calendar.' },
-      status: { type: 'string', enum: [...CALENDAR_STATUS_VALUES] },
+      status: { type: 'string', enum: [...CALENDAR_STATUSES] },
       note: { type: 'string', description: 'Cell note, or null to clear it.' },
     },
     required: ['cellId'],
