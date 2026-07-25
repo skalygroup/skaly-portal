@@ -10,10 +10,21 @@ import type { CurrentUser } from '../../services/AttendanceService.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
-// ponytail: kept local rather than in @skaly/shared — one field, and the web
-// form (STEP 7) validates the same 2000-char cap inline. Move to shared if a
-// third consumer appears.
-const BotMessageSchema = z.object({ content: z.string().min(1).max(2000) });
+// ponytail: kept local rather than in @skaly/shared — the web panel validates the
+// 2000-char cap inline and posts `decision`/`confirmationId` as plain fields, so
+// this is still the only importing consumer. Move to shared if a third appears.
+//
+// `decision` is the confirmation gate (ADR-014 §1); `content` alongside it is only
+// the display string archived to the transcript ("Yes, go ahead"). When `decision`
+// is present the gate NEVER reads `content` — that is the whole point of the
+// structured field, and Turn2Body's precedence chain enforces it.
+const BotMessageSchema = z
+  .object({
+    content: z.string().min(1).max(2000),
+    confirmationId: z.string().uuid().optional(),
+    decision: z.enum(['confirm', 'cancel']).optional(),
+  })
+  .strict();
 
 const SessionViewSchema = z.object({
   sessionId: z.string().nullable(),

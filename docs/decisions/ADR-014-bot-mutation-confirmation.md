@@ -24,10 +24,29 @@ what counts as affirmative**, and **what the stored call carries**.
    silently undoing C-02 for every bot-mediated edit. An interleaving human edit must produce
    an honest 409. `tasks` and `shoot_schedules` are unversioned (ADR-008) and capture nothing.
 
-3. **One pending record**, consume-once, 5-minute expiry, stored inside the existing
-   `bot:session:{staffId}` blob — one key, one TTL, atomic with the turn append. A new
-   mutation intent replaces it. It is consumed **before** execution, so a double-click cannot
-   double-fire.
+3. **One pending record**, consume-once, 5-minute expiry, under its own key
+   `bot:pending:{staffId}`. A new mutation intent replaces it. It is consumed **before**
+   execution, so a double-click cannot double-fire.
+
+   *Amended during Sprint 9 STEP 3.* The original ruling put the record inside the
+   `bot:session:{staffId}` blob for "one key, one TTL". That is incompatible with
+   consume-once, which is the safety property the record exists for:
+
+   - `WATCH`/`MULTI` is scoped to a **connection**, and the app shares one ioredis client.
+     Two concurrent consumers on that connection both pass the CAS and both execute.
+   - A Lua script would have to `cjson`-decode and re-encode the whole session; `cjson`
+     renders an empty `messages: []` as `{}`, corrupting the transcript in order to protect
+     the pending record.
+
+   A dedicated key makes the consume a single atomic `GETDEL` on a shared connection. The
+   cost is that a pending record can outlive a failed session write — bounded at 5 minutes,
+   and version-checked before it can write anything. Cheap next to firing `create_task` or
+   `add_client` twice, which are unversioned and would simply succeed twice.
+
+   The key carries a **15-minute** Redis TTL — deliberately longer than the 5-minute gate, so
+   an expired confirmation is still readable and can be reported as "that timed out" rather
+   than being indistinguishable from one that never existed. The TTL is a janitor; `expiresAt`
+   is the gate.
 
 4. **The summary is server-rendered** from the validated input plus a current-state read.
    The user consents to specific values; the model may not paraphrase them.

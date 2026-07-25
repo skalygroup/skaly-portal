@@ -23,6 +23,7 @@ import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 
 import type { CurrentUser } from './AttendanceService.js';
+import type { PendingConfirmation } from '../lib/bot/confirmation.js';
 import type { BotCard } from '../lib/bot/tools/types.js';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { DB } from '@skaly/shared';
@@ -34,6 +35,8 @@ import type { Server } from 'socket.io';
 const SESSION_TTL_SECONDS = 12 * 60 * 60; // 12h (TRD §9.4)
 const MAX_TURNS = 50; // 50-turn cap, drop oldest (TRD §9.4)
 const MAX_TOKENS = 1024;
+/** Janitor only — the gate is the record's own 5-minute `expiresAt` (ADR-014). */
+const PENDING_JANITOR_TTL_SECONDS = 15 * 60;
 
 // Friendly copy only — never a code or stack (Error-Handling §6, reconciliation #10).
 //
@@ -125,6 +128,57 @@ export class BotService {
 
   private sessionKey(staffId: string): string {
     return `bot:session:${staffId}`;
+  }
+
+  // ── Pending confirmation (ADR-014 §3) ─────────────────────────────────────
+  //
+  // Its own key, deliberately, and NOT a field inside the session blob.
+  // `consumePending` has to be atomic or a double-click fires an irreversible
+  // write twice — and inside the blob it cannot be:
+  //   - WATCH/MULTI is per-CONNECTION, and this app shares one ioredis client, so
+  //     two concurrent consumers on the same connection both pass the CAS.
+  //   - a Lua script would have to cjson-decode/encode the whole session, and
+  //     cjson turns an empty `messages: []` into `{}` — corrupting the transcript
+  //     to protect the pending record.
+  // A dedicated key makes the consume a single atomic GETDEL on a shared
+  // connection, which is exactly the primitive this needs.
+  private pendingKey(staffId: string): string {
+    return `bot:pending:${staffId}`;
+  }
+
+  /**
+   * Store the turn-1 record, replacing any previous one (single-pending rule).
+   *
+   * The Redis TTL is deliberately LONGER than the record's own 5-minute
+   * `expiresAt`: expiry is decided on read so an expired confirmation can be
+   * reported as "that timed out" instead of being indistinguishable from one that
+   * never existed. The TTL is only a janitor for abandoned records.
+   */
+  async setPending(staffId: string, pending: PendingConfirmation): Promise<void> {
+    await this.redis.set(
+      this.pendingKey(staffId),
+      JSON.stringify(pending),
+      'EX',
+      PENDING_JANITOR_TTL_SECONDS,
+    );
+  }
+
+  /** Read AND clear in one atomic step, before execution — so a double-click
+   *  finds nothing the second time. Returns null when there is none. */
+  async consumePending(staffId: string): Promise<PendingConfirmation | null> {
+    const raw = await this.redis.getdel(this.pendingKey(staffId));
+    return raw ? (JSON.parse(raw) as PendingConfirmation) : null;
+  }
+
+  /** Peek without consuming — for resolving intent before deciding to execute. */
+  async peekPending(staffId: string): Promise<PendingConfirmation | null> {
+    const raw = await this.redis.get(this.pendingKey(staffId));
+    return raw ? (JSON.parse(raw) as PendingConfirmation) : null;
+  }
+
+  /** Cancel, expiry, non-affirmative, and replacement all clear it. */
+  async clearPending(staffId: string): Promise<void> {
+    await this.redis.del(this.pendingKey(staffId));
   }
 
   /** Load the Redis session, or create + persist a new one so its sessionId is
