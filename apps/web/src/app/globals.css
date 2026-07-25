@@ -246,6 +246,18 @@ body {
   40%, 80% { transform: translateX(5px); }
 }
 
+/* Search-result landing: the row flashes gold for 2s (APPFLOW §12). The class is
+   removed by the grid when the flash ends, so nothing lingers in the DOM. */
+@keyframes skRowFlash {
+  0%, 70% { background-color: var(--accent-gold-dim); }
+  100%    { background-color: transparent; }
+}
+.sk-row-flash > td { animation: skRowFlash 2s ease-out 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sk-row-flash > td { animation: none; background-color: var(--accent-gold-dim); }
+}
+
 /* Brand-themed scrollbars — dark track, gold-on-hover thumb */
 .sk-page,
 .sk-page * { scrollbar-width: thin; scrollbar-color: #3A3A43 transparent; }

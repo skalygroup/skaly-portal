@@ -5,7 +5,8 @@ import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from '
 import { format, parseISO } from 'date-fns';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronDown, ChevronRight, Paperclip, Plus } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { TaskAttachmentPanel } from './task-attachment-panel';
 import { AssigneeCell, ResultEditor, StatusCell, type SaveState } from './task-cells';
@@ -52,6 +53,8 @@ export function TasksGrid() {
   const { period } = useMonthContext();
   const queryClient = useQueryClient();
   const gridKey = useMemo(() => ['tasks', period] as const, [period]);
+  // A search result lands here as ?highlight={taskId} (APPFLOW §12).
+  const flashId = useHighlightFlash();
 
   const { data: tasks, isPending, isError, error, refetch } = useQuery({
     queryKey: gridKey,
@@ -297,7 +300,7 @@ export function TasksGrid() {
       ) : (
         <div className="space-y-3">
           {groups.map((g) => (
-            <TaskGroup key={g.date} date={g.date} tasks={g.tasks} edit={edit} />
+            <TaskGroup key={g.date} date={g.date} tasks={g.tasks} edit={edit} flashId={flashId} />
           ))}
         </div>
       )}
@@ -318,7 +321,10 @@ export function TasksGrid() {
   );
 }
 
-function TaskGroup({ date, tasks, edit }: { date: string; tasks: Task[]; edit: EditApi }) {
+/** `flashId` rides as a plain prop, NOT on `edit`: adding it to that memo would
+ *  rebuild the column defs when a flash starts and again when it ends, which is
+ *  the cell-remount hazard documented on the memo below. */
+function TaskGroup({ date, tasks, edit, flashId }: { date: string; tasks: Task[]; edit: EditApi; flashId: string | null }) {
   const collapsed = useTaskGroups((s) => s.collapsed[date] ?? false);
   const toggle = useTaskGroups((s) => s.toggle);
   return (
@@ -328,12 +334,12 @@ function TaskGroup({ date, tasks, edit }: { date: string; tasks: Task[]; edit: E
         <span className="text-sm font-semibold" style={{ ...mono, color: 'var(--text-primary)' }}>{format(parseISO(date), 'EEE dd MMM')}</span>
         <span className="text-xs" style={{ ...mono, color: 'var(--text-muted)' }}>{tasks.length}</span>
       </button>
-      {!collapsed ? <TaskGroupTable tasks={tasks} edit={edit} /> : null}
+      {!collapsed ? <TaskGroupTable tasks={tasks} edit={edit} flashId={flashId} /> : null}
     </section>
   );
 }
 
-function TaskGroupTable({ tasks, edit }: { tasks: Task[]; edit: EditApi }) {
+function TaskGroupTable({ tasks, edit, flashId }: { tasks: Task[]; edit: EditApi; flashId: string | null }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const columns = useMemo(
@@ -422,7 +428,7 @@ function TaskGroupTable({ tasks, edit }: { tasks: Task[]; edit: EditApi }) {
             const t = row.original;
             const isOpen = expandedId === t.id;
             return (
-              <FragmentRow key={row.id} open={isOpen} colCount={colCount} task={t} edit={edit} onToggle={() => setExpandedId((cur) => (cur === t.id ? null : t.id))}>
+              <FragmentRow key={row.id} open={isOpen} colCount={colCount} task={t} edit={edit} flash={t.id === flashId} onToggle={() => setExpandedId((cur) => (cur === t.id ? null : t.id))}>
                 {row.getVisibleCells().map((cell, i) => (
                   <td key={cell.id} role="gridcell" aria-colindex={i + 1} className="px-3 py-2.5 align-middle" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -437,11 +443,51 @@ function TaskGroupTable({ tasks, edit }: { tasks: Task[]; edit: EditApi }) {
   );
 }
 
-function FragmentRow({ open, colCount, task, edit, onToggle, children }: { open: boolean; colCount: number; task: Task; edit: EditApi; onToggle: () => void; children: React.ReactNode }) {
+/**
+ * `?highlight={taskId}` (APPFLOW §12) — how a search result lands on its row.
+ *
+ * The param is stripped as soon as it is read, so a refresh (or a back/forward)
+ * doesn't re-flash a row the user has already been shown; the id is held in
+ * state for the 2s the flash lasts.
+ */
+function useHighlightFlash(): string | null {
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const [flashId, setFlashId] = useState<string | null>(null);
+
+  const highlight = searchParams.get('highlight');
+  useEffect(() => {
+    if (!highlight) return;
+    setFlashId(highlight);
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('highlight');
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+
+    const timer = setTimeout(() => setFlashId(null), 2000);
+    return () => clearTimeout(timer);
+    // `searchParams` changes when we strip the param — keying off `highlight`
+    // alone is what stops this re-running with a null value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlight]);
+
+  return flashId;
+}
+
+function FragmentRow({ open, colCount, task, edit, flash, onToggle, children }: { open: boolean; colCount: number; task: Task; edit: EditApi; flash: boolean; onToggle: () => void; children: React.ReactNode }) {
   const fh = edit.focusHandlers('result');
+  const rowRef = useRef<HTMLTableRowElement>(null);
+
+  useEffect(() => {
+    if (flash) rowRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [flash]);
+
   return (
     <>
       <tr
+        ref={rowRef}
         role="row"
         tabIndex={0}
         aria-expanded={open}
@@ -456,7 +502,7 @@ function FragmentRow({ open, colCount, task, edit, onToggle, children }: { open:
             onToggle();
           }
         }}
-        className="cursor-pointer focus:outline-none"
+        className={`cursor-pointer focus:outline-none${flash ? ' sk-row-flash' : ''}`}
         style={{ background: open ? 'var(--bg-hover)' : undefined }}
       >
         {children}
