@@ -55,6 +55,7 @@ const taskLink = (result: TaskDetailDTO): string =>
 
 export const updateTaskStatusTool = defineMutationTool({
   name: 'update_task_status',
+  family: 'tasks.write',
   capability: 'changing a task status',
   description:
     "Change a task's status. You must look the task up with a query tool first to get its id.",
@@ -85,6 +86,7 @@ export const updateTaskStatusTool = defineMutationTool({
 
 export const setDeadlineTool = defineMutationTool({
   name: 'set_deadline',
+  family: 'tasks.write',
   capability: 'changing a task deadline',
   description:
     "Set or change a task's deadline. Look the task up with a query tool first to get its id.",
@@ -115,6 +117,7 @@ export const setDeadlineTool = defineMutationTool({
 
 export const assignTaskTool = defineMutationTool({
   name: 'assign_task',
+  family: 'tasks.write',
   capability: 'assigning tasks',
   description:
     'Add one or more staff members as assignees on a task. Look up both the task and the staff with query tools first to get their ids. Existing assignees are kept.',
@@ -183,6 +186,7 @@ export const assignTaskTool = defineMutationTool({
 
 export const createTaskTool = defineMutationTool({
   name: 'create_task',
+  family: 'tasks.write',
   capability: 'creating tasks',
   description:
     'Create a task. admin/manager only. Look up the client and any assignees with query tools first to get their ids.',

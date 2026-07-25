@@ -36,8 +36,9 @@ import {
   listOverdueTasksTool,
   listTasksTool,
 } from './tasks.js';
+import { FAMILY_PHRASES } from './types.js';
 
-import type { BotTool } from './types.js';
+import type { BotTool, ToolFamily } from './types.js';
 import type Anthropic from '@anthropic-ai/sdk';
 
 export const QUERY_TOOLS: BotTool[] = [
@@ -79,12 +80,27 @@ export function getBotTool(name: string): BotTool | undefined {
 }
 
 /**
- * Human-readable capability phrases for a set of tool names — what the system
- * prompt names as DENIED (Sprint 8.1). Unknown names are dropped rather than
- * echoed: a raw tool name in the prompt would leak the internal tool surface.
+ * Human-readable capability phrases for a set of DENIED tool names (Sprint 8.1,
+ * re-tuned for 22 tools in Sprint 9 STEP 6).
+ *
+ * Grouped BY FAMILY, one phrase per family with any denied member. 8.1 budgeted
+ * ~120 tokens for ~10 denied query tools; a team_member is now denied 13 of 22, and
+ * thirteen near-identical phrases do two bad things — they bloat the prompt, and
+ * they give the model so much refusal surface that it starts pattern-matching onto
+ * it and refusing things the user CAN do. 8.1's own troubleshooting predicted this.
+ * Thirteen tools collapse to six phrases.
+ *
+ * Unknown names are dropped rather than echoed: a raw tool name in the prompt would
+ * leak the internal tool surface. Order follows FAMILY_PHRASES so the prompt is
+ * stable across calls (and therefore cacheable).
  */
 export function capabilityPhrases(names: readonly string[]): string[] {
-  return names.map((n) => byName.get(n)?.capability).filter((c): c is string => Boolean(c));
+  const families = new Set(
+    names.map((n) => byName.get(n)?.family).filter((f): f is ToolFamily => Boolean(f)),
+  );
+  return (Object.keys(FAMILY_PHRASES) as ToolFamily[])
+    .filter((f) => families.has(f))
+    .map((f) => FAMILY_PHRASES[f]);
 }
 
 /** Anthropic tool definitions for the permitted subset (by tool name). */

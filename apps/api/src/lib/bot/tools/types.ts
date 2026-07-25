@@ -18,6 +18,34 @@ import type { DB } from '@skaly/shared';
 import type { Kysely } from 'kysely';
 import type { z } from 'zod';
 
+/**
+ * Capability families and the phrase each one is denied under (Error-Handling §6,
+ * APPFLOW §9). ONE list — the family is declared on the tool descriptor, so this
+ * map is keyed by family and never repeats a tool name. A second list of tool
+ * names here would drift the moment one is renamed.
+ *
+ * Phrases are user-facing and must name no role: they are interpolated into the
+ * system prompt's TOOL ACCESS section verbatim.
+ */
+export const FAMILY_PHRASES = {
+  'tasks.read': 'viewing tasks',
+  'tasks.write': 'creating, assigning, or scheduling tasks',
+  'attendance.read': 'viewing attendance records',
+  'shoots.read': 'viewing the shoot schedule',
+  'shoots.write': 'editing the shoot schedule',
+  'pipeline.read': 'viewing the content pipeline',
+  'pipeline.write': 'editing the content pipeline',
+  'calendar.read': 'viewing the content calendar',
+  'calendar.write': 'editing the content calendar',
+  'holidays.read': 'viewing the holiday list',
+  'holidays.write': 'adding or removing holidays',
+  'clients.read': 'viewing client summaries',
+  'clients.write': 'adding or deactivating clients',
+  'audit.read': 'viewing the audit log',
+} as const;
+
+export type ToolFamily = keyof typeof FAMILY_PHRASES;
+
 /** A small typed payload the frontend card registry renders (STEP 7). */
 export interface BotCard {
   type: string;
@@ -71,6 +99,16 @@ export interface BotTool {
    * would breach APPFLOW §9's "never state which role is required".
    */
   capability: string;
+  /**
+   * Which capability family this tool belongs to (Sprint 9 STEP 6).
+   *
+   * Denials are named to the model one phrase PER FAMILY, not per tool. With 22
+   * tools a team_member is denied ~13, and listing thirteen near-identical phrases
+   * both bloats the prompt and makes the model pattern-match too eagerly onto the
+   * refusal — over-refusing things it can actually do. Six family phrases say the
+   * same thing.
+   */
+  family: ToolFamily;
   inputSchema: z.ZodTypeAny;
   /** Anthropic tool `input_schema` (hand-written; the inputs are tiny). */
   jsonSchema: Anthropic.Tool['input_schema'];
@@ -101,6 +139,9 @@ export function defineTool<S extends z.ZodTypeAny>(t: {
   name: string;
   description: string;
   capability: string;
+  /** Required: a new tool cannot be added without deciding which denial family it
+   *  belongs to, so the TOOL ACCESS block can never silently miss one. */
+  family: ToolFamily;
   inputSchema: S;
   jsonSchema: Anthropic.Tool['input_schema'];
   isMutation: boolean;
@@ -122,6 +163,9 @@ export function defineMutationTool<S extends z.ZodTypeAny, State extends Record<
   name: string;
   description: string;
   capability: string;
+  /** Required: a new tool cannot be added without deciding which denial family it
+   *  belongs to, so the TOOL ACCESS block can never silently miss one. */
+  family: ToolFamily;
   inputSchema: S;
   jsonSchema: Anthropic.Tool['input_schema'];
   readCurrent(

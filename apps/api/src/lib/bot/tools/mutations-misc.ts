@@ -30,6 +30,7 @@ const dateField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-
 
 export const addHolidayTool = defineMutationTool({
   name: 'add_holiday',
+  family: 'holidays.write',
   capability: 'adding holidays',
   description:
     "Add a holiday on a date. Everyone's attendance for that date flips from working to holiday.",
@@ -68,6 +69,7 @@ export const addHolidayTool = defineMutationTool({
 
 export const removeHolidayTool = defineMutationTool({
   name: 'remove_holiday',
+  family: 'holidays.write',
   capability: 'removing holidays',
   description:
     'Remove a holiday. That date goes back to being a working day for everyone. Look it up with get_holiday_list first to get its id.',
@@ -103,6 +105,7 @@ export const removeHolidayTool = defineMutationTool({
 
 export const addClientTool = defineMutationTool({
   name: 'add_client',
+  family: 'clients.write',
   capability: 'adding clients',
   description:
     "Add a client. Their shoot slots, pipeline row and calendar cells for the current month are created at the same time, so the monthly shoot slot count is required.",
@@ -146,6 +149,7 @@ export const addClientTool = defineMutationTool({
 
 export const deactivateClientTool = defineMutationTool({
   name: 'deactivate_client',
+  family: 'clients.write',
   capability: 'deactivating clients',
   description:
     'Deactivate a client. They stop appearing in future months; everything already recorded for them is kept. Look them up with get_client_summary first to get their id.',

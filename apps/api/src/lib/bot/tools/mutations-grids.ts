@@ -50,6 +50,7 @@ const CALENDAR_STATUS_VALUES = [
 
 export const updatePipelineStageTool = defineMutationTool({
   name: 'update_pipeline_stage',
+  family: 'pipeline.write',
   capability: 'updating content pipeline stages',
   description:
     "Mark a content pipeline stage complete for a client's month. Stages must be completed in order (raw → finals → posted). Look the pipeline row up with get_content_pipeline first to get its id.",
@@ -95,6 +96,7 @@ export const updatePipelineStageTool = defineMutationTool({
 
 export const updateShootSlotTool = defineMutationTool({
   name: 'update_shoot_slot',
+  family: 'shoots.write',
   capability: 'updating the shoot schedule',
   description:
     'Update a shoot slot — its status, date, freelancer or expected pieces. Status moves forward one step at a time (Unset → Scheduled → Confirmed → Completed). Look the slot up with get_shoot_schedule first to get its id.',
@@ -176,6 +178,7 @@ export const updateShootSlotTool = defineMutationTool({
 
 export const updateCalendarCellTool = defineMutationTool({
   name: 'update_calendar_cell',
+  family: 'calendar.write',
   capability: 'updating the content calendar',
   description:
     "Change a content calendar cell's status or note for one client on one date. Look the cell up with get_content_calendar first to get its id.",
