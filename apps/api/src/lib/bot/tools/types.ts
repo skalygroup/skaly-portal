@@ -29,6 +29,15 @@ export interface BotToolResult {
   text: string;
   /** Attached to the terminal bot:message for the frontend to render. */
   card?: BotCard;
+  /**
+   * MUTATION TOOLS ONLY. The deep link for the outcome message (APPFLOW §12).
+   *
+   * Returned by the handler rather than derived from a descriptor field, because
+   * only the handler holds the service's DTO — and `create_task` / `add_client`
+   * learn their id from it. A descriptor-level link would have to be fed the
+   * handler's return value, which is this shape, not the row.
+   */
+  link?: string;
 }
 
 /** The current state of a mutation target, read at turn 1. */
@@ -67,12 +76,6 @@ export interface BotTool {
   readCurrent?(input: unknown, currentUser: CurrentUser, db: Kysely<DB>): Promise<ToolCurrentState>;
   /** MUTATION TOOLS ONLY. How this tool renders its confirmation summary. */
   summary?: SummarySpec;
-  /**
-   * MUTATION TOOLS ONLY. The deep link for the outcome message (APPFLOW §12).
-   * Takes the service's return value because `create_task` / `add_client` only
-   * learn their id from it.
-   */
-  link?(result: unknown, state: Record<string, unknown>): string;
   /** `expectedVersion` is passed only for versioned targets, from the pending record. */
   handler(
     input: unknown,
@@ -105,8 +108,8 @@ export function defineTool<S extends z.ZodTypeAny>(t: {
  * gate entirely and execute on turn 1, which is the single worst bug available in
  * this sprint. It is not a field worth trusting to copy-paste.
  *
- * `State` is the shape `readCurrent` returns, so `summary`/`link` are typed against
- * it at the definition site.
+ * `State` is the shape `readCurrent` returns, so `summary` is typed against it at
+ * the definition site.
  */
 export function defineMutationTool<S extends z.ZodTypeAny, State extends Record<string, unknown>>(t: {
   name: string;
@@ -130,7 +133,6 @@ export function defineMutationTool<S extends z.ZodTypeAny, State extends Record<
       to: (input: z.infer<S>) => unknown;
     }>;
   };
-  link(result: never, state: State): string;
   handler(
     input: z.infer<S>,
     currentUser: CurrentUser,

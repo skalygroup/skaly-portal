@@ -77,7 +77,6 @@ export const updatePipelineStageTool = defineMutationTool({
     period: (_input, state) => state.period,
     changes: [{ field: 'Stage', from: (s) => `${s.status} (${s.stagesComplete} of 3)`, to: (i) => STAGE_LABEL[i.stage] }],
   },
-  link: (_result, state) => `/content-dropper?period=${state.period}`,
   async handler(input, currentUser, db, expectedVersion) {
     // expectedVersion is non-optional at the service; the interceptor always
     // supplies it for a versioned tool, and `?? 0` would silently force a 409.
@@ -85,7 +84,7 @@ export const updatePipelineStageTool = defineMutationTool({
       throw new Error('update_pipeline_stage requires the version captured at turn 1');
     }
     const result = await dropper.updateStage(input.pipelineId, input.stage, currentUser, expectedVersion, db);
-    return { text: `${result.clientName} is now at ${result.status}.`, card: { type: 'mutation_result' } };
+    return { text: `${result.clientName} is now at ${result.status}.`, card: { type: 'mutation_result' }, link: `/content-dropper?period=${result.period}` };
   },
 });
 
@@ -149,11 +148,10 @@ export const updateShootSlotTool = defineMutationTool({
       { field: 'Pieces expected', from: (s) => s.piecesExpected, to: (i) => i.piecesExpected },
     ],
   },
-  link: (_result, state) => `/shoot-planner?period=${state.period}`,
   async handler(input, currentUser, db) {
     const { slotId, ...patch } = input;
     const result = await planner.update(slotId, patch, currentUser, db);
-    return { text: `Slot ${result.slotIndex} for ${result.clientName} is now ${result.slotStatus}.`, card: { type: 'mutation_result' } };
+    return { text: `Slot ${result.slotIndex} for ${result.clientName} is now ${result.slotStatus}.`, card: { type: 'mutation_result' }, link: `/shoot-planner?period=${result.period}` };
   },
 });
 
@@ -205,7 +203,6 @@ export const updateCalendarCellTool = defineMutationTool({
       { field: 'Note', from: (s) => s.note, to: (i) => i.note },
     ],
   },
-  link: (_result, state) => `/content-calendar?period=${state.period}`,
   async handler(input, currentUser, db, expectedVersion) {
     if (expectedVersion === undefined) {
       throw new Error('update_calendar_cell requires the version captured at turn 1');
@@ -220,6 +217,12 @@ export const updateCalendarCellTool = defineMutationTool({
       expectedVersion,
       db,
     );
-    return { text: `Calendar cell is now ${result.status}.`, card: { type: 'mutation_result' } };
+    // The cell's period is the month of its date — content_calendar has both, and
+    // CalendarCellDTO exposes the date.
+    return {
+      text: `Calendar cell is now ${result.status}.`,
+      card: { type: 'mutation_result' },
+      link: `/content-calendar?period=${result.date.slice(0, 7)}`,
+    };
   },
 });

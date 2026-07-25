@@ -54,13 +54,12 @@ export const addHolidayTool = defineMutationTool({
       { field: 'Holiday', from: () => null, to: (i) => i.name },
     ],
   },
-  link: (_result, state) => `/attendance?period=${state.period}`,
   async handler(input, currentUser, db) {
     const period = input.date.slice(0, 7);
     await db
       .transaction()
       .execute((trx) => holidays.create({ period, date: input.date, name: input.name, currentUser, trx }));
-    return { text: `Added ${input.name} on ${input.date}.`, card: { type: 'mutation_result' } };
+    return { text: `Added ${input.name} on ${input.date}.`, card: { type: 'mutation_result' }, link: `/attendance?period=${period}` };
   },
 });
 
@@ -92,11 +91,10 @@ export const removeHolidayTool = defineMutationTool({
     period: (_input, state) => state.period,
     changes: [{ field: 'Day type', from: () => 'Holiday', to: () => 'Working' }],
   },
-  link: (_result, state) => `/attendance?period=${state.period}`,
   async handler(input, currentUser, db) {
     // Straight through remove — the attendance revert rides its transaction (H-01).
     await db.transaction().execute((trx) => holidays.remove(input.holidayId, currentUser, trx));
-    return { text: 'Holiday removed and the day is back to working.', card: { type: 'mutation_result' } };
+    return { text: 'Holiday removed and the day is back to working.', card: { type: 'mutation_result' }, link: '/attendance' };
   },
 });
 
@@ -137,10 +135,9 @@ export const addClientTool = defineMutationTool({
       { field: 'Internal', from: () => null, to: (i) => i.isInternal ?? false },
     ],
   },
-  link: () => '/settings/clients',
   async handler(input, currentUser, db) {
     const result: ClientListItem = await clients.create(input, currentUser, db);
-    return { text: `Added ${result.name}.`, card: { type: 'mutation_result' } };
+    return { text: `Added ${result.name}.`, card: { type: 'mutation_result' }, link: '/settings/clients' };
   },
 });
 
@@ -168,9 +165,8 @@ export const deactivateClientTool = defineMutationTool({
     target: (state) => state.name,
     changes: [{ field: 'Active', from: (s) => s.active, to: () => false }],
   },
-  link: () => '/settings/clients',
   async handler(input, currentUser, db) {
     await clients.deactivate(input.clientId, currentUser, db);
-    return { text: 'Client deactivated. Their history is unchanged.', card: { type: 'mutation_result' } };
+    return { text: 'Client deactivated. Their history is unchanged.', card: { type: 'mutation_result' }, link: '/settings/clients' };
   },
 });

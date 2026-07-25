@@ -97,6 +97,10 @@ export default async function botRoutes(app: FastifyInstance) {
           role: user.role,
           userText: request.body.content,
           db: app.db,
+          // ADR-014: the client may send ONLY these two. Never the tool, never the
+          // arguments, never the version — those live in the server's pending record.
+          decision: request.body.decision,
+          confirmationId: request.body.confirmationId,
         })
         .catch((err) => logger.error({ err, staffId: user.staffId }, 'bot handleMessage rejected'));
 

@@ -74,11 +74,10 @@ describe('the mutation tool registry', () => {
     }
   });
 
-  test('every mutation tool supplies readCurrent, summary and link', () => {
+  test('every mutation tool supplies readCurrent and a summary spec', () => {
     for (const tool of MUTATION_TOOLS) {
       expect(typeof tool.readCurrent, tool.name).toBe('function');
       expect(tool.summary, tool.name).toBeDefined();
-      expect(typeof tool.link, tool.name).toBe('function');
     }
   });
 
@@ -281,13 +280,14 @@ describe('summary specs render through buildSummary', () => {
     expect(summary.changes[0]).toEqual({ field: 'Deadline', from: '1 Jul 2026', to: '14 Aug 2026' });
   });
 
-  test('deep links follow the APPFLOW §12 convention', () => {
-    expect(getBotTool('update_task_status')!.link!({ id: 't1', period: '2026-07' } as never, {})).toBe(
-      '/tasks?period=2026-07&highlight=t1',
-    );
-    expect(getBotTool('update_calendar_cell')!.link!(null as never, { period: '2026-07' })).toBe(
-      '/content-calendar?period=2026-07',
-    );
-    expect(getBotTool('add_client')!.link!(null as never, {})).toBe('/settings/clients');
+  // The deep link now comes back from the handler (only it holds the service DTO,
+  // and create_task / add_client learn their id from it), so it is asserted in the
+  // turn-2 flow test where a real handler actually runs.
+  test('every mutation tool declares a summary period except the two that are not period-scoped', () => {
+    const notPeriodScoped = ['deactivate_client'];
+    for (const tool of MUTATION_TOOLS) {
+      const hasPeriod = tool.summary!.period !== undefined;
+      expect(hasPeriod, tool.name).toBe(!notPeriodScoped.includes(tool.name));
+    }
   });
 });
