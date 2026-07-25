@@ -24,11 +24,25 @@ const periodField = z
   .optional();
 const periodProp = { type: 'string', description: 'Month as YYYY-MM. Defaults to the current IST month.' } as const;
 
+/**
+ * One task line for the model.
+ *
+ * THE ID IS LOAD-BEARING, not decoration. Sprint 9's mutation tools all take a
+ * uuid, and reconciliation #11 rules that the model obtains it by looking the record
+ * up with a query tool — there is deliberately no fuzzy-id resolver. Sprint 8 built
+ * these tools read-only, where an id was never needed, so it omitted them; driving
+ * the real UI, the model looked the task up, found it, and then said it could not
+ * act because "list_tasks doesn't return the task id". Every task mutation was
+ * unreachable by name.
+ *
+ * The grid tools never had this problem — they JSON.stringify their DTOs, ids and
+ * all. Only these hand-built lines dropped it.
+ */
 function line(t: TaskDTO): string {
   const who = t.assignees.map((a) => a.name).join(', ') || 'unassigned';
   const due = t.deadline ? `, due ${t.deadline}` : '';
   const client = t.clientName ? ` [${t.clientName}]` : '';
-  return `• ${t.description}${client} — ${t.status}${due} (${who})`;
+  return `• ${t.description}${client} — ${t.status}${due} (${who}) · id ${t.id}`;
 }
 
 export const listTasksTool = defineTool({

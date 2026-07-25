@@ -180,6 +180,173 @@ async function turn1(sink: Emitted[] = []): Promise<{ confirmationId: string; si
   return { confirmationId: card.confirmationId, sink };
 }
 
+describe('the tool loop is bounded, not two-phase', () => {
+  /** Every tool_use block in the transcript must have a tool_result in the NEXT
+   *  message. The API rejects a dangling one, and Sprint 8 persisted them. */
+  function assertNoDanglingToolUse(messages: Anthropic.MessageParam[]): void {
+    for (const [i, m] of messages.entries()) {
+      if (m.role !== 'assistant' || !Array.isArray(m.content)) continue;
+      const ids = m.content
+        .filter((b) => (b as { type: string }).type === 'tool_use')
+        .map((b) => (b as { id: string }).id);
+      if (ids.length === 0) continue;
+
+      const next = messages[i + 1];
+      const answered = new Set(
+        next && Array.isArray(next.content)
+          ? next.content
+              .filter((b) => (b as { type: string }).type === 'tool_result')
+              .map((b) => (b as { tool_use_id: string }).tool_use_id)
+          : [],
+      );
+      for (const id of ids) {
+        expect(answered.has(id), `tool_use ${id} at index ${i} has no tool_result`).toBe(true);
+      }
+    }
+  }
+
+  /** A model that asks for a tool on the first TWO rounds, then answers. This is
+   *  the shape that poisoned a session under the fixed two-phase loop. */
+  function twoRoundAnthropic(): AnthropicSpy {
+    const calls: Array<{ messages: Anthropic.MessageParam[] }> = [];
+    const client = {
+      messages: {
+        stream: (req: { messages: Anthropic.MessageParam[] }) => {
+          calls.push({ messages: req.messages });
+          if (calls.length === 1) {
+            return fakeStream(
+              ['Looking that up. '],
+              asMessage([{ type: 'tool_use', id: 'toolu_a', name: 'list_tasks', input: {} }], 'tool_use'),
+            );
+          }
+          if (calls.length === 2) {
+            // Round 2 also wants a tool — Sprint 8 stored this unanswered.
+            return fakeStream(
+              ['Now the client list. '],
+              asMessage([{ type: 'tool_use', id: 'toolu_b', name: 'get_client_summary', input: {} }], 'tool_use'),
+            );
+          }
+          return fakeStream(['Here you go.'], asMessage([{ type: 'text', text: 'Here you go.' }], 'end_turn'));
+        },
+      },
+    } as unknown as Anthropic;
+    return { client, calls };
+  }
+
+  test('a second round of tool_use is answered, not persisted dangling', async () => {
+    const spy = twoRoundAnthropic();
+    const s = svc(spy, []);
+    const session = await s.loadSession(ADMIN);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'what is going on', db });
+
+    // Three streams ran, so the loop went past Sprint 8's hard stop at two.
+    expect(spy.calls.length).toBe(3);
+
+    const raw = await redis.get(`bot:session:${ADMIN}`);
+    const stored = JSON.parse(raw!) as { messages: Anthropic.MessageParam[] };
+    // THE REGRESSION: a dangling tool_use here makes every later message in this
+    // session 400, which the user sees as "I'm having trouble connecting" forever.
+    assertNoDanglingToolUse(stored.messages);
+  });
+
+  test('a completed chain ends with the assistant answer', async () => {
+    const spy = twoRoundAnthropic();
+    const s = svc(spy, []);
+    const session = await s.loadSession(ADMIN);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'what is going on', db });
+
+    const stored = JSON.parse((await redis.get(`bot:session:${ADMIN}`))!) as {
+      messages: Anthropic.MessageParam[];
+    };
+    expect(stored.messages.at(-1)!.role).toBe('assistant');
+    // Consecutive user messages ARE accepted by the API (verified against it), so
+    // the only hard invariant is the dangling tool_use — this is just the shape a
+    // normal completed turn has.
+  });
+
+  test('a model that never stops asking for tools is cut off, still with no dangling block', async () => {
+    // The cap is what keeps this a loop and not an agent.
+    const calls: Array<{ messages: Anthropic.MessageParam[] }> = [];
+    const client = {
+      messages: {
+        stream: (req: { messages: Anthropic.MessageParam[] }) => {
+          calls.push({ messages: req.messages });
+          // Never returns end_turn while tools are offered.
+          return fakeStream(
+            ['again '],
+            calls.length > 8
+              ? asMessage([{ type: 'text', text: 'fine' }], 'end_turn')
+              : asMessage(
+                  [{ type: 'tool_use', id: `toolu_${calls.length}`, name: 'list_tasks', input: {} }],
+                  'tool_use',
+                ),
+          );
+        },
+      },
+    } as unknown as Anthropic;
+
+    const s = svc({ client, calls }, []);
+    const session = await s.loadSession(ADMIN);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'loop forever', db });
+
+    // Bounded: 4 rounds + the tool-less closing stream.
+    expect(calls.length).toBeLessThanOrEqual(6);
+
+    const stored = JSON.parse((await redis.get(`bot:session:${ADMIN}`))!) as {
+      messages: Anthropic.MessageParam[];
+    };
+    // The invariant that matters, even for a model behaving badly.
+    assertNoDanglingToolUse(stored.messages);
+  });
+
+  test('a mutation is reachable in ONE user turn: look up, then stage', async () => {
+    // The other half of the bug — the prompt tells the model to look an id up
+    // first, which spent the only round Sprint 8 had.
+    const calls: number[] = [];
+    const client = {
+      messages: {
+        stream: () => {
+          calls.push(1);
+          if (calls.length === 1) {
+            return fakeStream(
+              ['Finding it. '],
+              asMessage([{ type: 'tool_use', id: 'toolu_look', name: 'list_tasks', input: {} }], 'tool_use'),
+            );
+          }
+          if (calls.length === 2) {
+            return fakeStream(
+              ['Got it. '],
+              asMessage(
+                [
+                  {
+                    type: 'tool_use',
+                    id: 'toolu_act',
+                    name: 'update_task_status',
+                    input: { taskId: TASK, status: 'Done' },
+                  },
+                ],
+                'tool_use',
+              ),
+            );
+          }
+          return fakeStream(['Confirm?'], asMessage([{ type: 'text', text: 'Confirm?' }], 'end_turn'));
+        },
+      },
+    } as unknown as Anthropic;
+
+    const sink: Emitted[] = [];
+    const s = new BotService(client, redis, mockIo(sink));
+    const session = await s.loadSession(ADMIN);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'mark the naaz reel done', db });
+
+    // Staged, not executed.
+    expect(await taskStatus()).toBe('In Progress');
+    const card = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload.card as { type: string };
+    expect(card.type).toBe('confirmation');
+    expect(await s.peekPending(ADMIN)).not.toBeNull();
+  });
+});
+
 describe('turn 1 — the gate', () => {
   test('DOES NOT WRITE, and returns a confirmation card instead', async () => {
     expect(await taskStatus()).toBe('In Progress');

@@ -41,6 +41,12 @@ const MAX_TURNS = 50; // 50-turn cap, drop oldest (TRD §9.4)
 const MAX_TOKENS = 1024;
 /** Janitor only — the gate is the record's own 5-minute `expiresAt` (ADR-014). */
 const PENDING_JANITOR_TTL_SECONDS = 15 * 60;
+/**
+ * Tool rounds per user turn. Look-up-then-act needs two; the rest is headroom for
+ * a retry after a bad argument. The cap is what keeps this a bounded loop rather
+ * than an agent, and it bounds cost and latency with it.
+ */
+const MAX_TOOL_ROUNDS = 4;
 
 // Friendly copy only — never a code or stack (Error-Handling §6, reconciliation #10).
 //
@@ -130,6 +136,52 @@ function botModel(): string {
  *  user message keeps every tool exchange intact and a valid user-first history
  *  (Anthropic requires the first message to be role:'user' — slicing after the
  *  dropped turn would orphan its assistant reply and start with 'assistant'). */
+/**
+ * Drop any `tool_use` block that has no `tool_result` in the following message.
+ *
+ * The Anthropic API rejects a request whose transcript contains one, so persisting
+ * it poisons the session permanently: every later message 400s and the user sees
+ * "I'm having trouble connecting" until they start a new conversation. Sprint 8 did
+ * exactly that whenever its second stream asked for another tool.
+ *
+ * Applied at the PERSIST boundary rather than on each branch of the loop. The
+ * invariant is about what we store — one choke point every path already passes
+ * through beats auditing every path for a rule it could quietly stop following. A
+ * message left with no content at all is dropped entirely.
+ */
+export function stripDanglingToolUse(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  const out: Anthropic.MessageParam[] = [];
+
+  for (const [i, m] of messages.entries()) {
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) {
+      out.push(m);
+      continue;
+    }
+
+    const next = messages[i + 1];
+    const answered = new Set(
+      next && Array.isArray(next.content)
+        ? next.content
+            .filter((b) => (b as { type?: string }).type === 'tool_result')
+            .map((b) => (b as { tool_use_id: string }).tool_use_id)
+        : [],
+    );
+
+    const kept = m.content.filter(
+      (b) =>
+        (b as { type?: string }).type !== 'tool_use' || answered.has((b as { id: string }).id),
+    );
+    if (kept.length === m.content.length) {
+      out.push(m);
+    } else if (kept.length > 0) {
+      out.push({ ...m, content: kept });
+    }
+    // else: nothing but unanswered tool_use — drop the message.
+  }
+
+  return out;
+}
+
 export function trimToTurns(messages: Anthropic.MessageParam[], maxTurns: number): Anthropic.MessageParam[] {
   let userTurns = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -457,29 +509,86 @@ export class BotService {
         this.emit(staffId, 'bot:token', { sessionId, delta });
       };
 
-      // ── Phase 1 ──────────────────────────────────────────────────────────
-      const first = await this.stream(system, tools, messages, onText);
-      messages.push({ role: 'assistant', content: first.content });
-
       let card: BotCard | undefined;
       const toolsUsed: string[] = [];
-      const toolBlocks = first.content.filter(
-        (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
-      );
 
-      // ── Phase 2 (only if the model asked for tools) ──────────────────────
-      if (first.stop_reason === 'tool_use' && toolBlocks.length > 0) {
+      // ── The tool loop ────────────────────────────────────────────────────
+      //
+      // BOUNDED, not fixed at two phases. Sprint 8 ran exactly stream → tools →
+      // stream, which had two consequences found by driving the real UI:
+      //
+      //   1. If the SECOND stream also returned a tool_use, it was persisted with
+      //      no matching tool_result. The Anthropic API rejects that, so every
+      //      later message in the session 400'd — surfacing as "I'm having trouble
+      //      connecting" forever, until the user started a new conversation. The
+      //      session was permanently poisoned by one ordinary retry.
+      //   2. A mutation was unreachable by natural language. The system prompt
+      //      tells the model to look an id up first, which spends round 1 — and
+      //      there was no round 2 to act in. It only worked if the user already
+      //      knew the uuid.
+      //
+      // The cap is what keeps this a loop and not an agent: a handful of rounds is
+      // ample for look-up-then-act, and it bounds both cost and latency.
+      let staged = false; // a confirmation was staged — see below
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const reply = await this.stream(system, tools, messages, onText);
+        messages.push({ role: 'assistant', content: reply.content });
+
+        const toolBlocks = reply.content.filter(
+          (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+        );
+        if (reply.stop_reason !== 'tool_use' || toolBlocks.length === 0) break;
+
+        // Every tool_use gets a tool_result in the very next message — including
+        // the synthetic one the confirmation interceptor returns. That invariant is
+        // the whole fix, and it now holds on every round rather than only the first.
         const results: Anthropic.ToolResultBlockParam[] = [];
         for (const block of toolBlocks) {
           const { toolResult, cardOut, used } = await this.runTool(block, permittedNames, currentUser, db);
           results.push(toolResult);
           if (used) toolsUsed.push(block.name);
-          if (cardOut) card = cardOut; // multiple tools → the last card wins (documented)
+          if (cardOut) {
+            card = cardOut; // multiple tools → the last card wins (documented)
+            if (cardOut.type === 'confirmation') staged = true;
+          }
         }
         messages.push({ role: 'user', content: results });
 
-        const second = await this.stream(system, tools, messages, onText);
-        messages.push({ role: 'assistant', content: second.content });
+        if (staged) {
+          // A pending confirmation exists. Take ONE more stream so the model asks
+          // the question conversationally, then stop unconditionally: continuing
+          // would let it stage a second mutation in the same turn, and the
+          // single-pending rule would silently discard the one the user is about to
+          // be shown.
+          const ask = await this.stream(system, tools, messages, onText);
+          messages.push({ role: 'assistant', content: ask.content });
+          // If it reached for another tool anyway, answer that block rather than
+          // leaving it dangling — the 400 above is exactly what we are fixing.
+          const dangling = ask.content.filter(
+            (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+          );
+          if (dangling.length > 0) {
+            messages.push({
+              role: 'user',
+              content: dangling.map((b) => ({
+                type: 'tool_result' as const,
+                tool_use_id: b.id,
+                content: AWAITING_CONFIRMATION_RESULT,
+                is_error: false,
+              })),
+            });
+          }
+          break;
+        }
+      }
+
+      // The transcript MUST end with an assistant turn. It will not if the round cap
+      // was hit mid-tool-use: the last message would be a tool_result, which is both
+      // an invalid shape to append the next user message to and an empty answer for
+      // the user. A tool-less stream forces prose.
+      if (messages.at(-1)?.role === 'user') {
+        const closing = await this.stream(system, [], messages, onText);
+        messages.push({ role: 'assistant', content: closing.content });
       }
 
       // ── Terminal message — persist, THEN emit (see finalise) ─────────────
@@ -702,7 +811,9 @@ export class BotService {
   ): Promise<void> {
     const updated: BotSession = {
       sessionId,
-      messages: trimToTurns(messages, MAX_TURNS),
+      // Sanitise BEFORE trimming: a dangling tool_use must never reach Redis, and
+      // trimming can only remove whole leading turns, never repair one.
+      messages: trimToTurns(stripDanglingToolUse(messages), MAX_TURNS),
       turnCount: Math.min(prevTurnCount + 1, MAX_TURNS),
       lastActivityAt: new Date().toISOString(),
     };

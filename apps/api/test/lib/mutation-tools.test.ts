@@ -94,6 +94,66 @@ describe('the mutation tool registry', () => {
   });
 });
 
+describe('a query tool must surface the id its mutation counterpart needs', () => {
+  test("list_tasks' text output carries each task's id", async () => {
+    // Reconciliation #11: entity resolution is the model's job via query tools,
+    // with no fuzzy-id resolver. Sprint 8 built these read-only and omitted the id,
+    // so driving the real UI the model found the task and then said it could not act
+    // because "list_tasks doesn't return the task id" — every task mutation was
+    // unreachable by name. The id in that text IS the resolution mechanism.
+    const period = '2091-11';
+    await db
+      .insertInto('months')
+      .values({ period, label: period, locked: false })
+      .onConflict((oc) => oc.column('period').doNothing())
+      .execute();
+    const task = await db
+      .insertInto('tasks')
+      .values({ period, date: `${period}-04`, description: 'Findable task', created_by: ADMIN_ID })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    try {
+      const listed = await getBotTool('list_tasks')!.handler({ period }, admin, db);
+      expect(listed.text).toContain('Findable task');
+      expect(listed.text, 'the id the mutation tools require').toContain(task.id);
+
+      // And it round-trips: the id read out of the text validates as tool input.
+      const parsed = getBotTool('update_task_status')!.inputSchema.safeParse({
+        taskId: task.id,
+        status: 'Done',
+      });
+      expect(parsed.success).toBe(true);
+    } finally {
+      await db.deleteFrom('tasks').where('id', '=', task.id).execute();
+    }
+  });
+
+  test('the grid tools already carry ids — they serialise their DTOs', async () => {
+    // No fix needed here; asserted so a future "tidy the output" change cannot
+    // quietly reintroduce the same gap on the versioned targets.
+    const period = '2091-11';
+    const client = await db
+      .insertInto('clients')
+      .values({ name: 'Grid Id Co', shoot_slots_per_month: 1, active: true })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    const pipeline = await db
+      .insertInto('content_pipelines')
+      .values({ period, client_id: client.id, version: 1 })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    try {
+      const grid = await getBotTool('get_content_pipeline')!.handler({ period }, admin, db);
+      expect(grid.text).toContain(pipeline.id);
+    } finally {
+      await db.deleteFrom('content_pipelines').where('id', '=', pipeline.id).execute();
+      await db.deleteFrom('clients').where('id', '=', client.id).execute();
+    }
+  });
+});
+
 describe('input validation', () => {
   test('a hallucinated non-uuid id fails Zod before anything is read', () => {
     expect(getBotTool('update_task_status')!.inputSchema.safeParse({ taskId: 'the naaz reel', status: 'Done' }).success).toBe(false);
