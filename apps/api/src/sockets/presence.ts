@@ -1,49 +1,74 @@
 /**
- * Redis-backed presence (02-TRD §8, 11-THIRD-PARTY-INTEGRATIONS §5).
+ * Presence socket wiring (ADR-023, 02-TRD §8).
  *
- * Model: a `presence:{staffId}` key with a 60s TTL. Set on connect, refreshed by
- * a `presence:ping` the client sends every 30s. On disconnect we do NOTHING —
- * the TTL lets the key lapse within 60s, which avoids online/offline flicker on
- * brief network blips (no explicit DEL, ever).
+ * The model lives in services/PresenceService.ts — one `presence` hash, field =
+ * staffId, value = last-seen epoch ms, 60s freshness filter, swept on read. This file
+ * is only the transport: connect, heartbeat, clean disconnect, and the transition
+ * broadcast.
+ *
+ * `presence:changed` fires on genuine transitions ONLY. PresenceService.markOnline
+ * returns whether the field was stale-or-absent, so the heartbeat and the connect are
+ * the same call and the "did anything change" test happens once, in one place —
+ * rather than a heartbeat handler, a connect handler, and a set-diff each keeping
+ * their own copy of it.
  */
+import { emitAfterCommit } from '../lib/emit-after-commit.js';
 import { logger } from '../lib/logger.js';
-import { redis } from '../lib/redis.js';
+import { HEARTBEAT_MS, presenceService } from '../services/PresenceService.js';
 
 import type { Socket } from 'socket.io';
 
-const PRESENCE_TTL_SECONDS = 60;
-const presenceKey = (staffId: string) => `presence:${staffId}`;
+const PRESENCE_NAMESPACE = '/ws/presence';
+const ORG_ROOM = 'org:all';
+
+/** Re-exported so the client and the tests read the interval from one place. */
+export { HEARTBEAT_MS };
 
 /**
- * Wire presence onto a freshly connected /ws/presence socket: mark online, and
- * refresh the TTL on each client heartbeat. Presence is best-effort — a Redis
- * failure is logged, never thrown (11-THIRD-PARTY-INTEGRATIONS §graceful).
+ * Announce a transition to everyone. The payload is a delta — one staff member and
+ * their new state — never the whole roster, which is the difference between 2
+ * broadcasts a minute and 100.
  */
-export function attachPresence(socket: Socket, staffId: string): void {
-  redis
-    .set(presenceKey(staffId), '1', 'EX', PRESENCE_TTL_SECONDS)
-    .catch((err: unknown) => logger.warn({ err, staffId }, 'presence: set failed'));
-
-  socket.on('presence:ping', () => {
-    redis
-      .expire(presenceKey(staffId), PRESENCE_TTL_SECONDS)
-      .catch((err: unknown) => logger.warn({ err, staffId }, 'presence: expire failed'));
-  });
-
-  // No disconnect handler by design — the 60s TTL expires the key naturally.
+function broadcastTransition(staffId: string, isOnline: boolean): void {
+  emitAfterCommit(PRESENCE_NAMESPACE, ORG_ROOM, 'presence:changed', { staffId, isOnline });
 }
 
 /**
- * The staff ids currently online, read by chat (Sprint 10). Uses SCAN, never
- * KEYS, so it stays non-blocking on a large keyspace.
+ * Wire presence onto a freshly connected /ws/presence socket.
+ *
+ * Presence is best-effort throughout: a Redis failure is logged, never thrown
+ * (11-THIRD-PARTY §graceful). Losing a heartbeat costs at most 60s of accuracy;
+ * throwing would cost the socket.
  */
-export async function getOnlineStaffIds(): Promise<string[]> {
-  const ids: string[] = [];
-  let cursor = '0';
-  do {
-    const [next, keys] = await redis.scan(cursor, 'MATCH', 'presence:*', 'COUNT', 100);
-    cursor = next;
-    for (const key of keys) ids.push(key.slice('presence:'.length));
-  } while (cursor !== '0');
-  return ids;
+export function attachPresence(socket: Socket, staffId: string): void {
+  const online = (): void => {
+    presenceService
+      .markOnline(staffId)
+      .then((transitioned) => {
+        if (transitioned) broadcastTransition(staffId, true);
+      })
+      .catch((err: unknown) => logger.warn({ err, staffId }, 'presence: markOnline failed'));
+  };
+
+  // Connect and heartbeat are the same operation — see the module note.
+  online();
+  socket.on('presence:ping', online);
+
+  socket.on('disconnect', (reason: string) => {
+    // CLEAN disconnects only (ADR-023). Socket.io also reports 'transport close' and
+    // 'ping timeout' here — a phone locking its screen, a tunnel blipping. HDEL'ing on
+    // those is what the pre-ADR code was avoiding by having no disconnect handler at
+    // all, and it shows up as presence dots flickering during a meeting. An unclean
+    // drop needs no handler: the 60s freshness filter expires them, and if the client
+    // reconnects inside the window nobody ever saw them leave.
+    if (reason !== 'client namespace disconnect' && reason !== 'server namespace disconnect') {
+      return;
+    }
+    presenceService
+      .markOffline(staffId)
+      .then((wasPresent) => {
+        if (wasPresent) broadcastTransition(staffId, false);
+      })
+      .catch((err: unknown) => logger.warn({ err, staffId }, 'presence: markOffline failed'));
+  });
 }

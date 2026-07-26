@@ -159,6 +159,27 @@ pnpm --filter api db:rollback     # Rollback last migration
 - Write a corresponding rollback migration for every forward migration
 - Test on local Docker PostgreSQL → staging → production (never skip staging)
 
+### 5.1 One-off deploy steps
+
+Not database migrations — Redis-side cleanups that accompany a specific release.
+
+**Sprint 10 · retire the old presence keys (ADR-023).** Presence moved from one
+`presence:{staffId}` string key per staff member to a single `presence` hash. The old
+keys carry a 60s TTL and expire on their own, so this is tidiness rather than
+correctness — run it once, after the release is live:
+
+```bash
+redis-cli --scan --pattern 'presence:*' | xargs -r redis-cli DEL
+```
+
+`--scan`, never `KEYS`. ADR-023 forbids wildcard commands on a **request path**; a
+one-shot deploy script is not one. Verify afterwards:
+
+```bash
+redis-cli TYPE presence          # hash
+redis-cli KEYS 'presence:*'      # empty
+```
+
 ---
 
 ## 6. ENVIRONMENT VARIABLES
