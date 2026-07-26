@@ -243,7 +243,7 @@ export class ContentDropperService {
     }
 
     // API-Contract §6. Forward-wiring for Sprint 10 — no consumer yet (ADR-010).
-    broadcastToOrg('content-dropper:updated', { clientId, period });
+    broadcastToOrg('content-dropper:updated', { clientId, period, actorStaffId: currentUser.staffId });
 
     return this.getRow(id, db);
   }

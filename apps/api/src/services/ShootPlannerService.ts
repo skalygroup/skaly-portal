@@ -24,7 +24,7 @@ import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, getCurrentPeriod, type Executor } from './BaseService.js';
 import { NotificationService } from './NotificationService.js';
 import { generateShootSlotsForClient } from './period-generation.js';
-import { transactionWithEmits } from '../lib/emit-after-commit.js';
+import { emitAfterCommit, transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 import { eventBus } from '../lib/EventBus.js';
 import { softDeletable } from '../lib/queries.js';
@@ -275,6 +275,16 @@ export class ShootPlannerService {
         });
       }
     }
+
+    // ADR-022: invalidate-only, and it invalidates the DROPPER as well as the planner.
+    // Trigger 1 recomputes coming_shoot_date on the pipeline when a slot moves
+    // (ADR-012), so patching the slot's own fields would leave the dropper showing
+    // stale derived data — which the ADR calls out as worse than the refetch avoided.
+    emitAfterCommit('/ws/notify', 'org:all', 'shoot:slot_updated', {
+      period: updated.period,
+      clientId: updated.client_id,
+      actorStaffId: currentUser.staffId,
+    });
 
     return this.getSlot(id, currentUser, db);
   }

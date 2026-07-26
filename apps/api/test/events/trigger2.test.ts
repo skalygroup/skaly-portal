@@ -303,9 +303,13 @@ describe('API-Contract §6 org broadcasts', () => {
     await dropper.updateStage(pipeline.id, 'posted', manager, pipeline.version, db);
     await settle();
 
+    // actorStaffId is required, not incidental: a REST write has no originating
+    // socket for the server to exclude, so it is the ONLY sender-exclusion guard
+    // this event gets (ADR-022 rule b).
     expect(broadcasts.find((b) => b.event === 'content-dropper:updated')?.payload).toEqual({
       clientId: CLIENT_ID,
       period: PIPELINE_PERIOD,
+      actorStaffId: manager.staffId,
     });
   });
 
@@ -315,6 +319,7 @@ describe('API-Contract §6 org broadcasts', () => {
     expect(broadcasts.find((b) => b.event === 'client:name_updated')?.payload).toEqual({
       clientId: CLIENT_ID,
       name: 'Trigger2 Client Renamed',
+      actorStaffId: manager.staffId,
     });
 
     await clients.rename(CLIENT_ID, 'Trigger2 Client', manager, db); // restore

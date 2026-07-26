@@ -27,7 +27,7 @@ import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, type Executor } from './BaseService.js';
 import { NotificationService } from './NotificationService.js';
 import { db } from '../lib/db.js';
-import { transactionWithEmits } from '../lib/emit-after-commit.js';
+import { emitAfterCommit, transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 import { softDelete, softDeletable } from '../lib/queries.js';
 
@@ -325,6 +325,12 @@ export class TaskService {
       trx,
     });
 
+    // ADR-022: INVALIDATE-only, so the payload is just the addressing + the actor.
+    // A task's position in the grid depends on ordering, membership and the ADR-006
+    // fan-out — none of which a single-row payload describes, so there is deliberately
+    // no attempt to make this patchable.
+    this.broadcast('task:created', input.period, currentUser.staffId);
+
     return this.getTask(taskId, currentUser, trx);
   }
 
@@ -420,7 +426,24 @@ export class TaskService {
       await this.fanOutDependencyResolved(id, currentUser, trx);
     }
 
+    // ADR-022: invalidate-only. A status change can unblock OTHER rows through the
+    // dependency graph, so even a single-field edit changes more of the grid than
+    // this task's own row.
+    this.broadcast('task:updated', task.period, currentUser.staffId);
+
     return this.getTask(id, currentUser, trx);
+  }
+
+  /**
+   * The grid-sync broadcast for this module (ADR-022 — all three rows invalidate).
+   *
+   * One helper rather than three call-site copies, so every task event carries the
+   * same shape: `period` addresses the cache key, `actorStaffId` lets the originating
+   * client ignore its own echo (rule b). Queued by the emit seam and delivered on
+   * COMMIT, so a rolled-back write never tells fifty clients to refetch.
+   */
+  private broadcast(event: 'task:created' | 'task:updated' | 'task:assigned', period: string, actorStaffId: string): void {
+    emitAfterCommit('/ws/notify', 'org:all', event, { period, actorStaffId });
   }
 
   /**
@@ -509,6 +532,10 @@ export class TaskService {
       });
     }
 
+    // ADR-022: membership changed, and the ADR-006 fan-out means other rows may have
+    // gained a notification too — invalidate, never patch.
+    this.broadcast('task:assigned', task.period, currentUser.staffId);
+
     return this.getTask(id, currentUser, trx);
   }
 
@@ -532,6 +559,8 @@ export class TaskService {
       before: { removed: staffId },
       trx,
     });
+
+    this.broadcast('task:assigned', task.period, currentUser.staffId);
 
     return this.getTask(id, currentUser, trx);
   }

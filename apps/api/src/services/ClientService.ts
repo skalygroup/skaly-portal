@@ -229,7 +229,10 @@ export class ClientService {
     // Queued inside the transaction above and flushed on COMMIT (API-Contract §6),
     // so a rolled-back rename never tells fifty clients to patch a name change that
     // did not happen.
-    broadcastToOrg('client:name_updated', { clientId: id, name });
+    // actorStaffId: the client half of sender exclusion (ADR-022 rule b). A REST
+    // write has no originating socket for the server to exclude, so this is the only
+    // guard that can stop the actor re-applying their own echo.
+    broadcastToOrg('client:name_updated', { clientId: id, name, actorStaffId: currentUser.staffId });
 
     return updated;
   }
