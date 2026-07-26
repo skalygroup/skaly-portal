@@ -5,12 +5,14 @@ import { motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 
 import { AssigneeStack, StatusChip } from './task-chips';
+import { useTaskSaveState, useTaskShaking } from './task-save-state';
 
+import type { SaveState } from './task-save-state';
 import type { Task } from './types';
 
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 
-export type SaveState = 'saving' | 'saved' | 'error' | undefined;
+export type { SaveState };
 
 /**
  * Whether this cell's column is the highlighted one, read straight from the store.
@@ -34,7 +36,6 @@ export function StatusCell({
   task,
   editable,
   columnId,
-  shaking,
   onChange,
   onFocusColumn,
   onBlurColumn,
@@ -42,13 +43,15 @@ export function StatusCell({
   task: Task;
   editable: boolean;
   columnId: string;
-  shaking: boolean;
   onChange: (status: string) => void;
   onFocusColumn: () => void;
   onBlurColumn: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const active = useColumnActive(columnId);
+  // From the store, not a prop — a `shaking` prop puts the shake in the column
+  // memo, and the remount that follows closes this dropdown mid-click.
+  const shaking = useTaskShaking(task.id);
   if (!editable) return <StatusChip status={task.status} />;
 
   return (
@@ -168,7 +171,6 @@ export function AssigneeCell({
 export function ResultEditor({
   task,
   editable,
-  saveState,
   columnId,
   onSave,
   onFocusColumn,
@@ -176,7 +178,6 @@ export function ResultEditor({
 }: {
   task: Task;
   editable: boolean;
-  saveState: SaveState;
   columnId: string;
   onSave: (result: string) => void;
   onFocusColumn: () => void;
@@ -184,6 +185,8 @@ export function ResultEditor({
 }) {
   const [val, setVal] = useState(task.result ?? '');
   const active = useColumnActive(columnId);
+  // Store, not a prop — same reason as StatusCell's `shaking`.
+  const saveState = useTaskSaveState(task.id);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => setVal(task.result ?? ''), [task.result]);
 

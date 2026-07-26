@@ -9,9 +9,10 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { TaskAttachmentPanel } from './task-attachment-panel';
-import { AssigneeCell, ResultEditor, StatusCell, type SaveState } from './task-cells';
+import { AssigneeCell, ResultEditor, StatusCell } from './task-cells';
 import { DependencyBadge, PriorityBadge } from './task-chips';
 import { TaskCreatePanel } from './task-create-panel';
+import { useTaskSaveStore } from './task-save-state';
 import { useTaskGroups } from './use-task-groups';
 
 import type { Task } from './types';
@@ -29,8 +30,6 @@ const columnHelper = createColumnHelper<Task>();
 /** The edit surface threaded down to the cells (Step 7). */
 interface EditApi {
   staff: { id: string; name: string }[];
-  saveStates: Record<string, SaveState>;
-  shakeIds: Set<string>;
   canEditStatusResult: (t: Task) => boolean;
   canEditAssignees: boolean;
   onStatus: (task: Task, status: string) => void;
@@ -86,9 +85,10 @@ export function TasksGrid() {
   // ── Per-cell transient UI state ─────────────────────────────────────────────
   const [createOpen, setCreateOpen] = useState(false);
   const [attachTaskId, setAttachTaskId] = useState<string | null>(null);
-  const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
-  const [shakeIds, setShakeIds] = useState<Set<string>>(new Set());
-  const setSave = useCallback((id: string, s: SaveState) => setSaveStates((p) => ({ ...p, [id]: s })), []);
+  // Save-dot and shake state live in a store the CELLS subscribe to, never in
+  // `edit` — see task-save-state.ts. As grid state they rebuilt the column memo
+  // and remounted every cell on each save and each shake.
+  const setSave = useTaskSaveStore((s) => s.setSave);
 
   const focusedColumnRef = useRef<string | null>(null);
   const focusHandlers = useCallback((col: string) => {
@@ -142,8 +142,9 @@ export function TasksGrid() {
       if (ctx?.snapshot) queryClient.setQueryData(gridKey, ctx.snapshot); // ADR-008: plain revert, no stale UI
       const res = handleMutationError(err);
       if (res.code === 'DEPENDENCY_UNRESOLVED') {
-        setShakeIds((p) => new Set(p).add(vars.task.id));
-        setTimeout(() => setShakeIds((p) => { const n = new Set(p); n.delete(vars.task.id); return n; }), 400);
+        const store = useTaskSaveStore.getState();
+        store.addShake(vars.task.id);
+        setTimeout(() => useTaskSaveStore.getState().removeShake(vars.task.id), 400);
       }
       failClear('status');
     },
@@ -211,8 +212,6 @@ export function TasksGrid() {
   const edit: EditApi = useMemo(
     () => ({
       staff,
-      saveStates,
-      shakeIds,
       canEditStatusResult,
       canEditAssignees: isManager && !locked,
       onStatus: (task, status) => setStatus({ task, status }),
@@ -222,7 +221,7 @@ export function TasksGrid() {
       onOpenAttachments: (task) => setAttachTaskId(task.id),
       focusHandlers,
     }),
-    // Two things are deliberately absent here.
+    // Three things are deliberately absent here.
     //
     // activeColumnId: the cells subscribe to the highlight store themselves.
     // Listing it rebuilt `edit`, and the column defs closing over it, the moment
@@ -232,10 +231,18 @@ export function TasksGrid() {
     // holding it open and the menu never appeared. The grid's first click did
     // nothing, every time.
     //
+    // saveStates / shakeIds: the SAME bug, one sprint later and one beat behind.
+    // A refused status change shakes the row and un-shakes it 400ms afterwards,
+    // and each of those rebuilt the columns — so a user retrying inside that
+    // window had the dropdown close under their finger. Deterministic on webkit
+    // (found in Sprint 9 STEP 12), invisible on chromium only because its clicks
+    // were faster than the timer. Both live in useTaskSaveStore now, subscribed
+    // to per cell.
+    //
     // The mutation objects: useMutation returns a NEW result object on every
     // render, which had the same effect on every render rather than just on
     // focus. `.mutate` is referentially stable, so the memo actually holds.
-    [staff, saveStates, shakeIds, canEditStatusResult, isManager, locked, setStatus, saveResult, assign, focusHandlers],
+    [staff, canEditStatusResult, isManager, locked, setStatus, saveResult, assign, focusHandlers],
   );
 
   const groups = useMemo(() => {
@@ -376,7 +383,6 @@ function TaskGroupTable({ tasks, edit, flashId }: { tasks: Task[]; edit: EditApi
               task={row.original}
               editable={edit.canEditStatusResult(row.original)}
               columnId="status"
-              shaking={edit.shakeIds.has(row.original.id)}
               onChange={(s) => edit.onStatus(row.original, s)}
               onFocusColumn={fh.onFocus}
               onBlurColumn={fh.onBlur}
@@ -525,7 +531,6 @@ function FragmentRow({ open, colCount, task, edit, flash, onToggle, children }: 
                       task={task}
                       editable={edit.canEditStatusResult(task)}
                       columnId="result"
-                      saveState={edit.saveStates[task.id]}
                       onSave={(r) => edit.onResultSave(task, r)}
                       onFocusColumn={fh.onFocus}
                       onBlurColumn={fh.onBlur}
