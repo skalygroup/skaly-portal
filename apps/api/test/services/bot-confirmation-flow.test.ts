@@ -24,6 +24,7 @@ const redis = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379');
 
 const ADMIN = 'e2000000-0000-4000-8000-00000000cf01';
 const MEMBER = 'e2000000-0000-4000-8000-00000000cf02';
+const MANAGER = 'e2000000-0000-4000-8000-00000000cf03';
 const PERIOD = '2097-05';
 const TASK = 'e2000000-0000-4000-8000-00000000cfa1';
 
@@ -63,23 +64,27 @@ const asMessage = (content: unknown[], stopReason: string): Anthropic.Message =>
     usage: { input_tokens: 1, output_tokens: 1 },
   }) as unknown as Anthropic.Message;
 
-/** Records every request so a test can prove turn 2 made none. */
+/** Records every request so a test can prove turn 2 made none. `tools` is what
+ *  the permission filter let through — the manager cases assert on it. */
 interface AnthropicSpy {
   client: Anthropic;
-  calls: Array<{ messages: Anthropic.MessageParam[] }>;
+  calls: Array<{ messages: Anthropic.MessageParam[]; tools?: Anthropic.Tool[] }>;
 }
 
-/** Phase 1 asks for update_task_status; phase 2 asks the confirmation question. */
-function mockAnthropic(toolInput: Record<string, unknown>): AnthropicSpy {
-  const calls: Array<{ messages: Anthropic.MessageParam[] }> = [];
+/** Phase 1 asks for `toolName`; phase 2 asks the confirmation question. */
+function mockAnthropic(
+  toolInput: Record<string, unknown>,
+  toolName = 'update_task_status',
+): AnthropicSpy {
+  const calls: Array<{ messages: Anthropic.MessageParam[]; tools?: Anthropic.Tool[] }> = [];
   const client = {
     messages: {
-      stream: (req: { messages: Anthropic.MessageParam[] }) => {
-        calls.push({ messages: req.messages });
+      stream: (req: { messages: Anthropic.MessageParam[]; tools?: Anthropic.Tool[] }) => {
+        calls.push({ messages: req.messages, tools: req.tools });
         if (calls.length === 1) {
           return fakeStream(
             ['Let me check that task. '],
-            asMessage([{ type: 'tool_use', id: 'toolu_1', name: 'update_task_status', input: toolInput }], 'tool_use'),
+            asMessage([{ type: 'tool_use', id: 'toolu_1', name: toolName, input: toolInput }], 'tool_use'),
           );
         }
         return fakeStream(
@@ -131,8 +136,11 @@ async function resetTask(): Promise<void> {
 }
 
 async function cleanup(): Promise<void> {
-  await redis.del(`bot:session:${ADMIN}`, `bot:pending:${ADMIN}`, `bot:session:${MEMBER}`, `bot:pending:${MEMBER}`, `perms:${ADMIN}`, `perms:${MEMBER}`);
-  await db.deleteFrom('messages').where('sender_id', 'in', [ADMIN, MEMBER]).execute();
+  const staff = [ADMIN, MEMBER, MANAGER];
+  await redis.del(
+    ...staff.flatMap((id) => [`bot:session:${id}`, `bot:pending:${id}`, `perms:${id}`]),
+  );
+  await db.deleteFrom('messages').where('sender_id', 'in', staff).execute();
   await db.deleteFrom('audit_log').where('record_id', '=', TASK).execute();
 }
 
@@ -142,6 +150,7 @@ beforeAll(async () => {
     .values([
       { id: ADMIN, name: 'Conf Admin', email: `admin${ADMIN}@conf.itest`, role: 'admin', active: true },
       { id: MEMBER, name: 'Conf Member', email: `member${MEMBER}@conf.itest`, role: 'team_member', active: true },
+      { id: MANAGER, name: 'Conf Manager', email: `manager${MANAGER}@conf.itest`, role: 'manager', active: true },
     ])
     .onConflict((oc) => oc.column('id').doNothing())
     .execute();
@@ -163,7 +172,7 @@ afterAll(async () => {
   await cleanup();
   await db.deleteFrom('task_assignees').where('task_id', '=', TASK).execute();
   await db.deleteFrom('tasks').where('id', '=', TASK).execute();
-  await db.deleteFrom('staff').where('id', 'in', [ADMIN, MEMBER]).execute();
+  await db.deleteFrom('staff').where('id', 'in', [ADMIN, MEMBER, MANAGER]).execute();
   await redis.quit();
   await db.destroy();
 });
@@ -461,6 +470,84 @@ describe('turn 1 — the gate', () => {
 
     const pending = await svc().peekPending(ADMIN);
     expect(pending?.confirmationId).toBe(second);
+  });
+});
+
+/**
+ * MANAGER — the only role whose bot surface differs from admin, and the one the
+ * E2E suite cannot reach: `.env.e2e` has admin, team_member and freelancer, so
+ * nothing anywhere drove a manager through a mutation until these.
+ *
+ * Exactly two tools differ (ROLE_DEFAULTS): `get_audit_log` and
+ * `deactivate_client`, both admin-only. Everything else a manager holds, they
+ * hold identically — so the pair below is the whole boundary: one mutation that
+ * must work, and the one that must not.
+ */
+describe('manager — the role the E2E fixtures cannot reach', () => {
+  test('completes a two-turn mutation, audited to the MANAGER', async () => {
+    const spy = mockAnthropic({ taskId: TASK, status: 'Done' });
+    const sink: Emitted[] = [];
+    const s = svc(spy, sink);
+    const session = await s.loadSession(MANAGER);
+    await s.handleMessage({ session, staffId: MANAGER, role: 'manager', userText: 'mark the naaz reel done', db });
+
+    // Turn 1 stages and writes nothing, exactly as for an admin.
+    expect(await taskStatus()).toBe('In Progress');
+    const card = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload.card as {
+      type: string;
+      confirmationId: string;
+    };
+    expect(card.type).toBe('confirmation');
+
+    const s2 = svc(undefined, []);
+    const next = await s2.loadSession(MANAGER);
+    await s2.handleMessage({
+      session: next,
+      staffId: MANAGER,
+      role: 'manager',
+      userText: 'yes',
+      decision: 'confirm',
+      confirmationId: card.confirmationId,
+      db,
+    });
+
+    expect(await taskStatus()).toBe('Done');
+    const row = await db
+      .selectFrom('audit_log')
+      .selectAll()
+      .where('record_id', '=', TASK)
+      .orderBy('created_at', 'desc')
+      .executeTakeFirstOrThrow();
+    expect(row.changed_by_source).toBe('bot');
+    // ADR-016: the human who asked — not the admin, not the System Actor.
+    expect(row.staff_id).toBe(MANAGER);
+  });
+
+  test('deactivate_client is withheld from a manager, and refused if named anyway', async () => {
+    // Admin-only (ROLE_DEFAULTS). It is filtered out of the tool list the model
+    // sees, so a model that names it is either confused or being steered — this
+    // drives the defence-in-depth backstop in runTool, which no manager test
+    // reached before.
+    const spy = mockAnthropic({ clientId: '11111111-1111-4111-8111-111111111111' }, 'deactivate_client');
+    const sink: Emitted[] = [];
+    const s = svc(spy, sink);
+    const session = await s.loadSession(MANAGER);
+    await s.handleMessage({ session, staffId: MANAGER, role: 'manager', userText: 'deactivate that client', db });
+
+    // Withheld: the tool never reached the model in the first place.
+    const offered = (spy.calls[0]!.tools ?? []).map((t) => t.name);
+    expect(offered).not.toContain('deactivate_client');
+    expect(offered).toContain('add_client'); // …while the manager's own client tool did
+
+    // Refused: no pending record, so no [Confirm] button can ever exist for it.
+    expect(await s.peekPending(MANAGER)).toBeNull();
+    const terminal = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload;
+    expect(terminal.card).toBeUndefined();
+
+    // And the model was handed our refusal copy, not a stack or a code.
+    const fedBack = JSON.stringify(spy.calls[1]!.messages);
+    expect(fedBack).toContain("I don't have permission to do that on your behalf");
+    expect(fedBack).not.toMatch(/PERMISSION_DENIED|\b4\d\d\b/);
   });
 });
 

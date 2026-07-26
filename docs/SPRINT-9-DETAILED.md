@@ -1169,7 +1169,12 @@ FRONTEND
   [x] Activity feed on /home, role-filtered, DM Mono timestamps
 
 TESTS
-  [x] Confirmation, mutation-tool, write-parity, attribution, search, feed suites green (489/489)
+  [x] MANAGER drives a two-turn mutation end to end, audited to the manager; and
+      deactivate_client is both withheld from the tool list AND refused by the backstop
+      if named anyway. The E2E fixtures have no manager account (.env.e2e is admin +
+      team_member + freelancer), so STEP 12.2's "(manager)" was unreachable there —
+      covered in bot-confirmation-flow instead, against real Postgres + Redis.
+  [x] Confirmation, mutation-tool, write-parity, attribution, search, feed suites green (492/492)
   [x] Frontend tests green (102/102)
   [x] Playwright: two-turn confirm + cancel + typed-yes + "yes but" + denial + palette + isolation
   [x] Every new test fails without its fix
