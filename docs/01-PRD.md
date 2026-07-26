@@ -230,7 +230,7 @@ A purpose-built internal portal at **portal.skaly.in** with:
 | ID | Requirement |
 |----|-------------|
 | FR-NOTIF-01 | In-app notifications delivered via Socket.io to connected sessions; stored in DB for offline delivery |
-| FR-NOTIF-02 | All 14 event types produce notifications (see TRD §10 for full type list) |
+| FR-NOTIF-02 | All 18 event types produce notifications (see TRD §10 for full type list; the schema enum `notifications_type_check` is the source of truth — ADR-020). The earlier count of 14 omitted the four system-generated types (`month_ready`, `rollover_success`, `rollover_failed`, `rollover_view_refresh_failed`). |
 | FR-NOTIF-03 | Bell icon uses Skaly lion logo mark SVG in outlined/filled states |
 | FR-NOTIF-04 | rollover_failed notifications display in full (no truncation) with inline action button |
 | FR-NOTIF-05 | "Mark all read" action via PUT /notifications/read-all with animated fade |

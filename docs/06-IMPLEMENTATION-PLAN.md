@@ -313,7 +313,7 @@
 - [ ] Socket.io: `chat:message`, `chat:typing`, `chat:stop_typing`, `chat:presence` events
 - [ ] **Audit H-05:** Socket.io connection handler joins `user:{staffId}`, `role:{role}`, and `org:all` rooms on EVERY authenticated connect. Verified by integration test that admin connecting receives a broadcast sent to `role:admin`.
 - [ ] `GET /v1/notifications`, `PUT /v1/notifications/:id/read`, `PUT /v1/notifications/read-all`
-- [ ] Full notification type coverage (all 14 types tested)
+- [ ] Full notification type coverage — **18 types** (the `notifications_type_check` enum is the source of truth; ADR-020). The coverage test asserts registry↔enum set equality both directions, exercises the **12 types with a producer**, and asserts the **6 deferred** (`report_ready` → Sprint 11; `new_comment`, `month_ready`, `rollover_success`, `rollover_failed`, `rollover_view_refresh_failed` → Sprints 12–13) as a named list.
 - [ ] rollover_failed notification: full-height, no truncation, inline action button
 - [ ] Frontend: infinite scroll chat (TanStack Virtual), thread panel, @mention autocomplete
 - [ ] Typing indicator: 5s auto-expire
