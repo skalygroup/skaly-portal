@@ -1,9 +1,11 @@
 'use client';
 
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { applyMention, findMentionQuery, matchStaff } from './mention-autocomplete';
 import { MessageContent } from './message-content';
+import { ThreadPanel } from './thread-panel';
 import { useChatScroll } from './use-chat-scroll';
 
 import type { ChatListResponse, ChatMessageDTOWire } from '@skaly/shared';
@@ -11,6 +13,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 
 import { api } from '@/lib/api';
 import { useConnectionState } from '@/lib/hooks/use-connection-state';
+import { usePresence } from '@/lib/hooks/use-presence';
 import { getSocket, useChatSocket, WS_CHAT } from '@/lib/socket';
 
 /** Consecutive messages from one author within this window share a header. */
@@ -143,10 +146,44 @@ export function ChatView({ me }: { me: StaffMeResponse | null }) {
     return `${names[0]} and ${names.length - 1} others are typing…`;
   }, [typingIds, nameById, me?.id]);
 
+  // ── Presence + thread panel ───────────────────────────────────────────────
+  const { isOnline } = usePresence();
+  const [threadParent, setThreadParent] = useState<ChatMessageDTOWire | null>(null);
+
   // ── Composer ──────────────────────────────────────────────────────────────
   const [draft, setDraft] = useState('');
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const lastTypingSent = useRef(0);
   const stopTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { data: staff = [] } = useQuery({
+    queryKey: ['staff'],
+    queryFn: async () =>
+      (await api<{ data: { id: string; name: string; role: string }[] }>('/v1/staff')).data,
+    staleTime: 5 * 60_000,
+  });
+
+  // The active @-token, recomputed from the draft and the caret. Derived rather than
+  // stored, so it can never disagree with what is actually in the textarea.
+  const caret = composerRef.current?.selectionStart ?? draft.length;
+  const mentionToken = findMentionQuery(draft, caret);
+  const suggestions = mentionToken ? matchStaff(staff, mentionToken.query) : [];
+
+  const chooseMention = useCallback(
+    (name: string) => {
+      if (!mentionToken) return;
+      const next = applyMention(draft, mentionToken, name);
+      setDraft(next.text);
+      setMentionIndex(0);
+      // Restore the caret after React commits the new value, or it jumps to the end.
+      requestAnimationFrame(() => {
+        const el = composerRef.current;
+        if (el) el.setSelectionRange(next.caret, next.caret);
+      });
+    },
+    [draft, mentionToken],
+  );
 
   const sendMutation = useMutation({
     mutationFn: async (content: string) =>
@@ -202,7 +239,8 @@ export function ChatView({ me }: { me: StaffMeResponse | null }) {
   const disabled = connection !== 'connected';
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] flex-col">
+    <div className="flex h-[calc(100vh-3.5rem)]">
+      <div className="flex min-w-0 flex-1 flex-col">
       <div ref={scrollRef} className="relative flex-1 overflow-y-auto px-6 py-4" data-testid="chat-scroll">
         {/* Top sentinel — crossing it loads OLDER messages. */}
         <div ref={sentinelRef} data-testid="chat-sentinel" style={{ height: 1 }} />
@@ -228,7 +266,16 @@ export function ChatView({ me }: { me: StaffMeResponse | null }) {
             !prev.isDeleted &&
             !msg.isDeleted &&
             new Date(msg.createdAt).getTime() - new Date(prev.createdAt).getTime() < GROUP_WINDOW_MS;
-          return <MessageRow key={msg.id} msg={msg} grouped={grouped} meName={me?.name ?? null} />;
+          return (
+            <MessageRow
+              key={msg.id}
+              msg={msg}
+              grouped={grouped}
+              meName={me?.name ?? null}
+              online={msg.senderId ? isOnline(msg.senderId) : false}
+              onOpenThread={setThreadParent}
+            />
+          );
         })}
       </div>
 
@@ -248,13 +295,75 @@ export function ChatView({ me }: { me: StaffMeResponse | null }) {
         <p className="h-4 text-xs" data-testid="typing-indicator" style={{ color: 'var(--text-muted)' }}>
           {typingLabel}
         </p>
+        {suggestions.length > 0 && (
+          <ul
+            data-testid="mention-suggestions"
+            role="listbox"
+            aria-label="Mention a colleague"
+            className="mb-1 overflow-hidden rounded-md border"
+            style={{
+              background: 'var(--bg-elevated, #1a1d22)',
+              borderColor: 'var(--border-subtle, #262b33)',
+            }}
+          >
+            {suggestions.map((s, i) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={i === mentionIndex}
+                  data-testid="mention-option"
+                  // onMouseDown, not onClick: onClick fires after blur, and blurring
+                  // the textarea first loses the caret the insertion depends on.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    chooseMention(s.name);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm"
+                  style={{
+                    background: i === mentionIndex ? 'color-mix(in srgb, var(--accent-gold) 12%, transparent)' : 'transparent',
+                    color: 'var(--text-primary, #e8eaed)',
+                  }}
+                >
+                  <PresenceDot online={isOnline(s.id)} />
+                  {s.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
+          ref={composerRef}
           aria-label="Message"
           data-testid="chat-composer"
           value={draft}
           disabled={disabled}
           onChange={(e) => onDraftChange(e.target.value)}
           onKeyDown={(e) => {
+            // The autocomplete owns the arrow keys and Enter while it is open —
+            // otherwise Enter would send a half-typed "@Rah" instead of completing it.
+            if (suggestions.length > 0) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setMentionIndex((i) => (i + 1) % suggestions.length);
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setMentionIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
+                return;
+              }
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                chooseMention(suggestions[mentionIndex]!.name);
+                return;
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setDraft((d) => `${d} `); // close the token without losing the text
+                return;
+              }
+            }
             // Enter sends, Shift+Enter is a newline.
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
@@ -272,7 +381,50 @@ export function ChatView({ me }: { me: StaffMeResponse | null }) {
           }}
         />
       </div>
+      </div>
+
+      <ThreadPanel parent={threadParent} meName={me?.name ?? null} onClose={() => setThreadParent(null)} />
     </div>
+  );
+}
+
+/** The 6px presence dot (UIUX §16) — green when online, hollow when not. */
+function PresenceDot({ online }: { online: boolean }) {
+  return (
+    <span
+      aria-label={online ? 'Online' : 'Offline'}
+      data-testid={online ? 'presence-online' : 'presence-offline'}
+      className="inline-block shrink-0 rounded-full"
+      style={{
+        width: 6,
+        height: 6,
+        background: online ? 'var(--status-green, #22c55e)' : 'transparent',
+        border: online ? 'none' : '1px solid var(--text-muted, #6b7280)',
+      }}
+    />
+  );
+}
+
+/** Initials fallback — no avatar_url is the common case for a new staff member. */
+function Avatar({ name, url }: { name: string; url: string | null }) {
+  const initials = name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? '')
+    .join('');
+  if (url) {
+    // eslint-disable-next-line @next/next/no-img-element -- avatars are remote R2 URLs
+    return <img src={url} alt="" width={28} height={28} className="rounded-full" />;
+  }
+  return (
+    <span
+      aria-hidden
+      data-testid="avatar-initials"
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-semibold"
+      style={{ background: 'var(--bg-elevated, #1a1d22)', color: 'var(--text-secondary, #9aa3ad)' }}
+    >
+      {initials}
+    </span>
   );
 }
 
@@ -280,52 +432,72 @@ function MessageRow({
   msg,
   grouped,
   meName,
+  online,
+  onOpenThread,
 }: {
   msg: ChatMessageDTOWire;
   grouped: boolean;
   meName: string | null;
+  online: boolean;
+  onOpenThread: (msg: ChatMessageDTOWire) => void;
 }) {
   if (msg.isDeleted) {
     return (
-      <div data-testid="message-tombstone" className="py-1 text-sm italic" style={{ color: 'var(--text-muted)' }}>
+      <div data-testid="message-tombstone" className="py-1 pl-10 text-sm italic" style={{ color: 'var(--text-muted)' }}>
         Message deleted
       </div>
     );
   }
 
   return (
-    <div data-testid="message-row" className={grouped ? 'py-0.5' : 'pt-3'}>
-      {!grouped && (
-        <div className="flex items-baseline gap-2">
-          <span className="text-sm font-semibold" style={{ color: 'var(--text-primary, #e8eaed)' }}>
-            {msg.senderName ?? 'Unknown'}
-          </span>
-          <time
-            dateTime={msg.createdAt}
-            className="text-[11px]"
-            style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}
-          >
-            {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </time>
-        </div>
-      )}
-      <div className="text-sm" style={{ color: 'var(--text-secondary, #9aa3ad)' }}>
-        <MessageContent
-          content={msg.content}
-          mentionNames={msg.mentions.map((m) => m.name)}
-          highlightNames={meName ? [meName] : []}
-        />
+    <div data-testid="message-row" className={`flex gap-3 ${grouped ? 'py-0.5' : 'pt-3'}`}>
+      {/* The avatar column is reserved even when grouped, so consecutive messages
+          stay aligned under the header rather than stepping left. */}
+      <div className="w-7 shrink-0">
+        {!grouped && (
+          <div className="relative">
+            <Avatar name={msg.senderName ?? '?'} url={msg.senderAvatarUrl} />
+            <span className="absolute -bottom-0.5 -right-0.5">
+              <PresenceDot online={online} />
+            </span>
+          </div>
+        )}
       </div>
-      {msg.replyCount > 0 && (
+
+      <div className="min-w-0 flex-1">
+        {!grouped && (
+          <div className="flex items-baseline gap-2">
+            <span className="text-sm font-semibold" style={{ color: 'var(--text-primary, #e8eaed)' }}>
+              {msg.senderName ?? 'Unknown'}
+            </span>
+            <time
+              dateTime={msg.createdAt}
+              className="text-[11px]"
+              style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}
+            >
+              {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </time>
+          </div>
+        )}
+        <div className="text-sm" style={{ color: 'var(--text-secondary, #9aa3ad)' }}>
+          <MessageContent
+            content={msg.content}
+            mentionNames={msg.mentions.map((m) => m.name)}
+            highlightNames={meName ? [meName] : []}
+          />
+        </div>
         <button
           type="button"
-          data-testid="thread-count"
+          data-testid={msg.replyCount > 0 ? 'thread-count' : 'thread-open'}
+          onClick={() => onOpenThread(msg)}
           className="mt-0.5 text-xs"
-          style={{ color: 'var(--accent-gold)' }}
+          style={{ color: msg.replyCount > 0 ? 'var(--accent-gold)' : 'var(--text-muted)' }}
         >
-          {msg.replyCount} {msg.replyCount === 1 ? 'reply' : 'replies'}
+          {msg.replyCount > 0
+            ? `${msg.replyCount} ${msg.replyCount === 1 ? 'reply' : 'replies'}`
+            : 'Reply'}
         </button>
-      )}
+      </div>
     </div>
   );
 }
