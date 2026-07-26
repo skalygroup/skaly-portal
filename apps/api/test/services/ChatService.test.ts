@@ -186,6 +186,22 @@ describe('send', () => {
     expect(notifs.map((n) => n.staff_id).sort()).toEqual([MENTIONEE, ADMIN].sort());
   });
 
+  test('THREE distinct non-author mentions → exactly three notifications', async () => {
+    // The guide's explicit fan-out count. ADR-006: one per mentioned user, never
+    // combined into a single "you and 2 others were mentioned".
+    const msg = await send('@Rahul Menon @Chat Admin @Chat Free all please look', asMember);
+
+    expect(msg.mentions).toHaveLength(3);
+    const notifs = await db
+      .selectFrom('notifications')
+      .select('staff_id')
+      .where('type', '=', 'mention')
+      .where('staff_id', 'in', staffIds)
+      .execute();
+    expect(notifs).toHaveLength(3);
+    expect(notifs.map((n) => n.staff_id).sort()).toEqual([MENTIONEE, ADMIN, FREELANCER].sort());
+  });
+
   test('the same person mentioned twice in one message → ONE notification', async () => {
     await send('@Rahul Menon and again @Rahul Menon', asMember);
 
@@ -314,6 +330,63 @@ describe('list — keyset pagination', () => {
     const page = await svc.list({ limit: 50 }, asMember, db);
     expect(page.messages.map((m) => m.content)).toEqual(['the parent']);
     expect(page.messages[0]!.replyCount).toBe(1);
+  });
+});
+
+describe('⭐ concurrency — two people sending at once', () => {
+  test('both persist, and pagination shows each exactly once', async () => {
+    // Genuinely simultaneous: two transactions in flight against the same channel.
+    // This is the shape that breaks a cursor carrying a truncated timestamp, and the
+    // shape a fixture with one message per second never produces.
+    const [a, b] = await Promise.all([
+      send('sent at the same moment by A', asMember),
+      send('sent at the same moment by B', asAdmin),
+    ]);
+
+    expect(a.id).not.toBe(b.id);
+
+    const page = await svc.list({ limit: 50 }, asMember, db);
+    const ids = page.messages.map((m) => m.id);
+
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids).toEqual(expect.arrayContaining([a.id, b.id]));
+  });
+
+  test('a one-per-page walk across simultaneous sends has no gap and no repeat', async () => {
+    await Promise.all([
+      send('concurrent one', asMember),
+      send('concurrent two', asAdmin),
+      send('concurrent three', asMember),
+    ]);
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 4; i++) {
+      const page: Awaited<ReturnType<typeof svc.list>> = await svc.list({ limit: 1, cursor }, asMember, db);
+      seen.push(...page.messages.map((m) => m.id));
+      cursor = page.nextCursor;
+      if (!cursor) break;
+    }
+
+    expect(seen).toHaveLength(3);
+    expect(new Set(seen).size).toBe(3);
+  });
+
+  test('concurrent mentions of the same person produce one notification each, not one total', async () => {
+    await Promise.all([
+      send('@Rahul Menon first', asMember),
+      send('@Rahul Menon second', asAdmin),
+    ]);
+
+    // Distinct messages → distinct recordIds → the 24h dedup must NOT collapse them.
+    const notifs = await db
+      .selectFrom('notifications')
+      .selectAll()
+      .where('type', '=', 'mention')
+      .where('staff_id', '=', MENTIONEE)
+      .execute();
+    expect(notifs).toHaveLength(2);
   });
 });
 
