@@ -1,3 +1,4 @@
+import { NotificationBell } from '@/components/shared/notification-bell';
 import { SearchPalette } from '@/components/shared/search-palette';
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
@@ -24,6 +25,16 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
 
       {/* Portal content — visible on md+ screens */}
       <div className="hidden md:block min-h-screen">
+        {/* The topbar UIUX §16 assumes ("panel slides down from topbar") did not
+            exist — pages render their own <main> and the only shared chrome was the
+            CMD+K palette. This is the minimum that makes the spec true: one row, one
+            bell, mounted ONCE like SearchPalette so there is a single socket
+            subscription and a single notifications cache entry for the whole app.
+            Nav and the topbar search icon are deliberately NOT invented here; they
+            belong to Sprint 11's Settings/Dashboard chrome. */}
+        <header className="flex h-14 items-center justify-end gap-2 px-8">
+          <NotificationBell />
+        </header>
         {children}
         {/* Mounted ONCE here, not per page: one CMD+K listener, every route
             (FR-SEARCH-01). Inside the md+ branch — the palette is desktop-only,

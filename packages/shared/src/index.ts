@@ -95,3 +95,19 @@ export {
   CellUpdateSchema,
 } from './schemas/content-calendar';
 export type { CalendarStatus, CalendarQuery, CellUpdateBody } from './schemas/content-calendar';
+
+// Notification wire schemas (07-API-CONTRACT §Notifications).
+export {
+  NOTIFICATION_PAGE_LIMIT,
+  NotificationSchema,
+  NotificationTypeSchema,
+  NotificationListQuerySchema,
+  NotificationListResponseSchema,
+  MarkReadResponseSchema,
+  MarkAllReadResponseSchema,
+} from './schemas/notifications';
+export type {
+  NotificationDTO,
+  NotificationListResponse,
+  NotificationListQuery,
+} from './schemas/notifications';
