@@ -18,7 +18,24 @@ import { createClient } from '@/lib/supabase/client';
  * stay valid.
  */
 
-let socket: Socket | null = null;
+/**
+ * ONE connection per namespace, cached by namespace — NOT a second singleton.
+ *
+ * Socket.io multiplexes every namespace of the same host over ONE underlying
+ * engine.io transport, so `/ws/chat` and `/ws/presence` cost no extra websocket.
+ * What must not happen is two managers for the same namespace: each would carry its
+ * own handshake, its own reconnection timer, and its own copy of every subscription,
+ * so every event would be handled twice.
+ *
+ * The map is what makes that structurally impossible — getSocket() is the only way
+ * in, and it returns the same instance for the same namespace forever.
+ */
+const sockets = new Map<string, Socket>();
+
+/** The three canonical namespaces (TRD §8). ADR-005: there is no fourth. */
+export const WS_NOTIFY = '/ws/notify';
+export const WS_CHAT = '/ws/chat';
+export const WS_PRESENCE = '/ws/presence';
 
 /** The server handshake (api/src/sockets/index.ts) reads auth.token; the C-05
  *  watcher (socketTokenWatcher.plugin.ts) reads auth.exp and refuses a socket
@@ -31,10 +48,11 @@ async function authPayload(): Promise<{ token: string; exp: number }> {
   return { token: session?.access_token ?? '', exp: session?.expires_at ?? 0 };
 }
 
-export function getSocket(): Socket {
-  if (socket) return socket;
+export function getSocket(namespace: string = WS_NOTIFY): Socket {
+  const existing = sockets.get(namespace);
+  if (existing) return existing;
 
-  socket = io(`${process.env.NEXT_PUBLIC_WS_URL}/ws/notify`, {
+  const socket = io(`${process.env.NEXT_PUBLIC_WS_URL}${namespace}`, {
     // A function auth re-reads the session on every (re)connect, so a token
     // refreshed while the socket was down is picked up on the next attempt.
     auth: (cb: (data: { token: string; exp: number }) => void) => {
@@ -55,22 +73,50 @@ export function getSocket(): Socket {
         data: { session },
       } = await createClient().auth.refreshSession();
       const token = session?.access_token ?? (await authPayload()).token;
-      if (token) socket?.emit('auth:refresh', { token });
+      if (token) socket.emit('auth:refresh', { token });
     })();
   });
 
+  sockets.set(namespace, socket);
   return socket;
 }
 
-/** Subscribe to a /ws/notify event for the lifetime of the component, sharing the
- *  singleton (never opens a second connection). Pass a stable `handler`
- *  (useCallback) so the effect doesn't resubscribe every render. */
-export function useNotifySocket<T = unknown>(event: string, handler: (payload: T) => void): void {
+/**
+ * Subscribe to an event for the lifetime of the component, sharing the per-namespace
+ * connection (never opens a second one). Pass a stable `handler` (useCallback) so the
+ * effect does not resubscribe every render.
+ */
+export function useSocketEvent<T = unknown>(
+  namespace: string,
+  event: string,
+  handler: (payload: T) => void,
+): void {
   useEffect(() => {
-    const s = getSocket();
+    const s = getSocket(namespace);
     s.on(event, handler as (payload: unknown) => void);
     return () => {
       s.off(event, handler as (payload: unknown) => void);
     };
-  }, [event, handler]);
+  }, [namespace, event, handler]);
+}
+
+/** `/ws/notify` — notifications and every grid-sync broadcast. */
+export function useNotifySocket<T = unknown>(event: string, handler: (payload: T) => void): void {
+  useSocketEvent<T>(WS_NOTIFY, event, handler);
+}
+
+/** `/ws/chat` — chat:message, chat:deleted, chat:typing. */
+export function useChatSocket<T = unknown>(event: string, handler: (payload: T) => void): void {
+  useSocketEvent<T>(WS_CHAT, event, handler);
+}
+
+/** `/ws/presence` — presence:changed, and the outbound presence:ping heartbeat. */
+export function usePresenceSocket<T = unknown>(event: string, handler: (payload: T) => void): void {
+  useSocketEvent<T>(WS_PRESENCE, event, handler);
+}
+
+/** Test seam: drop every cached connection so a suite starts clean. */
+export function resetSockets(): void {
+  for (const s of sockets.values()) s.disconnect();
+  sockets.clear();
 }

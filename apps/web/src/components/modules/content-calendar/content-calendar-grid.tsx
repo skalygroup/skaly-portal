@@ -27,6 +27,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
+import { useRealtimeSync } from '@/lib/hooks/use-realtime-sync';
 import { handleMutationError } from '@/lib/mutation-errors';
 
 const mono = { fontFamily: 'var(--font-mono)' } as const;
@@ -189,13 +190,14 @@ const CalendarCellView = memo(function CalendarCellView({
  * absolutely-positioned virtual track, so the two can never drift out of
  * alignment the way two synchronised scrollers would.
  *
- * Real-time stays emit-only this sprint (ADR-010): the backend broadcasts
- * content-calendar:updated, but there is no socket client yet. Own-mutation
- * refresh is the TanStack Query cache replace in onSuccess.
- *
- * TODO(Sprint 10): subscribe to content-calendar:updated on /ws/notify →
- * invalidateQueries(['content-calendar', payload.period]).
+ * Real-time is LIVE (ADR-022). content-calendar:updated is the matrix's flagship
+ * PATCH: the payload is a whole cell including its new `version`, so 50 people on
+ * this grid see one edit without 50 refetches. Own-mutation refresh is still the
+ * TanStack cache replace in onSuccess — the actor's own echo is excluded, so the two
+ * never fight.
  */
+const CALENDAR_EVENTS = ['content-calendar:updated', 'client:name_updated'] as const;
+
 export function ContentCalendarGrid() {
   const { period } = useMonthContext();
   const queryClient = useQueryClient();
@@ -234,6 +236,10 @@ export function ContentCalendarGrid() {
   });
   const canEdit = (me?.role === 'admin' || me?.role === 'manager') && !locked;
   const readOnlyRole = me?.role === 'team_member';
+
+  // ADR-022: patch the cell, patch a client rename. `me.id` is the sender-exclusion
+  // guard — the actor already applied this optimistically.
+  useRealtimeSync(CALENDAR_EVENTS, me?.id);
 
   const days = useMemo(() => daysInPeriod(period), [period]);
   const clients = useMemo(() => data?.clients ?? [], [data]);

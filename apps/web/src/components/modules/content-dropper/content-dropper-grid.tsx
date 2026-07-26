@@ -16,6 +16,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
+import { useRealtimeSync } from '@/lib/hooks/use-realtime-sync';
 import { handleMutationError } from '@/lib/mutation-errors';
 
 const mono = { fontFamily: 'var(--font-mono)' } as const;
@@ -285,11 +286,16 @@ const columnHelper = createColumnHelper<PipelineRow>();
  * the cell components, so a focus never rebuilds columns and remounts a button
  * mid-click.
  *
- * TODO(Sprint 10): subscribe to pipeline updates on /ws/notify →
- * invalidateQueries(['content-dropper', period]).
+ * Real-time is INVALIDATE-only (ADR-022): the derived status is recomputed server-side
+ * (ADR-013) and the payload carries only {clientId, period}, so this event is
+ * invalidate-only BY DEFINITION — rule a, not a preference. It also listens for
+ * shoot:slot_updated, because Trigger 1 rewrites coming_shoot_date on this grid.
  */
+const DROPPER_EVENTS = ['content-dropper:updated', 'shoot:slot_updated'] as const;
+
 export function ContentDropperGrid() {
   const { period } = useMonthContext();
+  useRealtimeSync(DROPPER_EVENTS);
   const queryClient = useQueryClient();
   const today = useMemo(() => todayIstIso(), []);
   const gridKey = useMemo(() => ['content-dropper', period] as const, [period]);

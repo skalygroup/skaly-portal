@@ -248,7 +248,10 @@ describe('applyPostedTrigger — the three corrections', () => {
 
     const result = await svc.applyPostedTrigger(CLIENT_ID, DATE, db);
 
-    expect(result).toEqual({ clientId: CLIENT_ID, period: PERIOD, date: DATE });
+    // ADR-022: the payload is now the FULL cell, not a {clientId, period, date}
+    // locator — a patchable event must carry the complete new state incl. version.
+    expect(result).toMatchObject({ clientId: CLIENT_ID, period: PERIOD, date: DATE, status: 'Posted' });
+    expect(typeof result!.version).toBe('number');
     const after = await readCell(id);
     expect(after.status).toBe('Posted');
     expect(after.source).toBe('pipeline_trigger');

@@ -25,7 +25,7 @@ import { sql, type Kysely } from 'kysely';
 
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, optimisticUpdate, type Executor } from './BaseService.js';
-import { transactionWithEmits } from '../lib/emit-after-commit.js';
+import { emitAfterCommit, transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { softDeletable } from '../lib/queries.js';
@@ -53,14 +53,17 @@ export interface CalendarCellDTO {
 }
 
 /**
- * What Trigger 2 broadcasts — and exactly the API-Contract §6
- * `content-calendar:updated` payload. `null` from applyPostedTrigger means
- * "skipped, do not broadcast".
+ * What Trigger 2 broadcasts — exactly the API-Contract §6 `content-calendar:updated`
+ * payload. `null` from applyPostedTrigger means "skipped, do not broadcast".
+ *
+ * The Trigger-2 broadcast payload — a full cell plus its period (ADR-022).
+ *
+ * It is the CalendarCellDTO, not a {clientId, period, date} locator, because the
+ * matrix makes `content-calendar:updated` patchable and a patch needs the complete
+ * new state including `version`.
  */
-export interface CalendarTriggerResult {
-  clientId: string;
+export interface CalendarTriggerResult extends CalendarCellDTO {
   period: string;
-  date: string;
 }
 
 export interface CalendarGrid {
@@ -276,7 +279,26 @@ export class ContentCalendarService {
       // updater's name from the same join getGrid uses, so a cell can never
       // describe itself differently depending on which endpoint returned it.
       const wire = await this.cellQuery(trx).where('content_calendar.id', '=', id).executeTakeFirstOrThrow();
-      return cellToDTO(wire as JoinedCellRow);
+      const dto = cellToDTO(wire as JoinedCellRow);
+
+      // ADR-022: the PATCHABLE event, and the hot path the whole matrix exists for —
+      // 50 people on the calendar, one cell edit. The payload is the COMPLETE new
+      // state of one addressable entry, which is what makes patching legal here.
+      //
+      // `version` is not decoration: a patch that leaves a stale cached version makes
+      // the receiver's NEXT edit 409 spuriously, and that presents as a backend bug.
+      // If this payload could not carry it, the event would be invalidate-only by
+      // definition (ADR-022 rule a).
+      //
+      // actorStaffId rides along so the client can ignore its own echo (rule b) — the
+      // server-side half is that HTTP has no originating socket to exclude.
+      emitAfterCommit('/ws/notify', 'org:all', 'content-calendar:updated', {
+        ...dto,
+        period: before.period,
+        actorStaffId: currentUser.staffId,
+      });
+
+      return dto;
     });
 
     return updated;
@@ -405,7 +427,14 @@ export class ContentCalendarService {
       return null;
     }
 
-    return { clientId, period: targetPeriod, date: postedAt };
+    // ADR-022 payload enrichment. This used to return {clientId, period, date} — enough
+    // to say WHICH cell changed, and nothing about what it changed TO. A client cannot
+    // patch from that, so under the matrix the event would have been invalidate-only by
+    // definition. Re-reading the row through the shared projection makes it patchable,
+    // and carries the bumped `version` (ADR-013 case 2 bumps it here) so the receiving
+    // client's next edit does not 409 against a cache still holding the old one.
+    const wire = await this.cellQuery(db).where('content_calendar.id', '=', cell.id).executeTakeFirstOrThrow();
+    return { ...cellToDTO(wire as JoinedCellRow), period: targetPeriod };
   }
 
   /**

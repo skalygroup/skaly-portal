@@ -21,6 +21,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
+import { useRealtimeSync } from '@/lib/hooks/use-realtime-sync';
 import { handleMutationError } from '@/lib/mutation-errors';
 
 const mono = { fontFamily: 'var(--font-mono)' } as const;
@@ -135,11 +136,16 @@ function SlotCellContent({ slot, readOnly }: { slot: Slot; readOnly: boolean }) 
  * updates with NO version (last-write-wins — no STALE_DATA branch exists).
  * Freelancers see only their own rows (API-filtered, ADR-011), read-only.
  *
- * TODO(Sprint 10): subscribe to shoot slot updates on /ws/notify →
- * invalidateQueries(['shoot-planner', period]).
+ * Real-time is INVALIDATE-only (ADR-022), and it invalidates the DROPPER too: Trigger 1
+ * recomputes coming_shoot_date on the pipeline when a slot moves (ADR-012), so the
+ * dropper goes stale in a way the slot's own fields never describe. Patching the slot
+ * and leaving the pipeline alone is exactly the "stale derived data" the ADR forbids.
  */
+const SHOOT_EVENTS = ['shoot:slot_updated'] as const;
+
 export function ShootPlannerGrid() {
   const { period } = useMonthContext();
+  useRealtimeSync(SHOOT_EVENTS);
   const queryClient = useQueryClient();
   const gridKey = useMemo(() => ['shoot-planner', period] as const, [period]);
 

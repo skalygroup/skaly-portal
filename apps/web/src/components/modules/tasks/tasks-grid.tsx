@@ -22,6 +22,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { currentIstPeriod, useMonthContext } from '@/lib/hooks/use-month-context';
+import { useRealtimeSync } from '@/lib/hooks/use-realtime-sync';
 import { handleMutationError } from '@/lib/mutation-errors';
 
 const mono = { fontFamily: 'var(--font-mono)' } as const;
@@ -46,10 +47,15 @@ interface EditApi {
  * highlight. Tasks are unversioned (ADR-008) — no version is ever sent and there
  * is no stale-conflict UI. Real-time is own-mutation refresh only (ADR-010).
  *
- * TODO(Sprint 10): subscribe to task:changed on /ws/notify → invalidateQueries(['tasks', period]).
+ * Real-time is INVALIDATE-only (ADR-022): a task's position in the grid depends on
+ * ordering, membership and the ADR-006 assignee fan-out — none of which a single-row
+ * payload describes.
  */
+const TASK_EVENTS = ['task:created', 'task:updated', 'task:assigned'] as const;
+
 export function TasksGrid() {
   const { period } = useMonthContext();
+  useRealtimeSync(TASK_EVENTS);
   const queryClient = useQueryClient();
   const gridKey = useMemo(() => ['tasks', period] as const, [period]);
   // A search result lands here as ?highlight={taskId} (APPFLOW §12).
