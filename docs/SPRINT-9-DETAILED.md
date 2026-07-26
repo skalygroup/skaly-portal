@@ -1057,12 +1057,21 @@ docker compose up -d && pnpm dev
 Do not start Sprint 10 until **every** box is checked.
 
 **Status as of the STEP 13 run.** A box is ticked only where a green test proves it —
-API suite 490/490, web suite 102/102, typecheck + lint clean, the whole Playwright
-suite green on chromium (65 passed, 2 perf tests skipped behind `E2E_PERF`), and
-`bot.spec.ts` + `search.spec.ts` green on webkit too. Everything still
+API suite 490/490, web suite 102/102, typecheck + lint clean, and the whole Playwright
+suite green on **both** engines (chromium 65/0/2, webkit 63/0/4). Everything still
 unticked needs the 13.1 manual walk-through (expiry, double-click, the manual
 version-capture race, H-01 through the bot, the client tools, and the Anthropic-down
 case), which is a human at a keyboard by design.
+
+**A webkit-only E2E failure that turned out to be Sprint 7 grid debt.** The tasks
+dependency-block spec failed on webkit and passed on chromium, which reads as engine
+flakiness. It was not: `shakeIds` and `saveStates` were in the `edit` memo's deps, so a
+refused status change rebuilt the column definitions — twice, 400ms apart, as the shake
+set and cleared — and TanStack Table remounted every cell. `StatusCell` keeps its `open`
+flag in the cell, so a user retrying inside that window had the dropdown close under
+their finger. Chromium's clicks simply beat the timer. This is the same defect Sprint 7
+fixed for `activeColumnId`, left half-done; both now live in `useTaskSaveStore`,
+subscribed to per cell (2/2 fail → 3/3 pass, then the full suite green).
 
 **A flaky assertion that turned out to be a real prompt defect.** Sprint 8.1's E2E
 denial test asserts the live model uses the instructed "ask an admin" sentence, and it
@@ -1176,10 +1185,13 @@ REMAINING — the 13.1 manual walk-through (a human at a keyboard, by design)
   [ ] Activity feed as a team_member: only their own events
   [ ] Anthropic down: bad key → friendly copy on turn 1; re-key → a PENDING confirmation still
       executes on turn 2 (proves ADR-014 §5 — turn 2 makes no model call)
-  [ ] ENTIRE Playwright suite green in one run on WEBKIT (chromium is done: 65 passed,
-      0 failed, 2 skipped — the two skips are the NFR perf tests, gated behind E2E_PERF.
-      bot.spec + search.spec are green on webkit; the other files have not been run
-      end-to-end on it this sprint)
+  [x] ENTIRE Playwright suite green on BOTH engines, in one run each:
+        chromium — 65 passed, 0 failed, 2 skipped
+        webkit   — 63 passed, 0 failed, 4 skipped
+      67 tests either side. chromium's 2 skips are the NFR perf tests (E2E_PERF-gated);
+      webkit skips those plus the 2 login cases marked browserName !== 'chromium'
+      BY DESIGN, because they mutate shared staff state and must run once.
+      Getting here needed a real fix — see the Sprint 7 grid debt note below.
 ```
 
 ### 13.3 — Final commit
