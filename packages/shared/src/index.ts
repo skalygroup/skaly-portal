@@ -111,3 +111,19 @@ export type {
   NotificationListResponse,
   NotificationListQuery,
 } from './schemas/notifications';
+
+// Chat wire schemas (07-API-CONTRACT /v1/chat/*).
+export {
+  CHAT_MESSAGE_MAX,
+  CHAT_PAGE_LIMIT,
+  ChatMentionSchema,
+  ChatMessageSchema,
+  ChatSendSchema,
+  ChatListQuerySchema,
+  ChatListResponseSchema,
+  ChatThreadResponseSchema,
+  ChatSearchQuerySchema,
+  ChatDeleteResponseSchema,
+  ChatSendResponseSchema,
+} from './schemas/chat';
+export type { ChatMessageDTOWire, ChatListResponse, ChatSendBody } from './schemas/chat';

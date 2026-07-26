@@ -2,6 +2,7 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import { Redis } from 'ioredis';
 import { Server } from 'socket.io';
 
+import { attachChat } from './chat.js';
 import { attachPresence } from './presence.js';
 import { verifySupabaseToken } from '../lib/auth-verify.js';
 import { emitAfterCommit, setEmitter } from '../lib/emit-after-commit.js';
@@ -124,9 +125,9 @@ export function registerSockets(httpServer: HttpServer): SocketSetup {
 
     nsp.on('connection', (socket) => {
       joinRooms(socket);
-      if (path === '/ws/presence') {
-        attachPresence(socket, socket.data.staffId as string);
-      }
+      const staffId = socket.data.staffId as string;
+      if (path === '/ws/presence') attachPresence(socket, staffId);
+      if (path === '/ws/chat') attachChat(socket, staffId);
     });
   }
 
