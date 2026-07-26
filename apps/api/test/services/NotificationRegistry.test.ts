@@ -122,12 +122,21 @@ describe('every registry entry is complete', () => {
 });
 
 describe('the deferred six are asserted by name, not merely commented', () => {
-  test('⭐ exactly 6 types have no producer as of Sprint 10', () => {
+  test('⭐ exactly 7 types have no producer as of Sprint 10', () => {
     // When Sprint 11 wires report_ready this FAILS until the expectation is updated.
     // That failure is the intended workflow — it is how the deferral stays honest.
-    expect(SPRINT_10_DEFERRED_TYPES).toHaveLength(6);
+    //
+    // SEVEN, not the six the sprint plan predicted. account_reactivated was counted
+    // as a shipped-sprint gap like holiday_added and client_updated, but unlike those
+    // it has no write path to hook into: StaffService is read-only and there is no
+    // staff deactivate OR reactivate anywhere. Its producer needs Settings → Staff,
+    // so it is a genuine deferral to Sprint 11 rather than a gap Sprint 10 could
+    // close. Inventing an emitter to make this number 6 is exactly what ADR-020
+    // forbids.
+    expect(SPRINT_10_DEFERRED_TYPES).toHaveLength(7);
     expect(SPRINT_10_DEFERRED_TYPES).toEqual(
       [
+        'account_reactivated',
         'month_ready',
         'new_comment',
         'report_ready',
@@ -141,6 +150,7 @@ describe('the deferred six are asserted by name, not merely commented', () => {
   test('each deferred type names the sprint that owns its producer', () => {
     const owners: Record<string, number> = {
       report_ready: 11,
+      account_reactivated: 11,
       new_comment: 12,
       month_ready: 12,
       rollover_success: 12,
@@ -152,11 +162,11 @@ describe('the deferred six are asserted by name, not merely commented', () => {
     }
   });
 
-  test('the other 12 are claimed by a sprint at or before 10', () => {
+  test('the other 11 are claimed by a sprint at or before 10', () => {
     const withProducers = NOTIFICATION_TYPES.filter(
       (t) => !SPRINT_10_DEFERRED_TYPES.includes(t),
     );
-    expect(withProducers).toHaveLength(12);
+    expect(withProducers).toHaveLength(11);
     for (const t of withProducers) {
       expect(NOTIFICATION_REGISTRY[t].producerSprint, t).toBeLessThanOrEqual(10);
     }

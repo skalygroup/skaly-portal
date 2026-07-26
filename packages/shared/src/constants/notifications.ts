@@ -152,7 +152,11 @@ export const NOTIFICATION_REGISTRY = {
     icon: 'UserCog',
     severity: 'success',
     linkBuilder: (_payload: Record<string, unknown>) => '/dashboard',
-    producerSprint: 2,
+    // Sprint 11, NOT Sprint 2. Sprint 10's census assumed this was a shipped-sprint
+    // gap like the other five, but there is no staff reactivate path to hook into —
+    // StaffService is read-only, and there is no deactivate either. The producer
+    // arrives with Settings → Staff, so this is a genuine deferral, not a gap.
+    producerSprint: 11,
   },
 
   // ── Clients (Sprint 6) ────────────────────────────────────────────────────
