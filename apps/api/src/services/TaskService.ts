@@ -29,7 +29,7 @@ import { NotificationService } from './NotificationService.js';
 import { db } from '../lib/db.js';
 import { transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
-import { softDelete } from '../lib/queries.js';
+import { softDelete, softDeletable } from '../lib/queries.js';
 
 import type { CurrentUser } from './AttendanceService.js';
 import type { DB } from '@skaly/shared';
@@ -773,6 +773,61 @@ export class TaskService {
       createdBy: row.created_by,
       createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
     };
+  }
+
+  /**
+   * The overdue sweep — `task_overdue`'s producer (ADR-020).
+   *
+   * The type has existed in the enum since Sprint 4 with nothing emitting it. Built
+   * as a SERVICE METHOD, not a cron: Sprint 12 owns scheduling, and a job whose logic
+   * is already tested is a one-liner to schedule. Written now because the gap was
+   * found now, and a producer that exists is a producer that can be tested.
+   *
+   * "Overdue" is a task past its `deadline` that is neither Done nor Cancelled.
+   * `date` is the planned working day; `deadline` is the commitment, and only the
+   * commitment can be missed.
+   *
+   * Every run notifies every assignee — the dedup guard in NotificationService is
+   * what stops that becoming a daily repeat for the same task, and it lives there
+   * rather than here so the next repeating producer inherits it for free.
+   */
+  async notifyOverdue(db: Kysely<DB>): Promise<number> {
+    return transactionWithEmits(db, async (trx) => {
+      const overdue = await softDeletable(
+        trx
+          .selectFrom('tasks')
+          .innerJoin('task_assignees', 'task_assignees.task_id', 'tasks.id')
+          .select([
+            'tasks.id as id',
+            'tasks.description as description',
+            'tasks.period as period',
+            'tasks.deadline as deadline',
+            'task_assignees.staff_id as staff_id',
+          ]),
+      )
+        .where('tasks.deadline', 'is not', null)
+        .where('tasks.deadline', '<', sql<string>`current_date`)
+        .where('tasks.status', 'not in', ['Done', 'Cancelled'])
+        .execute();
+
+      let sent = 0;
+      for (const row of overdue) {
+        const created = await this.notifications.create({
+          recipientId: row.staff_id,
+          type: 'task_overdue',
+          title: row.description,
+          body: `Was due ${String(row.deadline)}`,
+          data: { taskId: row.id, period: row.period, deadline: row.deadline, recordId: row.id },
+          // (recipient, type, task) — the dedup key. Without it this sweep re-notifies
+          // the same task to the same person on every run, forever, and the bell
+          // becomes noise the user learns to ignore.
+          recordId: row.id,
+          trx,
+        });
+        if (created) sent += 1;
+      }
+      return sent;
+    });
   }
 }
 

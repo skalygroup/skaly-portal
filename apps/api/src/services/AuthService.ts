@@ -697,6 +697,26 @@ export class AuthService {
         trx,
       });
 
+      // ADR-020: signup_rejected had no producer since Sprint 2. It goes to the OTHER
+      // admins, not the applicant — a rejected applicant has no staff row, and
+      // notifications.staff_id is an FK to staff(id), so they are unreachable in-app
+      // by construction. This closes the loop for admins watching the queue, exactly
+      // as signup_request opens it.
+      //
+      // Carries the PUBLIC message only. rejection_note is internal and stays in the
+      // audit trail — putting it in a payload would ship it to the bell, and payloads
+      // are the least-guarded thing we send.
+      await this.notifications.createForStaff({
+        actorId: reviewerStaffId,
+        roles: ['admin'],
+        type: 'signup_rejected',
+        title: 'A signup request was declined',
+        body: publicRejectionMessage ?? null,
+        data: { requestId, publicRejectionMessage: publicRejectionMessage ?? null, recordId: requestId },
+        recordId: requestId,
+        trx,
+      });
+
       return { status: 'rejected' as const };
     });
   }

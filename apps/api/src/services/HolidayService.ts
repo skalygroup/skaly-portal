@@ -21,6 +21,7 @@ import { sql, type Selectable, type Transaction } from 'kysely';
 
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked } from './BaseService.js';
+import { NotificationService } from './NotificationService.js';
 import { emitAfterCommit } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 
@@ -49,6 +50,7 @@ export interface HolidayCreateInput {
 
 export class HolidayService {
   private readonly audit = new AuditService();
+  private readonly notifications = new NotificationService();
 
   /**
    * admin/manager (AUTH-MATRIX §4, FR-ATT-09). Until Sprint 9 this lived ONLY on
@@ -109,6 +111,20 @@ export class HolidayService {
       entity: 'holidays',
       entityId: holiday.id,
       after: { period, date, name, active: true },
+      trx,
+    });
+
+    // ADR-020: the socket broadcast and the notification are DIFFERENT mechanisms,
+    // and having one was not having the other. This service broadcast
+    // attendance:holiday_added from Sprint 3 while writing no notification row —
+    // the type existed in the enum with no producer until Sprint 10 closed the gap.
+    await this.notifications.createForStaff({
+      actorId: currentUser.staffId,
+      type: 'holiday_added',
+      title: `${name} — ${date}`,
+      body: 'A holiday was added to the calendar',
+      data: { period, date, name, recordId: holiday.id },
+      recordId: holiday.id,
       trx,
     });
 
@@ -188,6 +204,16 @@ export class HolidayService {
       entityId: holiday.id,
       before: { active: true },
       after: { active: false, removed_by: currentUser.staffId },
+      trx,
+    });
+
+    await this.notifications.createForStaff({
+      actorId: currentUser.staffId,
+      type: 'holiday_removed',
+      title: `${holiday.name} — ${holiday.date}`,
+      body: 'A holiday was removed; that day is a working day again',
+      data: { period: holiday.period, date: holiday.date, name: holiday.name, recordId: holiday.id },
+      recordId: holiday.id,
       trx,
     });
 

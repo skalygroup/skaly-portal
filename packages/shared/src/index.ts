@@ -14,6 +14,13 @@ export {
   ATTACHMENT_MIME_ALLOWLIST,
 } from './constants/attachments';
 export type { AttachmentMime } from './constants/attachments';
+export {
+  NOTIFICATION_REGISTRY,
+  NOTIFICATION_TYPES,
+  SPRINT_10_DEFERRED_TYPES,
+  isNotificationType,
+} from './constants/notifications';
+export type { NotificationType, NotificationTypeSpec, NotificationSeverity } from './constants/notifications';
 
 // Work Allocation (tasks) request schemas — shared by API validation + web forms.
 export {

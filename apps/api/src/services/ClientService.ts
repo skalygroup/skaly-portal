@@ -9,6 +9,7 @@
  */
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, getCurrentPeriod } from './BaseService.js';
+import { NotificationService } from './NotificationService.js';
 import { backfillClientPeriodRows } from './period-generation.js';
 import { transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
@@ -46,6 +47,7 @@ function clientToDTO(r: Selectable<Clients>): ClientListItem {
 
 export class ClientService {
   private readonly audit = new AuditService();
+  private readonly notifications = new NotificationService();
 
   /**
    * List clients, name-ascending. Active-only unless `includeInactive` (the
@@ -208,11 +210,25 @@ export class ClientService {
         trx,
       });
 
+      // ADR-020: client_updated existed in the enum from Sprint 6 with no producer —
+      // this service did not import NotificationService at all. A rename changes
+      // what every grid displays, so everyone but the actor is told.
+      await this.notifications.createForStaff({
+        actorId: currentUser.staffId,
+        type: 'client_updated',
+        title: `${before.name} is now ${name}`,
+        body: 'A client was renamed',
+        data: { clientId: id, previousName: before.name, name, recordId: id },
+        recordId: id,
+        trx,
+      });
+
       return clientToDTO(updated);
     });
 
-    // After COMMIT — API-Contract §6. Forward-wiring for Sprint 10, which
-    // invalidates every clientId-keyed query so a rename propagates across modules.
+    // Queued inside the transaction above and flushed on COMMIT (API-Contract §6),
+    // so a rolled-back rename never tells fifty clients to patch a name change that
+    // did not happen.
     broadcastToOrg('client:name_updated', { clientId: id, name });
 
     return updated;

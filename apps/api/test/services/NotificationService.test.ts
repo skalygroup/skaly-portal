@@ -121,7 +121,7 @@ describe('NotificationService.create', () => {
     const stored = await db
       .selectFrom('notifications')
       .selectAll()
-      .where('id', '=', row.id)
+      .where('id', '=', row!.id)
       .executeTakeFirstOrThrow();
     expect(stored.staff_id).toBe(RECIPIENT_ID);
     expect(stored.type).toBe('signup_approved');
@@ -152,7 +152,7 @@ describe('NotificationService.create', () => {
     });
 
     const payload = await received;
-    expect(payload.id).toBe(row.id);
+    expect(payload.id).toBe(row!.id);
     expect(payload.type).toBe('signup_request');
     expect(payload.staff_id).toBe(RECIPIENT_ID);
     expect(payload.payload).toEqual({ requestId: 'req-1' });
@@ -194,7 +194,7 @@ describe('NotificationService.create', () => {
     const stored = await db
       .selectFrom('notifications')
       .select('payload')
-      .where('id', '=', row.id)
+      .where('id', '=', row!.id)
       .executeTakeFirstOrThrow();
     expect(stored.payload).toEqual({ publicRejectionMessage: 'Thanks for applying.' });
     expect(JSON.stringify(stored.payload)).not.toContain('rejection_note');

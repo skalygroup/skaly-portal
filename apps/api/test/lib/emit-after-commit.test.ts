@@ -91,7 +91,7 @@ describe('emit AFTER COMMIT, not after write', () => {
         title: 'Ordering',
         trx,
       });
-      persistSpy(row.id);
+      persistSpy(row!.id);
     });
 
     expect(persistSpy).toHaveBeenCalled();
