@@ -7,7 +7,7 @@ import * as Icons from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { NotificationDTO, NotificationListResponse, NotificationType } from '@skaly/shared';
+import type { NotificationDTO, NotificationListResponse, NotificationTypeSpec } from '@skaly/shared';
 
 import { api } from '@/lib/api';
 import { useNotifySocket } from '@/lib/socket';
@@ -54,9 +54,26 @@ const fromSocket = (p: NotifyNewPayload): NotificationDTO => ({
   createdAt: p.created_at,
 });
 
+/**
+ * The registry entry for a type, or undefined — never a throw.
+ *
+ * Two ways this can be missing, and neither should take the panel down:
+ *   - a type the client does not know yet (deploy skew: the API is ahead of the bundle
+ *     a tab loaded an hour ago), and
+ *   - the registry import itself resolving to undefined, which is what a stale
+ *     `@skaly/shared` build produces. That crashed the panel with
+ *     "Cannot read properties of undefined (reading 'holiday_added')" — an E2E found
+ *     it, because the unit tests import the real module and never see the skew.
+ *
+ * A bell that renders a generic row is strictly better than one that white-screens.
+ */
+function specFor(type: string): NotificationTypeSpec | undefined {
+  return (NOTIFICATION_REGISTRY as Record<string, NotificationTypeSpec> | undefined)?.[type];
+}
+
 /** Lucide names come from the registry, so a new type needs no code here. */
 function TypeIcon({ type }: { type: string }) {
-  const spec = NOTIFICATION_REGISTRY[type as NotificationType];
+  const spec = specFor(type);
   const Fallback = Icons.Bell;
   const Icon = (spec ? (Icons as unknown as Record<string, typeof Icons.Bell>)[spec.icon] : null) ?? Fallback;
   const colour =
@@ -189,7 +206,7 @@ export function NotificationBell() {
       void markRead(n.id);
       // Deep links come from the registry — no URL construction in this component,
       // so a new type never means a new conditional here.
-      const href = NOTIFICATION_REGISTRY[n.type as NotificationType]?.linkBuilder(n.payload);
+      const href = specFor(n.type)?.linkBuilder(n.payload);
       setOpen(false);
       if (href) router.push(href);
     },
@@ -318,7 +335,7 @@ function Group({
 function Row({ n, onOpen }: { n: NotificationDTO; onOpen: (n: NotificationDTO) => void }) {
   // rollover_failed renders in full with no truncation (FR-NOTIF-04). Driven by the
   // registry's severity, not by a type name check, so the next critical type inherits it.
-  const critical = NOTIFICATION_REGISTRY[n.type as NotificationType]?.severity === 'critical';
+  const critical = specFor(n.type)?.severity === 'critical';
 
   return (
     <button

@@ -47,6 +47,7 @@ export function ChatView({ me }: { me: StaffMeResponse | null }) {
     scrollRef,
     sentinelRef,
     isPending,
+    isError,
     isFetchingNextPage,
     hasNextPage,
     pendingCount,
@@ -206,6 +207,19 @@ export function ChatView({ me }: { me: StaffMeResponse | null }) {
     getSocket(WS_CHAT).emit('chat:typing', { isTyping });
   }, []);
 
+  /**
+   * Delete a message. The server soft-deletes and broadcasts `chat:deleted`; the
+   * sender is excluded from that broadcast, so the author's own view is tombstoned
+   * here rather than waiting for an echo that will not arrive.
+   */
+  const deleteMessage = useCallback(
+    async (id: string) => {
+      await api(`/v1/chat/messages/${id}`, { method: 'DELETE' });
+      onDeleted({ id });
+    },
+    [onDeleted],
+  );
+
   const onDraftChange = useCallback(
     (value: string) => {
       setDraft(value);
@@ -237,6 +251,28 @@ export function ChatView({ me }: { me: StaffMeResponse | null }) {
   }, [draft, emitTyping, sendMutation]);
 
   const disabled = connection !== 'connected';
+
+  // `chat.access` is a PERMISSION (Auth-Matrix §3): a freelancer without the override
+  // gets 403 on every route. Show that plainly rather than an empty conversation with
+  // a working composer — a chat that looks usable and silently refuses every send is
+  // worse than one that says no.
+  if (isError) {
+    return (
+      <div
+        data-testid="chat-access-denied"
+        className="grid h-[calc(100vh-3.5rem)] place-items-center px-6 text-center"
+      >
+        <div>
+          <p className="text-sm font-semibold" style={{ color: 'var(--text-primary, #e8eaed)' }}>
+            You don&rsquo;t have access to chat
+          </p>
+          <p className="mt-1 text-sm" style={{ color: 'var(--text-muted)' }}>
+            An admin can grant it from Settings → Permissions.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)]">
@@ -274,6 +310,11 @@ export function ChatView({ me }: { me: StaffMeResponse | null }) {
               meName={me?.name ?? null}
               online={msg.senderId ? isOnline(msg.senderId) : false}
               onOpenThread={setThreadParent}
+              canDelete={
+                !msg.isDeleted &&
+                (msg.senderId === me?.id || me?.role === 'admin' || me?.role === 'manager')
+              }
+              onDelete={deleteMessage}
             />
           );
         })}
@@ -434,12 +475,16 @@ function MessageRow({
   meName,
   online,
   onOpenThread,
+  canDelete,
+  onDelete,
 }: {
   msg: ChatMessageDTOWire;
   grouped: boolean;
   meName: string | null;
   online: boolean;
   onOpenThread: (msg: ChatMessageDTOWire) => void;
+  canDelete: boolean;
+  onDelete: (id: string) => void;
 }) {
   if (msg.isDeleted) {
     return (
@@ -497,6 +542,18 @@ function MessageRow({
             ? `${msg.replyCount} ${msg.replyCount === 1 ? 'reply' : 'replies'}`
             : 'Reply'}
         </button>
+        {canDelete && (
+          <button
+            type="button"
+            data-testid="message-delete"
+            aria-label="Delete message"
+            onClick={() => void onDelete(msg.id)}
+            className="ml-3 text-xs"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            Delete
+          </button>
+        )}
       </div>
     </div>
   );

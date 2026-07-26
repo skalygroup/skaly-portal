@@ -41,7 +41,20 @@ export function useConnectionState(): ConnectionState {
 
   useEffect(() => {
     const socket = getSocket(WS_NOTIFY);
-    setSocketUp(socket.connected);
+
+    // OPTIMISTIC AT MOUNT, deliberately.
+    //
+    // getSocket() creates the connection on first call, so `socket.connected` is
+    // false until the handshake completes — a few hundred ms during which seeding
+    // state from it would flash the "Reconnecting…" banner and DISABLE the composer
+    // on every single page load. The user has not lost anything at that point; they
+    // simply have not connected yet, and those are different things.
+    //
+    // So state changes only on real events: 'disconnect' means we had a connection
+    // and lost it, which is the only case worth telling anyone about. If the very
+    // first handshake fails, socket.io emits 'disconnect' too, so a genuine failure
+    // still surfaces — just without the false positive on every load.
+    if (socket.connected) setSocketUp(true);
 
     const onConnect = () => {
       setSocketUp(true);
