@@ -34,6 +34,7 @@ import contentDropperRoutes from './routes/content-dropper/index.js';
 import { healthRoutes } from './routes/health.js';
 import holidaysRoutes from './routes/holidays/index.js';
 import monthsRoutes from './routes/months/index.js';
+import searchRoutes from './routes/search/index.js';
 import settingsRoutes from './routes/settings/index.js';
 import shootPlannerRoutes from './routes/shoot-planner/index.js';
 import staffRoutes from './routes/staff/index.js';
@@ -202,6 +203,7 @@ export async function buildApp(
   await app.register(healthRoutes);
   await app.register(authRoutes, { prefix: '/v1' });
   await app.register(botRoutes, { prefix: '/v1' });
+  await app.register(searchRoutes, { prefix: '/v1' });
   await app.register(staffRoutes, { prefix: '/v1' });
   await app.register(clientsRoutes, { prefix: '/v1' });
   await app.register(monthsRoutes, { prefix: '/v1' });

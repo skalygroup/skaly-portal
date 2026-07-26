@@ -169,6 +169,38 @@ export class ContentCalendarService {
   }
 
   /**
+   * One cell by id, with its client's name and period, or 404.
+   *
+   * Added in Sprint 9 for `update_calendar_cell`'s turn-1 read: the confirmation
+   * summary needs the cell's current status/note AND its `version` to capture
+   * (ADR-014 §2), and until now the only read was the whole-period grid. Reuses
+   * `cellQuery` so the projection cannot drift from the grid's.
+   */
+  async getCell(
+    id: string,
+    currentUser: CurrentUser,
+    trx: Executor,
+  ): Promise<CalendarCellDTO & { clientName: string; period: string }> {
+    // Same layer-3 backstop as getGrid — a freelancer has no calendar access at all.
+    if (currentUser.role === 'freelancer') {
+      throw new AppError('PERMISSION_DENIED', 'Freelancers have no content calendar access.');
+    }
+
+    const row = await this.cellQuery(trx)
+      .innerJoin('clients', 'clients.id', 'content_calendar.client_id')
+      .select(['clients.name as client_name', 'content_calendar.period as cell_period'])
+      .where('content_calendar.id', '=', id)
+      .executeTakeFirst();
+
+    if (!row) {
+      throw new AppError('RESOURCE_NOT_FOUND', `content_calendar row ${id} does not exist.`);
+    }
+
+    const typed = row as JoinedCellRow & { client_name: string; cell_period: string };
+    return { ...cellToDTO(typed), clientName: typed.client_name, period: typed.cell_period };
+  }
+
+  /**
    * Update one calendar cell. admin/manager only (route-gated; asserted here as
    * the third layer). Opens its own transaction so the write and its audit row
    * commit atomically. Returns the full updated cell (07-API-CONTRACT §1.1).

@@ -10,10 +10,28 @@ import type { CurrentUser } from '../../services/AttendanceService.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
-// ponytail: kept local rather than in @skaly/shared — one field, and the web
-// form (STEP 7) validates the same 2000-char cap inline. Move to shared if a
-// third consumer appears.
-const BotMessageSchema = z.object({ content: z.string().min(1).max(2000) });
+// ponytail: kept local rather than in @skaly/shared — the web panel validates the
+// 2000-char cap inline and posts `decision`/`confirmationId` as plain fields, so
+// this is still the only importing consumer. Move to shared if a third appears.
+//
+// `decision` is the confirmation gate (ADR-014 §1); `content` alongside it is only
+// the display string archived to the transcript ("Yes, go ahead"). When `decision`
+// is present the gate NEVER reads `content` — that is the whole point of the
+// structured field, and Turn2Body's precedence chain enforces it.
+const BotMessageSchema = z
+  .object({
+    content: z.string().min(1).max(2000),
+    confirmationId: z.string().uuid().optional(),
+    decision: z.enum(['confirm', 'cancel']).optional(),
+  })
+  .strict()
+  // A decision without the id it applies to is a malformed request, not a stale
+  // one. The server would resolve it to `stale_id` and answer politely, which is
+  // safe but hides a frontend bug — the buttons always bind both.
+  .refine((b) => b.decision === undefined || b.confirmationId !== undefined, {
+    message: 'confirmationId is required when decision is present.',
+    path: ['confirmationId'],
+  });
 
 const SessionViewSchema = z.object({
   sessionId: z.string().nullable(),
@@ -86,6 +104,10 @@ export default async function botRoutes(app: FastifyInstance) {
           role: user.role,
           userText: request.body.content,
           db: app.db,
+          // ADR-014: the client may send ONLY these two. Never the tool, never the
+          // arguments, never the version — those live in the server's pending record.
+          decision: request.body.decision,
+          confirmationId: request.body.confirmationId,
         })
         .catch((err) => logger.error({ err, staffId: user.staffId }, 'bot handleMessage rejected'));
 

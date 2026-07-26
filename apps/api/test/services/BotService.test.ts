@@ -3,6 +3,7 @@ import { Kysely, PostgresDialect } from 'kysely';
 import pg from 'pg';
 import { describe, test, expect, beforeAll, afterAll, afterEach } from 'vitest';
 
+import { makePending, PENDING_TTL_MS } from '../../src/lib/bot/confirmation.js';
 import { getShootScheduleTool } from '../../src/lib/bot/tools/grids.js';
 import { listTasksTool } from '../../src/lib/bot/tools/tasks.js';
 import { BotService, trimToTurns } from '../../src/services/BotService.js';
@@ -10,6 +11,7 @@ import { PermissionService } from '../../src/services/PermissionService.js';
 import { ShootPlannerService } from '../../src/services/ShootPlannerService.js';
 import { TaskService } from '../../src/services/TaskService.js';
 
+import type { PendingConfirmation } from '../../src/lib/bot/confirmation.js';
 import type { CurrentUser } from '../../src/services/AttendanceService.js';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { DB } from '@skaly/shared';
@@ -107,7 +109,7 @@ function mockAnthropic(): Anthropic {
 
 async function cleanup(): Promise<void> {
   await db.deleteFrom('messages').where('sender_id', '=', ADMIN).execute();
-  await redis.del(`bot:session:${ADMIN}`);
+  await redis.del(`bot:session:${ADMIN}`, `bot:pending:${ADMIN}`);
 }
 
 async function seedParity(): Promise<void> {
@@ -174,6 +176,77 @@ afterAll(async () => {
   await cleanupParity();
   await redis.quit();
   await db.destroy();
+});
+
+describe('BotService — pending confirmation store (ADR-014 §3)', () => {
+  const svc = (): BotService => new BotService({} as unknown as Anthropic, redis, mockIo([]));
+
+  const pending = (confirmationId: string): PendingConfirmation =>
+    makePending({
+      confirmationId,
+      toolName: 'update_task_status',
+      input: { taskId: 't1', status: 'Done' },
+      summary: { action: 'Mark task as Done', entity: 'Task', target: 'A task', changes: [] },
+    });
+
+  const A = '11111111-1111-4111-8111-111111111111';
+  const B = '22222222-2222-4222-8222-222222222222';
+
+  test('consumePending returns the record and clears it; a second call returns null', async () => {
+    const s = svc();
+    await s.setPending(ADMIN, pending(A));
+
+    expect((await s.consumePending(ADMIN))?.confirmationId).toBe(A);
+    // The consume-once guarantee: this is what makes a double-click safe.
+    expect(await s.consumePending(ADMIN)).toBeNull();
+    expect(await redis.exists(`bot:pending:${ADMIN}`)).toBe(0);
+  });
+
+  test('two concurrent consumers: exactly one gets the record (atomic GETDEL)', async () => {
+    const s = svc();
+    await s.setPending(ADMIN, pending(A));
+
+    // The real double-click. On a shared ioredis connection a GET-then-SET would
+    // hand the record to BOTH callers and fire the mutation twice.
+    const [first, second] = await Promise.all([s.consumePending(ADMIN), s.consumePending(ADMIN)]);
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+  });
+
+  test('setPending twice → only the second survives (single-pending rule)', async () => {
+    const s = svc();
+    await s.setPending(ADMIN, pending(A));
+    await s.setPending(ADMIN, pending(B));
+    expect((await s.consumePending(ADMIN))?.confirmationId).toBe(B);
+  });
+
+  test('clearPending removes it; peekPending leaves it in place', async () => {
+    const s = svc();
+    await s.setPending(ADMIN, pending(A));
+
+    expect((await s.peekPending(ADMIN))?.confirmationId).toBe(A);
+    expect((await s.peekPending(ADMIN))?.confirmationId).toBe(A); // still there
+
+    await s.clearPending(ADMIN);
+    expect(await s.peekPending(ADMIN)).toBeNull();
+  });
+
+  test('the Redis TTL outlives the 5-minute gate, so expiry stays reportable', async () => {
+    const s = svc();
+    await s.setPending(ADMIN, pending(A));
+    const ttl = await redis.ttl(`bot:pending:${ADMIN}`);
+    // A TTL of 5 minutes would delete the record at the same moment it expires,
+    // leaving "timed out" indistinguishable from "never existed".
+    expect(ttl).toBeGreaterThan(PENDING_TTL_MS / 1000);
+  });
+
+  test('the pending record lives outside the session blob, so clearing one keeps the other', async () => {
+    const s = svc();
+    await s.loadSession(ADMIN);
+    await s.setPending(ADMIN, pending(A));
+
+    await s.clearSession(ADMIN);
+    expect((await s.peekPending(ADMIN))?.confirmationId).toBe(A);
+  });
 });
 
 describe('BotService.handleMessage — list_tasks smoke (mocked Anthropic)', () => {
@@ -418,6 +491,18 @@ describe('buildSystemPrompt — TOOL ACCESS denial section', () => {
   test('keeps the out-of-scope carve-out, so "what is the weather" is not a permission refusal', () => {
     const prompt = svc.buildSystemPrompt('Asha', 'team_member', ['get_attendance']);
     expect(prompt).toMatch(/portal does not cover at all/);
+  });
+
+  test('the "no tool for it" line carries the TOOL ACCESS exception, but only when something is denied', () => {
+    // The two instructions compete, and the general one wins by default: it comes
+    // first and covers the same situation. The exception has to be attached WHERE
+    // that instruction is given, not restated louder further down.
+    const denied = svc.buildSystemPrompt('Asha', 'team_member', ['get_attendance']);
+    expect(denied).toMatch(/EXCEPTION: for the capabilities listed under TOOL ACCESS/);
+
+    // Nothing denied → no TOOL ACCESS section, so a reference to one would be a
+    // dangling pointer in the prompt.
+    expect(svc.buildSystemPrompt('Asha', 'admin', [])).not.toMatch(/EXCEPTION/);
   });
 
   /**

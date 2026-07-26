@@ -182,6 +182,77 @@ describe('POST /v1/bot/message — C-01 (202 ack only)', () => {
   });
 });
 
+describe('POST /v1/bot/message — the turn-2 fields (ADR-014)', () => {
+  const CONFIRMATION_ID = 'e3000000-0000-4000-8000-0000000000c1';
+
+  test('a decision + confirmationId still returns 202 — C-01 is unchanged', async () => {
+    asUser = authUser();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/bot/message',
+      headers: { authorization: 'Bearer turn2-token' },
+      payload: { content: 'Yes, go ahead', decision: 'confirm', confirmationId: CONFIRMATION_ID },
+    });
+    expect(res.statusCode).toBe(202);
+    expect(Object.keys(JSON.parse(res.payload).data).sort()).toEqual(['messageId', 'sessionId']);
+  });
+
+  test('a decision WITHOUT a confirmationId → 400', async () => {
+    // The server would resolve this to `stale_id` and answer politely, which is
+    // safe but hides a frontend bug — the buttons always bind both.
+    asUser = authUser();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/bot/message',
+      headers: { authorization: 'Bearer turn2b-token' },
+      payload: { content: 'yes', decision: 'confirm' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.payload).error.code).toBe('VALIDATION_ERROR');
+  });
+
+  test('a non-uuid confirmationId → 400', async () => {
+    asUser = authUser();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/bot/message',
+      headers: { authorization: 'Bearer turn2c-token' },
+      payload: { content: 'yes', decision: 'confirm', confirmationId: 'not-a-uuid' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  test('the schema is strict — the client may not smuggle a tool or its arguments', async () => {
+    // ADR-014's rule: the client may reference the pending record by id and may
+    // NEVER supply the tool, the input, or the version.
+    asUser = authUser();
+    for (const extra of [
+      { toolName: 'update_task_status' },
+      { input: { taskId: 'x', status: 'Done' } },
+      { expectedVersion: 1 },
+    ]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/bot/message',
+        headers: { authorization: 'Bearer strict-token' },
+        payload: { content: 'yes', decision: 'confirm', confirmationId: CONFIRMATION_ID, ...extra },
+      });
+      expect(res.statusCode, JSON.stringify(extra)).toBe(400);
+    }
+  });
+
+  test('an invalid decision value → 400', async () => {
+    asUser = authUser();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/bot/message',
+      headers: { authorization: 'Bearer turn2d-token' },
+      payload: { content: 'yes', decision: 'maybe', confirmationId: CONFIRMATION_ID },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 describe('GET /v1/bot/session/current — session shape ("H-01")', () => {
   test('no session → the null shape', async () => {
     asUser = authUser();

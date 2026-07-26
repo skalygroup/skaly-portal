@@ -5,12 +5,14 @@ import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from '
 import { format, parseISO } from 'date-fns';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronDown, ChevronRight, Paperclip, Plus } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { TaskAttachmentPanel } from './task-attachment-panel';
-import { AssigneeCell, ResultEditor, StatusCell, type SaveState } from './task-cells';
+import { AssigneeCell, ResultEditor, StatusCell } from './task-cells';
 import { DependencyBadge, PriorityBadge } from './task-chips';
 import { TaskCreatePanel } from './task-create-panel';
+import { useTaskSaveStore } from './task-save-state';
 import { useTaskGroups } from './use-task-groups';
 
 import type { Task } from './types';
@@ -28,8 +30,6 @@ const columnHelper = createColumnHelper<Task>();
 /** The edit surface threaded down to the cells (Step 7). */
 interface EditApi {
   staff: { id: string; name: string }[];
-  saveStates: Record<string, SaveState>;
-  shakeIds: Set<string>;
   canEditStatusResult: (t: Task) => boolean;
   canEditAssignees: boolean;
   onStatus: (task: Task, status: string) => void;
@@ -52,6 +52,8 @@ export function TasksGrid() {
   const { period } = useMonthContext();
   const queryClient = useQueryClient();
   const gridKey = useMemo(() => ['tasks', period] as const, [period]);
+  // A search result lands here as ?highlight={taskId} (APPFLOW §12).
+  const flashId = useHighlightFlash();
 
   const { data: tasks, isPending, isError, error, refetch } = useQuery({
     queryKey: gridKey,
@@ -83,9 +85,10 @@ export function TasksGrid() {
   // ── Per-cell transient UI state ─────────────────────────────────────────────
   const [createOpen, setCreateOpen] = useState(false);
   const [attachTaskId, setAttachTaskId] = useState<string | null>(null);
-  const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
-  const [shakeIds, setShakeIds] = useState<Set<string>>(new Set());
-  const setSave = useCallback((id: string, s: SaveState) => setSaveStates((p) => ({ ...p, [id]: s })), []);
+  // Save-dot and shake state live in a store the CELLS subscribe to, never in
+  // `edit` — see task-save-state.ts. As grid state they rebuilt the column memo
+  // and remounted every cell on each save and each shake.
+  const setSave = useTaskSaveStore((s) => s.setSave);
 
   const focusedColumnRef = useRef<string | null>(null);
   const focusHandlers = useCallback((col: string) => {
@@ -139,8 +142,9 @@ export function TasksGrid() {
       if (ctx?.snapshot) queryClient.setQueryData(gridKey, ctx.snapshot); // ADR-008: plain revert, no stale UI
       const res = handleMutationError(err);
       if (res.code === 'DEPENDENCY_UNRESOLVED') {
-        setShakeIds((p) => new Set(p).add(vars.task.id));
-        setTimeout(() => setShakeIds((p) => { const n = new Set(p); n.delete(vars.task.id); return n; }), 400);
+        const store = useTaskSaveStore.getState();
+        store.addShake(vars.task.id);
+        setTimeout(() => useTaskSaveStore.getState().removeShake(vars.task.id), 400);
       }
       failClear('status');
     },
@@ -208,8 +212,6 @@ export function TasksGrid() {
   const edit: EditApi = useMemo(
     () => ({
       staff,
-      saveStates,
-      shakeIds,
       canEditStatusResult,
       canEditAssignees: isManager && !locked,
       onStatus: (task, status) => setStatus({ task, status }),
@@ -219,7 +221,7 @@ export function TasksGrid() {
       onOpenAttachments: (task) => setAttachTaskId(task.id),
       focusHandlers,
     }),
-    // Two things are deliberately absent here.
+    // Three things are deliberately absent here.
     //
     // activeColumnId: the cells subscribe to the highlight store themselves.
     // Listing it rebuilt `edit`, and the column defs closing over it, the moment
@@ -229,10 +231,18 @@ export function TasksGrid() {
     // holding it open and the menu never appeared. The grid's first click did
     // nothing, every time.
     //
+    // saveStates / shakeIds: the SAME bug, one sprint later and one beat behind.
+    // A refused status change shakes the row and un-shakes it 400ms afterwards,
+    // and each of those rebuilt the columns — so a user retrying inside that
+    // window had the dropdown close under their finger. Deterministic on webkit
+    // (found in Sprint 9 STEP 12), invisible on chromium only because its clicks
+    // were faster than the timer. Both live in useTaskSaveStore now, subscribed
+    // to per cell.
+    //
     // The mutation objects: useMutation returns a NEW result object on every
     // render, which had the same effect on every render rather than just on
     // focus. `.mutate` is referentially stable, so the memo actually holds.
-    [staff, saveStates, shakeIds, canEditStatusResult, isManager, locked, setStatus, saveResult, assign, focusHandlers],
+    [staff, canEditStatusResult, isManager, locked, setStatus, saveResult, assign, focusHandlers],
   );
 
   const groups = useMemo(() => {
@@ -297,7 +307,7 @@ export function TasksGrid() {
       ) : (
         <div className="space-y-3">
           {groups.map((g) => (
-            <TaskGroup key={g.date} date={g.date} tasks={g.tasks} edit={edit} />
+            <TaskGroup key={g.date} date={g.date} tasks={g.tasks} edit={edit} flashId={flashId} />
           ))}
         </div>
       )}
@@ -318,7 +328,10 @@ export function TasksGrid() {
   );
 }
 
-function TaskGroup({ date, tasks, edit }: { date: string; tasks: Task[]; edit: EditApi }) {
+/** `flashId` rides as a plain prop, NOT on `edit`: adding it to that memo would
+ *  rebuild the column defs when a flash starts and again when it ends, which is
+ *  the cell-remount hazard documented on the memo below. */
+function TaskGroup({ date, tasks, edit, flashId }: { date: string; tasks: Task[]; edit: EditApi; flashId: string | null }) {
   const collapsed = useTaskGroups((s) => s.collapsed[date] ?? false);
   const toggle = useTaskGroups((s) => s.toggle);
   return (
@@ -328,12 +341,12 @@ function TaskGroup({ date, tasks, edit }: { date: string; tasks: Task[]; edit: E
         <span className="text-sm font-semibold" style={{ ...mono, color: 'var(--text-primary)' }}>{format(parseISO(date), 'EEE dd MMM')}</span>
         <span className="text-xs" style={{ ...mono, color: 'var(--text-muted)' }}>{tasks.length}</span>
       </button>
-      {!collapsed ? <TaskGroupTable tasks={tasks} edit={edit} /> : null}
+      {!collapsed ? <TaskGroupTable tasks={tasks} edit={edit} flashId={flashId} /> : null}
     </section>
   );
 }
 
-function TaskGroupTable({ tasks, edit }: { tasks: Task[]; edit: EditApi }) {
+function TaskGroupTable({ tasks, edit, flashId }: { tasks: Task[]; edit: EditApi; flashId: string | null }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const columns = useMemo(
@@ -370,7 +383,6 @@ function TaskGroupTable({ tasks, edit }: { tasks: Task[]; edit: EditApi }) {
               task={row.original}
               editable={edit.canEditStatusResult(row.original)}
               columnId="status"
-              shaking={edit.shakeIds.has(row.original.id)}
               onChange={(s) => edit.onStatus(row.original, s)}
               onFocusColumn={fh.onFocus}
               onBlurColumn={fh.onBlur}
@@ -422,7 +434,7 @@ function TaskGroupTable({ tasks, edit }: { tasks: Task[]; edit: EditApi }) {
             const t = row.original;
             const isOpen = expandedId === t.id;
             return (
-              <FragmentRow key={row.id} open={isOpen} colCount={colCount} task={t} edit={edit} onToggle={() => setExpandedId((cur) => (cur === t.id ? null : t.id))}>
+              <FragmentRow key={row.id} open={isOpen} colCount={colCount} task={t} edit={edit} flash={t.id === flashId} onToggle={() => setExpandedId((cur) => (cur === t.id ? null : t.id))}>
                 {row.getVisibleCells().map((cell, i) => (
                   <td key={cell.id} role="gridcell" aria-colindex={i + 1} className="px-3 py-2.5 align-middle" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -437,11 +449,53 @@ function TaskGroupTable({ tasks, edit }: { tasks: Task[]; edit: EditApi }) {
   );
 }
 
-function FragmentRow({ open, colCount, task, edit, onToggle, children }: { open: boolean; colCount: number; task: Task; edit: EditApi; onToggle: () => void; children: React.ReactNode }) {
+/**
+ * `?highlight={taskId}` (APPFLOW §12) — how a search result lands on its row.
+ *
+ * The param is stripped as soon as it is read, so a refresh (or a back/forward)
+ * doesn't re-flash a row the user has already been shown.
+ *
+ * The 2s duration is the CSS animation's, not a timer's, deliberately: the rows
+ * only exist once the tasks query resolves, so a timer started here would burn
+ * its 2s while the grid was still loading and the user would land on a row that
+ * had already finished flashing. The class is applied when the row mounts, which
+ * is when the animation runs.
+ */
+function useHighlightFlash(): string | null {
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const [flashId, setFlashId] = useState<string | null>(null);
+
+  const highlight = searchParams.get('highlight');
+  useEffect(() => {
+    if (!highlight) return;
+    setFlashId(highlight);
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('highlight');
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    // `searchParams` changes when we strip the param — keying off `highlight`
+    // alone is what stops this re-running with a null value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlight]);
+
+  return flashId;
+}
+
+function FragmentRow({ open, colCount, task, edit, flash, onToggle, children }: { open: boolean; colCount: number; task: Task; edit: EditApi; flash: boolean; onToggle: () => void; children: React.ReactNode }) {
   const fh = edit.focusHandlers('result');
+  const rowRef = useRef<HTMLTableRowElement>(null);
+
+  useEffect(() => {
+    if (flash) rowRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [flash]);
+
   return (
     <>
       <tr
+        ref={rowRef}
         role="row"
         tabIndex={0}
         aria-expanded={open}
@@ -456,7 +510,7 @@ function FragmentRow({ open, colCount, task, edit, onToggle, children }: { open:
             onToggle();
           }
         }}
-        className="cursor-pointer focus:outline-none"
+        className={`cursor-pointer focus:outline-none${flash ? ' sk-row-flash' : ''}`}
         style={{ background: open ? 'var(--bg-hover)' : undefined }}
       >
         {children}
@@ -477,7 +531,6 @@ function FragmentRow({ open, colCount, task, edit, onToggle, children }: { open:
                       task={task}
                       editable={edit.canEditStatusResult(task)}
                       columnId="result"
-                      saveState={edit.saveStates[task.id]}
                       onSave={(r) => edit.onResultSave(task, r)}
                       onFocusColumn={fh.onFocus}
                       onBlurColumn={fh.onBlur}

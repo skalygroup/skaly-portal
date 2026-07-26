@@ -1,3 +1,5 @@
+import { SearchPalette } from '@/components/shared/search-palette';
+
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
@@ -23,6 +25,10 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
       {/* Portal content — visible on md+ screens */}
       <div className="hidden md:block min-h-screen">
         {children}
+        {/* Mounted ONCE here, not per page: one CMD+K listener, every route
+            (FR-SEARCH-01). Inside the md+ branch — the palette is desktop-only,
+            like the rest of the portal. */}
+        <SearchPalette />
       </div>
     </>
   );

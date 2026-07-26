@@ -25,6 +25,7 @@ const periodField = z
 
 export const getHolidayListTool = defineTool({
   name: 'get_holiday_list',
+  family: 'holidays.read',
   capability: 'viewing the holiday list',
   description: 'List the holidays configured for a month (defaults to the current month).',
   inputSchema: z.object({ period: periodField }),
@@ -46,6 +47,7 @@ export const getHolidayListTool = defineTool({
 
 export const getClientSummaryTool = defineTool({
   name: 'get_client_summary',
+  family: 'clients.read',
   capability: 'viewing the client list',
   description: 'Summarise the active clients (id and name).',
   inputSchema: z.object({ includeInactive: z.boolean().optional() }),
@@ -64,6 +66,7 @@ export const getClientSummaryTool = defineTool({
 
 export const getAuditLogTool = defineTool({
   name: 'get_audit_log',
+  family: 'audit.read',
   capability: 'viewing the audit log',
   description: 'Read the most recent audit-log entries (admin only). Optionally filter by table name.',
   inputSchema: z.object({ limit: z.number().int().min(1).max(100).optional(), tableName: z.string().optional() }),

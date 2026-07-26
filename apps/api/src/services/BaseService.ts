@@ -50,8 +50,18 @@ const loose = (trx: Executor): Kysely<any> => trx as unknown as Kysely<any>;
  * Guard: refuse any write against a locked (or non-existent) month.
  *   - no months row for `period` → PERIOD_NOT_FOUND (404)
  *   - months.locked = true       → PERIOD_LOCKED (423)
+ *
+ * `lockedMessage` overrides the default 423 copy for callers whose refusal needs
+ * explaining rather than restating — client onboarding is not an edit of a
+ * period-scoped record, so "Period X is locked" reads as a non-sequitur there
+ * (ADR-017). Every caller still routes through this one function, so a grep for
+ * `assertPeriodNotLocked` remains the complete list of lock-guarded writes.
  */
-export async function assertPeriodNotLocked(period: string, trx: Executor): Promise<void> {
+export async function assertPeriodNotLocked(
+  period: string,
+  trx: Executor,
+  lockedMessage?: string,
+): Promise<void> {
   const row = await trx
     .selectFrom('months')
     .select('locked')
@@ -62,7 +72,7 @@ export async function assertPeriodNotLocked(period: string, trx: Executor): Prom
     throw new AppError('PERIOD_NOT_FOUND', `Period ${period} does not exist.`);
   }
   if (row.locked) {
-    throw new AppError('PERIOD_LOCKED', `Period ${period} is locked.`);
+    throw new AppError('PERIOD_LOCKED', lockedMessage ?? `Period ${period} is locked.`);
   }
 }
 

@@ -5,9 +5,10 @@
  *   load Redis session → build the system prompt (IST date + period + role + name
  *   + anti-hallucination) → filter the 11 query tools by resolvePermission →
  *   stream from Anthropic, emitting `bot:token { sessionId, delta }` per delta on
- *   /ws/notify room user:{staffId} → if the model asked for tools, run each via
- *   its isolating service method with the JWT currentUser, then a SECOND stream →
- *   a terminal `bot:message { sessionId, content, card?, toolsUsed? }`.
+ *   /ws/notify room user:{staffId} → while the model asks for tools, run each via
+ *   its isolating service method with the JWT currentUser and stream again, up to
+ *   MAX_TOOL_ROUNDS (ADR-018 — Sprint 8's fixed two-phase loop poisoned the
+ *   session) → a terminal `bot:message { sessionId, content, card?, toolsUsed? }`.
  *
  * Reconciliations honoured here: two socket events, never one overloaded (#3);
  * tools reuse isolating services with currentUser (#4); friendly errors only,
@@ -17,13 +18,18 @@ import { randomUUID } from 'node:crypto';
 
 import { currentIstDate, currentIstPeriod } from './BaseService.js';
 import { PermissionService } from './PermissionService.js';
+import { withActorSource } from '../lib/bot/actor-context.js';
+import { buildSummary, makePending, resolveTurn2 } from '../lib/bot/confirmation.js';
+import { botErrorCopy } from '../lib/bot/error-copy.js';
 import { anthropicToolDefs, capabilityPhrases, getBotTool } from '../lib/bot/tools/registry.js';
 import { env } from '../lib/env.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 
 import type { CurrentUser } from './AttendanceService.js';
-import type { BotCard } from '../lib/bot/tools/types.js';
+import type { PendingConfirmation } from '../lib/bot/confirmation.js';
+import type { ErrorCopyContext } from '../lib/bot/error-copy.js';
+import type { BotCard, BotTool } from '../lib/bot/tools/types.js';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { DB } from '@skaly/shared';
 import type { Role } from '@skaly/shared/schemas/auth';
@@ -34,6 +40,14 @@ import type { Server } from 'socket.io';
 const SESSION_TTL_SECONDS = 12 * 60 * 60; // 12h (TRD §9.4)
 const MAX_TURNS = 50; // 50-turn cap, drop oldest (TRD §9.4)
 const MAX_TOKENS = 1024;
+/** Janitor only — the gate is the record's own 5-minute `expiresAt` (ADR-014). */
+const PENDING_JANITOR_TTL_SECONDS = 15 * 60;
+/**
+ * Tool rounds per user turn. Look-up-then-act needs two; the rest is headroom for
+ * a retry after a bad argument. The cap is what keeps this a bounded loop rather
+ * than an agent, and it bounds cost and latency with it.
+ */
+const MAX_TOOL_ROUNDS = 4;
 
 // Friendly copy only — never a code or stack (Error-Handling §6, reconciliation #10).
 //
@@ -87,7 +101,31 @@ export interface HandleMessageArgs {
   role: Role;
   userText: string;
   db: Kysely<DB>;
+  /** Turn-2 consent from the inline buttons (ADR-014 §1). When `decision` is
+   *  present the gate reads it and NEVER `userText` — that string is only the
+   *  display line archived to the transcript. */
+  decision?: 'confirm' | 'cancel';
+  confirmationId?: string;
 }
+
+/** APPFLOW §9 turn-2 copy. Deterministic — turn 2 makes no model call, so these
+ *  are the literal strings the user sees. */
+const CANCELLED_COPY = 'Okay, no changes made.';
+const EXPIRED_COPY = 'That confirmation timed out — want me to set it up again?';
+const STALE_ID_COPY = "I've already handled that one. What would you like to do?";
+const NOT_FOUND_COPY = "I couldn't find that record. Could you tell me which one you mean?";
+
+/**
+ * Fed back for a mutation `tool_use` block at turn 1 INSTEAD of executing it.
+ *
+ * Mandatory, not cosmetic: the Anthropic API rejects any request where a
+ * `tool_use` block has no matching `tool_result` in the following turn. Omitting
+ * it produces a 400 on the user's NEXT message, which reads as an unrelated bug.
+ */
+const AWAITING_CONFIRMATION_RESULT = [
+  'AWAITING_USER_CONFIRMATION. A summary has been presented to the user for approval.',
+  'Do not call this tool again. Ask the user to confirm, briefly.',
+].join('\n');
 
 /** Prod uses Sonnet for tool-call accuracy; dev/test uses Haiku for cost (TRD §9). */
 function botModel(): string {
@@ -99,6 +137,68 @@ function botModel(): string {
  *  user message keeps every tool exchange intact and a valid user-first history
  *  (Anthropic requires the first message to be role:'user' — slicing after the
  *  dropped turn would orphan its assistant reply and start with 'assistant'). */
+/**
+ * Enforce `tool_use` ⇄ `tool_result` pairing in BOTH directions, keyed on
+ * `tool_use_id`: drop a `tool_use` with no `tool_result` in the following message,
+ * and drop a `tool_result` whose `tool_use` is not there (or was just dropped).
+ *
+ * The Anthropic API rejects a transcript containing either, so persisting one
+ * poisons the session permanently: every later message 400s and the user sees
+ * "I'm having trouble connecting" until they start a new conversation. Sprint 8 did
+ * exactly that whenever its second stream asked for another tool.
+ *
+ * Runs at BOTH boundaries, deliberately (ADR-018 §3):
+ *   - persist, so a bad transcript is never stored; and
+ *   - READ, before the first API call of every message, so a session poisoned by an
+ *     older build heals itself on the user's next message instead of staying broken
+ *     for its whole 12h TTL.
+ * Two choke points every path already passes through, rather than auditing each
+ * branch for a rule it could quietly stop following. A message left with no content
+ * at all is dropped entirely.
+ */
+export function stripDanglingToolUse(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  const out: Anthropic.MessageParam[] = [];
+  /** tool_use ids we KEPT — a tool_result is an orphan unless its id is in here. */
+  const issued = new Set<string>();
+
+  for (const [i, m] of messages.entries()) {
+    if (!Array.isArray(m.content)) {
+      out.push(m);
+      continue;
+    }
+
+    const next = messages[i + 1];
+    const kept = m.content.filter((b) => {
+      const block = b as { type?: string; id?: string; tool_use_id?: string };
+
+      if (block.type === 'tool_use') {
+        const answered =
+          Array.isArray(next?.content) &&
+          next.content.some(
+            (r) =>
+              (r as { type?: string }).type === 'tool_result' &&
+              (r as { tool_use_id?: string }).tool_use_id === block.id,
+          );
+        if (answered && block.id !== undefined) issued.add(block.id);
+        return answered;
+      }
+      if (block.type === 'tool_result') {
+        return block.tool_use_id !== undefined && issued.has(block.tool_use_id);
+      }
+      return true;
+    });
+
+    if (kept.length === m.content.length) {
+      out.push(m);
+    } else if (kept.length > 0) {
+      out.push({ ...m, content: kept });
+    }
+    // else: nothing but unpaired blocks — drop the message.
+  }
+
+  return out;
+}
+
 export function trimToTurns(messages: Anthropic.MessageParam[], maxTurns: number): Anthropic.MessageParam[] {
   let userTurns = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -125,6 +225,57 @@ export class BotService {
 
   private sessionKey(staffId: string): string {
     return `bot:session:${staffId}`;
+  }
+
+  // ── Pending confirmation (ADR-014 §3) ─────────────────────────────────────
+  //
+  // Its own key, deliberately, and NOT a field inside the session blob.
+  // `consumePending` has to be atomic or a double-click fires an irreversible
+  // write twice — and inside the blob it cannot be:
+  //   - WATCH/MULTI is per-CONNECTION, and this app shares one ioredis client, so
+  //     two concurrent consumers on the same connection both pass the CAS.
+  //   - a Lua script would have to cjson-decode/encode the whole session, and
+  //     cjson turns an empty `messages: []` into `{}` — corrupting the transcript
+  //     to protect the pending record.
+  // A dedicated key makes the consume a single atomic GETDEL on a shared
+  // connection, which is exactly the primitive this needs.
+  private pendingKey(staffId: string): string {
+    return `bot:pending:${staffId}`;
+  }
+
+  /**
+   * Store the turn-1 record, replacing any previous one (single-pending rule).
+   *
+   * The Redis TTL is deliberately LONGER than the record's own 5-minute
+   * `expiresAt`: expiry is decided on read so an expired confirmation can be
+   * reported as "that timed out" instead of being indistinguishable from one that
+   * never existed. The TTL is only a janitor for abandoned records.
+   */
+  async setPending(staffId: string, pending: PendingConfirmation): Promise<void> {
+    await this.redis.set(
+      this.pendingKey(staffId),
+      JSON.stringify(pending),
+      'EX',
+      PENDING_JANITOR_TTL_SECONDS,
+    );
+  }
+
+  /** Read AND clear in one atomic step, before execution — so a double-click
+   *  finds nothing the second time. Returns null when there is none. */
+  async consumePending(staffId: string): Promise<PendingConfirmation | null> {
+    const raw = await this.redis.getdel(this.pendingKey(staffId));
+    return raw ? (JSON.parse(raw) as PendingConfirmation) : null;
+  }
+
+  /** Peek without consuming — for resolving intent before deciding to execute. */
+  async peekPending(staffId: string): Promise<PendingConfirmation | null> {
+    const raw = await this.redis.get(this.pendingKey(staffId));
+    return raw ? (JSON.parse(raw) as PendingConfirmation) : null;
+  }
+
+  /** Cancel, expiry, non-affirmative, and replacement all clear it. */
+  async clearPending(staffId: string): Promise<void> {
+    await this.redis.del(this.pendingKey(staffId));
   }
 
   /** Load the Redis session, or create + persist a new one so its sessionId is
@@ -162,12 +313,200 @@ export class BotService {
     this.io.of('/ws/notify').to(`user:${staffId}`).emit(event, payload);
   }
 
-  async handleMessage({ session, staffId, role, userText, db }: HandleMessageArgs): Promise<void> {
+  /**
+   * The ONE way a terminal turn leaves this service: persist, THEN emit.
+   *
+   * Same discipline as NotificationService (Sprint 2). A client that was
+   * disconnected when the socket fired recovers the turn from
+   * GET /v1/bot/session/current — but only if it was written first. Emitting first
+   * loses the turn for exactly the user who most needs it.
+   */
+  private async finalise(args: {
+    staffId: string;
+    sessionId: string;
+    turnCount: number;
+    messages: Anthropic.MessageParam[];
+    content: string;
+    card?: BotCard;
+    toolsUsed?: string[];
+    db: Kysely<DB>;
+  }): Promise<void> {
+    const { staffId, sessionId, turnCount, messages, content, card, toolsUsed = [], db } = args;
+
+    // `messages` is persisted exactly as given — the caller owns the transcript
+    // shape. The tool-loop path already ends with the assistant's blocks; the
+    // turn-2 paths append their own server-rendered line.
+    await this.persistSession(staffId, sessionId, turnCount, messages).catch((err) =>
+      logger.error({ err, staffId }, 'bot session persist failed'),
+    );
+
+    this.emit(staffId, 'bot:message', { sessionId, content, card, toolsUsed });
+
+    await this.archiveBotMessage(staffId, content, db).catch((err) =>
+      logger.error({ err, staffId }, 'bot message archive failed'),
+    );
+  }
+
+  /**
+   * The turn-2 branch. Returns true when it handled the message (so handleMessage
+   * returns without ever touching Anthropic), false to fall through to the normal
+   * Sprint 8 flow.
+   *
+   * Every outcome here is server-rendered. The five resolutions come from
+   * `resolveTurn2`, which is pure and unit-tested per branch.
+   */
+  private async handleTurn2(args: HandleMessageArgs, currentUser: CurrentUser): Promise<boolean> {
+    const { session, staffId, userText, db, decision, confirmationId } = args;
+    const { sessionId } = session;
+
+    const pending = await this.peekPending(staffId);
+    // Fast path: no pending record and no button press is the overwhelmingly common
+    // case — don't make every ordinary question pay for the machinery.
+    if (!pending && !decision) return false;
+
+    const resolution = resolveTurn2(pending, { content: userText, confirmationId, decision });
+    const messages: Anthropic.MessageParam[] = [
+      ...session.messages,
+      { role: 'user', content: userText },
+    ];
+    // Turn 2 produces no model output, so the archived assistant turn IS the copy.
+    const finalise = (content: string, card?: BotCard, toolsUsed?: string[]): Promise<void> =>
+      this.finalise({
+        staffId,
+        sessionId,
+        turnCount: session.turnCount,
+        messages: [...messages, { role: 'assistant', content }],
+        content,
+        card,
+        toolsUsed,
+        db,
+      });
+
+    switch (resolution.kind) {
+      case 'cancelled':
+        await this.clearPending(staffId);
+        await finalise(CANCELLED_COPY);
+        return true;
+
+      case 'expired':
+        await this.clearPending(staffId);
+        await finalise(EXPIRED_COPY);
+        return true;
+
+      case 'stale_id':
+        await finalise(STALE_ID_COPY);
+        return true;
+
+      case 'none':
+        // A pending confirmation does NOT survive an unrelated message. This is the
+        // path a qualified "yes, but make it Friday" takes: the summary the user
+        // consented to no longer matches what they want, so it is discarded and
+        // re-planned as a fresh turn rather than executed.
+        await this.clearPending(staffId);
+        return false;
+
+      case 'execute':
+        await this.executeConfirmed(resolution.pending, args, currentUser, messages, finalise);
+        return true;
+    }
+  }
+
+  /**
+   * Execute a confirmed mutation. Consume first, then re-validate, then write.
+   */
+  private async executeConfirmed(
+    resolved: PendingConfirmation,
+    args: HandleMessageArgs,
+    currentUser: CurrentUser,
+    _messages: Anthropic.MessageParam[],
+    finalise: (content: string, card?: BotCard, toolsUsed?: string[]) => Promise<void>,
+  ): Promise<void> {
+    const { staffId, role, db } = args;
+
+    // CONSUME BEFORE EXECUTING — the whole point of consume-once. An atomic GETDEL,
+    // so of two concurrent double-clicks only one gets a record; the loser sees null
+    // and is told it has already been handled rather than firing the write twice.
+    const pending = await this.consumePending(staffId);
+    if (!pending || pending.confirmationId !== resolved.confirmationId) {
+      await finalise(STALE_ID_COPY);
+      return;
+    }
+
+    const tool = getBotTool(pending.toolName);
+    if (!tool) {
+      logger.error({ staffId, tool: pending.toolName }, 'confirmed tool no longer in registry');
+      await finalise(botErrorCopy(null));
+      return;
+    }
+
+    // RE-RESOLVE THE PERMISSION (ADR-014 §6). Five minutes is long enough for an
+    // admin to revoke a bot tool, and nothing else on this path would notice: the
+    // services assert ROLE, not the per-user bot.tool.* override.
+    const { permitted } = await this.permissions.getPermittedBotTools(staffId, role, db);
+    if (!permitted.includes(pending.toolName)) {
+      // The summary's action reads as a verb phrase ("mark task as done"), which fits
+      // the §6 template. `capability` is a gerund built for the denial LIST
+      // ("changing a task status") and produces "permission to changing…" here.
+      await finalise(
+        botErrorCopy({ code: 'BOT_TOOL_DENIED' }, { action: pending.summary.action.toLowerCase() }),
+      );
+      return;
+    }
+
+    // The period lock is deliberately NOT re-asserted here. Every service whose
+    // target is period-scoped calls assertPeriodNotLocked INSIDE its own
+    // transaction, which is strictly stronger than a check out here: atomic with
+    // the write, and reading the real period rather than the summary's display
+    // string. A duplicate pre-check would only add a race it cannot close.
+    try {
+      // The write, and the ONLY place a mutation handler is ever called.
+      const result = await withActorSource('bot', () =>
+        tool.handler(pending.input, currentUser, db, pending.expectedVersion),
+      );
+
+      // Server-rendered outcome — the summary the user consented to, restated. No
+      // model call produced this sentence.
+      const content = `Done — ${pending.summary.action}: ${pending.summary.target}.`;
+      await finalise(
+        content,
+        { type: 'mutation_result', summary: pending.summary, link: result.link },
+        [pending.toolName],
+      );
+    } catch (err) {
+      logger.error({ err, staffId, tool: pending.toolName }, 'confirmed bot mutation failed');
+      await finalise(botErrorCopy(err, this.errorContext(err, pending)));
+    }
+  }
+
+  /** Interpolation for the error copy, pulled from the error's own details rather
+   *  than guessed — STALE_DATA carries who moved the record, and saying their name
+   *  is the difference between a dead end and a next step. */
+  private errorContext(err: unknown, pending: PendingConfirmation): ErrorCopyContext {
+    const details = (err as { details?: Record<string, unknown> } | null)?.details;
+    const updatedBy = (details?.updatedBy as { name?: string } | null | undefined)?.name;
+    const dependency = (details?.dependencyTask as { description?: string } | null | undefined)
+      ?.description;
+    return {
+      month: pending.summary.period,
+      action: pending.summary.action.toLowerCase(),
+      updatedBy: updatedBy ?? undefined,
+      dependency: dependency ?? undefined,
+    };
+  }
+
+  async handleMessage(args: HandleMessageArgs): Promise<void> {
+    const { session, staffId, role, userText, db } = args;
     const { sessionId } = session;
     let fullText = '';
 
     try {
       const currentUser: CurrentUser = { staffId, role };
+
+      // ── TURN 2 RUNS FIRST, before anything else (ADR-014 §5) ─────────────
+      // Zero model calls on any branch below. A confirmed change must not be
+      // narrated by a probabilistic system, and it saves a full round trip.
+      if (await this.handleTurn2(args, currentUser)) return;
+
       const name = await this.staffName(staffId, db);
       // Only `permitted` reaches the model; `denied` never becomes a tool def —
       // it goes into the prompt so the refusal is our copy, not the model's
@@ -180,48 +519,120 @@ export class BotService {
       const tools = anthropicToolDefs(permittedNames);
       const system = this.buildSystemPrompt(name, role, denied);
 
-      const messages: Anthropic.MessageParam[] = [...session.messages, { role: 'user', content: userText }];
+      // Sanitise the REPLAYED history, not just what we are about to store: a
+      // session poisoned before this fix shipped would otherwise 400 on every
+      // message until its TTL expired (ADR-018 §3). Every later call in the loop
+      // builds on this array, so one pass here covers all of them.
+      const messages: Anthropic.MessageParam[] = [
+        ...stripDanglingToolUse(session.messages),
+        { role: 'user', content: userText },
+      ];
 
       const onText = (delta: string): void => {
         fullText += delta;
         this.emit(staffId, 'bot:token', { sessionId, delta });
       };
 
-      // ── Phase 1 ──────────────────────────────────────────────────────────
-      const first = await this.stream(system, tools, messages, onText);
-      messages.push({ role: 'assistant', content: first.content });
-
       let card: BotCard | undefined;
       const toolsUsed: string[] = [];
-      const toolBlocks = first.content.filter(
-        (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
-      );
 
-      // ── Phase 2 (only if the model asked for tools) ──────────────────────
-      if (first.stop_reason === 'tool_use' && toolBlocks.length > 0) {
+      // ── The tool loop ────────────────────────────────────────────────────
+      //
+      // BOUNDED, not fixed at two phases. Sprint 8 ran exactly stream → tools →
+      // stream, which had two consequences found by driving the real UI:
+      //
+      //   1. If the SECOND stream also returned a tool_use, it was persisted with
+      //      no matching tool_result. The Anthropic API rejects that, so every
+      //      later message in the session 400'd — surfacing as "I'm having trouble
+      //      connecting" forever, until the user started a new conversation. The
+      //      session was permanently poisoned by one ordinary retry.
+      //   2. A mutation was unreachable by natural language. The system prompt
+      //      tells the model to look an id up first, which spends round 1 — and
+      //      there was no round 2 to act in. It only worked if the user already
+      //      knew the uuid.
+      //
+      // The cap is what keeps this a loop and not an agent: a handful of rounds is
+      // ample for look-up-then-act, and it bounds both cost and latency.
+      let staged = false; // a confirmation was staged — see below
+      let capped = true; // still true only if every round asked for another tool
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const reply = await this.stream(system, tools, messages, onText);
+        messages.push({ role: 'assistant', content: reply.content });
+
+        const toolBlocks = reply.content.filter(
+          (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+        );
+        if (reply.stop_reason !== 'tool_use' || toolBlocks.length === 0) {
+          capped = false;
+          break;
+        }
+
+        // Every tool_use gets a tool_result in the very next message — including
+        // the synthetic one the confirmation interceptor returns. That invariant is
+        // the whole fix, and it now holds on every round rather than only the first.
         const results: Anthropic.ToolResultBlockParam[] = [];
         for (const block of toolBlocks) {
           const { toolResult, cardOut, used } = await this.runTool(block, permittedNames, currentUser, db);
           results.push(toolResult);
           if (used) toolsUsed.push(block.name);
-          if (cardOut) card = cardOut; // multiple tools → the last card wins (documented)
+          if (cardOut) {
+            card = cardOut; // multiple tools → the last card wins (documented)
+            if (cardOut.type === 'confirmation') staged = true;
+          }
         }
         messages.push({ role: 'user', content: results });
 
-        const second = await this.stream(system, tools, messages, onText);
-        messages.push({ role: 'assistant', content: second.content });
+        if (staged) {
+          // A pending confirmation exists. Take ONE more stream so the model asks
+          // the question conversationally, then stop unconditionally: continuing
+          // would let it stage a second mutation in the same turn, and the
+          // single-pending rule would silently discard the one the user is about to
+          // be shown.
+          const ask = await this.stream(system, tools, messages, onText);
+          messages.push({ role: 'assistant', content: ask.content });
+          // If it reached for another tool anyway, answer that block rather than
+          // leaving it dangling — the 400 above is exactly what we are fixing.
+          const dangling = ask.content.filter(
+            (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+          );
+          if (dangling.length > 0) {
+            messages.push({
+              role: 'user',
+              content: dangling.map((b) => ({
+                type: 'tool_result' as const,
+                tool_use_id: b.id,
+                content: AWAITING_CONFIRMATION_RESULT,
+                is_error: false,
+              })),
+            });
+          }
+          capped = false;
+          break;
+        }
       }
 
-      // ── Terminal message — the render finalises once ─────────────────────
-      this.emit(staffId, 'bot:message', { sessionId, content: fullText, card, toolsUsed });
+      // Cap hit: the model still wanted tools. Finalise with whatever it streamed
+      // plus the friendly copy — the same graceful finalisation the mid-stream
+      // failure path uses (11-THIRD-PARTY §3.4). NOT another stream: a throw here,
+      // or a retry that duplicates already-streamed text, reads to the user as
+      // exactly the "trouble connecting" bug this loop was rewritten to fix.
+      if (capped) {
+        fullText = fullText ? `${fullText}\n\n${GENERIC_TOOL_ERROR_COPY}` : GENERIC_TOOL_ERROR_COPY;
+      }
 
-      // Best-effort persistence — a failure here must not fire the error copy.
-      await this.persistSession(staffId, sessionId, session.turnCount, messages).catch((err) =>
-        logger.error({ err, staffId }, 'bot session persist failed'),
-      );
-      await this.archiveBotMessage(staffId, fullText, db).catch((err) =>
-        logger.error({ err, staffId }, 'bot message archive failed'),
-      );
+      // ── Terminal message — persist, THEN emit (see finalise) ─────────────
+      // The assistant's tool blocks are already in `messages`; finalise appends the
+      // conversational text, so the transcript keeps both.
+      await this.finalise({
+        staffId,
+        sessionId,
+        turnCount: session.turnCount,
+        messages,
+        content: fullText,
+        card,
+        toolsUsed,
+        db,
+      });
     } catch (err) {
       // Anthropic unreachable after the SDK's built-in 429/529 retries, or a
       // mid-stream failure. Mid-stream is NOT retryable (a restart would duplicate
@@ -231,6 +642,68 @@ export class BotService {
       const content = fullText ? `${fullText}\n\n${ANTHROPIC_ERROR_COPY}` : ANTHROPIC_ERROR_COPY;
       this.emit(staffId, 'bot:message', { sessionId, content, toolsUsed: [] });
     }
+  }
+
+  /**
+   * Turn 1 for a mutation tool: read the target, render the summary, store ONE
+   * pending record, and hand the model a synthetic tool_result so it asks the
+   * question conversationally. The tool is not executed.
+   */
+  private async prepareConfirmation(
+    tool: BotTool,
+    input: Record<string, unknown>,
+    currentUser: CurrentUser,
+    db: Kysely<DB>,
+    mk: (content: string, isError?: boolean) => Anthropic.ToolResultBlockParam,
+  ): Promise<{ toolResult: Anthropic.ToolResultBlockParam; cardOut?: BotCard; used: boolean }> {
+    if (!tool.readCurrent || !tool.summary) {
+      // Unreachable via defineMutationTool, which requires both. Refuse rather than
+      // execute — a mutation tool that cannot describe itself must not run.
+      logger.error({ tool: tool.name }, 'mutation tool missing readCurrent/summary');
+      return { toolResult: mk(botErrorCopy(null), true), used: false };
+    }
+
+    let current;
+    try {
+      // The anti-hallucination gate. A made-up id 404s HERE, so no pending record
+      // is ever created for a record that does not exist.
+      current = await tool.readCurrent(input, currentUser, db);
+    } catch (err) {
+      logger.info({ err, tool: tool.name, staffId: currentUser.staffId }, 'mutation target read failed');
+      const code = (err as { code?: string } | null)?.code;
+      return {
+        toolResult: mk(code === 'RESOURCE_NOT_FOUND' ? NOT_FOUND_COPY : botErrorCopy(err), true),
+        used: false,
+      };
+    }
+
+    // A request that changes nothing gets a plain answer, not a confirmation card
+    // for an empty diff. No pending record — there is nothing to consent to.
+    if (current.noChange) {
+      return { toolResult: mk(current.noChange), used: false };
+    }
+
+    const pending = makePending({
+      confirmationId: randomUUID(),
+      toolName: tool.name,
+      input,
+      expectedVersion: current.version,
+      summary: buildSummary(tool.summary, input, current.state),
+    });
+    // Replaces any previous pending record — one intent at a time (ADR-014 §3).
+    await this.setPending(currentUser.staffId, pending);
+
+    return {
+      toolResult: mk(AWAITING_CONFIRMATION_RESULT),
+      cardOut: {
+        type: 'confirmation',
+        confirmationId: pending.confirmationId,
+        toolName: pending.toolName,
+        summary: pending.summary,
+      },
+      // Not "used" — nothing was written. toolsUsed reports completed work.
+      used: false,
+    };
   }
 
   private async stream(
@@ -272,7 +745,16 @@ export class BotService {
 
     const parsed = tool.inputSchema.safeParse(block.input ?? {});
     if (!parsed.success) {
+      // No pending state on an invalid input — the normal tool-error path.
       return { toolResult: mk('That request was missing or had an invalid detail. Please rephrase.', true), used: false };
+    }
+
+    // ── TURN-1 INTERCEPTOR (ADR-014) ──────────────────────────────────────
+    // A mutation NEVER executes here. If you find yourself calling handler()
+    // before consent, stop. Query tools (isMutation: false) skip this entirely and
+    // take the unchanged Sprint 8 path below.
+    if (tool.isMutation) {
+      return this.prepareConfirmation(tool, parsed.data as Record<string, unknown>, currentUser, db, mk);
     }
 
     try {
@@ -312,6 +794,10 @@ export class BotService {
       // the tool runs, which is also just what a person does ("let me check…").
       // It is real output, not a spinner dressed up as text.
       'Before you call a tool, first write ONE short sentence (under 12 words) saying what you are about to look up, then call the tool.',
+      // Sprint 9: there is deliberately no fuzzy-id resolver. A guessed id fails the
+      // turn-1 existence read, which is a wasted turn for the user — so make looking
+      // it up the instruction rather than the fallback.
+      'To act on a record, first look it up with a query tool to obtain its id. Never guess an id.',
     ];
 
     // Omitted entirely when nothing is denied — no wasted tokens, and no
@@ -320,7 +806,19 @@ export class BotService {
     if (phrases.length === 0) return base.join('\n');
 
     return [
-      ...base,
+      // THE BASE PROMPT COMPETES WITH THE DENIAL BLOCK, and the base line wins by
+      // default — it is more general and it comes first. Measured: with attendance
+      // denied, the model answered "I don't have access to attendance records
+      // through the portal tools available to me", which is precisely the
+      // "no tool for it, say so plainly" instruction being followed. Naming the
+      // exception where that instruction is given is what resolves it; adding more
+      // emphasis to the TOOL ACCESS block below does not, because the model is not
+      // ignoring an instruction, it is obeying a different one.
+      ...base.map((line) =>
+        line.startsWith('Only use the provided tools')
+          ? `${line} EXCEPTION: for the capabilities listed under TOOL ACCESS below, do not say you have no tool — use the exact sentence given there.`
+          : line,
+      ),
       '',
       'TOOL ACCESS',
       `This user does not have access to the following capabilities: ${phrases.join(', ')}.`,
@@ -354,7 +852,9 @@ export class BotService {
   ): Promise<void> {
     const updated: BotSession = {
       sessionId,
-      messages: trimToTurns(messages, MAX_TURNS),
+      // Sanitise BEFORE trimming: a dangling tool_use must never reach Redis, and
+      // trimming can only remove whole leading turns, never repair one.
+      messages: trimToTurns(stripDanglingToolUse(messages), MAX_TURNS),
       turnCount: Math.min(prevTurnCount + 1, MAX_TURNS),
       lastActivityAt: new Date().toISOString(),
     };

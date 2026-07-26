@@ -1,5 +1,8 @@
 'use client';
 
+import { Check } from 'lucide-react';
+import Link from 'next/link';
+
 import type { BotCard as BotCardPayload } from './chat-state';
 
 /**
@@ -123,8 +126,123 @@ function gridSummary(payload: BotCardPayload, title: string, noun: string): Reac
   );
 }
 
-export function BotCard({ payload }: { payload: BotCardPayload }) {
+/**
+ * The two-turn confirmation card (ADR-014, UIUX §12, APPFLOW §9).
+ *
+ * DISPLAY + DISPATCH ONLY. Every value shown is rendered exactly as the server sent
+ * it — no client-side re-derivation of `from`/`to`, no validation of the change. The
+ * user is consenting to the SERVER's description of what will happen; if this
+ * component computed any part of it, they would be consenting to something else.
+ *
+ * The buttons bind to `confirmationId` and nothing else. The client cannot name the
+ * tool, the arguments, or the version — those live only in the server's pending
+ * record, which is the point of the whole protocol.
+ */
+function ConfirmationCard({
+  payload,
+  actionable,
+  onDecision,
+}: {
+  payload: BotCardPayload;
+  actionable: boolean;
+  onDecision?: (decision: 'confirm' | 'cancel', confirmationId: string) => void;
+}) {
+  const summary = (payload.summary ?? {}) as Record<string, unknown>;
+  const confirmationId = str(payload.confirmationId);
+  const changes = Array.isArray(summary.changes)
+    ? (summary.changes as Record<string, unknown>[])
+    : [];
+  // Set by the reducer when a button was pressed; absent when the turn moved on some
+  // other way (a typed "yes", a new question), which still disables the buttons.
+  const resolved = payload.resolved === 'confirm' || payload.resolved === 'cancel' ? payload.resolved : null;
+  const disabled = !actionable || resolved !== null || !confirmationId;
+
+  return (
+    <div style={{ ...frame, borderColor: 'var(--accent-gold-border)' }} className="mt-2 overflow-hidden text-sm">
+      <div className="px-3 py-2" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ color: 'var(--text-primary)' }}>{str(summary.action)}</div>
+        <div style={label} className="text-xs">
+          {str(summary.entity)} · {str(summary.target)}
+          {summary.period ? ` · ${str(summary.period)}` : ''}
+        </div>
+      </div>
+
+      <dl className="space-y-1 px-3 py-2">
+        {changes.map((c, i) => (
+          <div key={i} className="flex flex-wrap items-baseline gap-x-2">
+            <dt style={label} className="text-xs">
+              {str(c.field)}
+            </dt>
+            <dd className="flex items-baseline gap-2" style={{ fontFamily: 'var(--font-mono)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>{str(c.from)}</span>
+              <span aria-hidden style={{ color: 'var(--text-muted)' }}>
+                →
+              </span>
+              <span style={{ color: 'var(--text-primary)' }}>{str(c.to)}</span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className="flex items-center gap-2 px-3 py-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onDecision?.('confirm', confirmationId)}
+          className="rounded-md px-3 py-1 text-sm disabled:opacity-40"
+          style={{ background: 'var(--accent-gold)', color: 'var(--bg-base)' }}
+        >
+          {resolved === 'confirm' ? 'Confirmed' : 'Confirm'}
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onDecision?.('cancel', confirmationId)}
+          className="rounded-md px-3 py-1 text-sm disabled:opacity-40"
+          style={{ color: 'var(--text-secondary)' }}
+        >
+          {resolved === 'cancel' ? 'Cancelled' : 'Cancel'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The turn-2 outcome: what changed, plus a deep link into the module that owns it. */
+function MutationResultCard({ payload }: { payload: BotCardPayload }) {
+  const summary = (payload.summary ?? {}) as Record<string, unknown>;
+  const link = str(payload.link);
+  return (
+    <div style={frame} className="mt-2 flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+      <Check size={14} style={{ color: 'var(--accent-success, #4ade80)' }} aria-hidden />
+      <span style={{ color: 'var(--text-secondary)' }}>
+        {str(summary.action)}
+        {summary.target ? ` · ${str(summary.target)}` : ''}
+      </span>
+      {link ? (
+        <Link href={link} style={{ color: 'var(--accent-gold)' }}>
+          View
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+export function BotCard({
+  payload,
+  actionable = false,
+  onDecision,
+}: {
+  payload: BotCardPayload;
+  /** True only for the card on the LAST message — see chat-state's `send`. */
+  actionable?: boolean;
+  onDecision?: (decision: 'confirm' | 'cancel', confirmationId: string) => void;
+}) {
   switch (payload.type) {
+    case 'confirmation':
+      return <ConfirmationCard payload={payload} actionable={actionable} onDecision={onDecision} />;
+    case 'mutation_result':
+      return <MutationResultCard payload={payload} />;
     case 'task_list':
       return <TaskList payload={payload} title="Tasks" />;
     case 'overdue_list':
