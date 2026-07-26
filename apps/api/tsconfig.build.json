@@ -1,0 +1,21 @@
+{
+  "//": [
+    "The EMITTING config — `pnpm --filter @skaly/api build` only.",
+    "",
+    "rootDir is pinned to src and the include is src-only, together. Both matter: if",
+    "test/ or scripts/ ever enters this file set, TypeScript widens the inferred common",
+    "source root and dist/server.js becomes dist/src/server.js. package.json's",
+    "`start: node dist/server.js` then fails on Railway, not in CI — a deploy-time",
+    "failure from a compile-time config, which is the worst place to find it.",
+    "",
+    "Checking lives in tsconfig.json, which sees test/ and scripts/ with noEmit."
+  ],
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "test", "scripts"]
+}

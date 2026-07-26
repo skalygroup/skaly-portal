@@ -66,8 +66,8 @@ describe('registerSwagger (M-12 dev-only gate)', () => {
       paths: Record<string, Record<string, { tags?: string[] }>>;
     };
 
-    expect(spec.paths['/v1/auth/whoami'].get.tags).toEqual(['auth']);
-    expect(spec.paths['/v1/settings/signup-requests'].get.tags).toEqual(['settings']);
+    expect(spec.paths['/v1/auth/whoami']!.get!.tags).toEqual(['auth']);
+    expect(spec.paths['/v1/settings/signup-requests']!.get!.tags).toEqual(['settings']);
     // The area tag list is declared at the top level so the UI renders sections.
     expect(spec.tags?.map((t) => t.name)).toEqual(
       expect.arrayContaining(['auth', 'staff', 'clients', 'months', 'settings']),

@@ -10,6 +10,7 @@
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, getCurrentPeriod } from './BaseService.js';
 import { backfillClientPeriodRows } from './period-generation.js';
+import { transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 import { softDelete, softDeletable } from '../lib/queries.js';
 import { broadcastToOrg } from '../sockets/index.js';
@@ -102,7 +103,7 @@ export class ClientService {
       `Can't onboard a client into a locked month — unlock ${month.label} first, or wait for the new month to open.`,
     );
 
-    return db.transaction().execute(async (trx) => {
+    return transactionWithEmits(db, async (trx) => {
       const created = await trx
         .insertInto('clients')
         .values({
@@ -151,7 +152,7 @@ export class ClientService {
       throw new AppError('PERMISSION_DENIED', 'Only admins can deactivate clients.');
     }
 
-    return db.transaction().execute(async (trx) => {
+    return transactionWithEmits(db, async (trx) => {
       const before = await softDeletable(trx.selectFrom('clients').selectAll())
         .where('id', '=', id)
         .executeTakeFirst();
@@ -182,7 +183,7 @@ export class ClientService {
    * (04-APPFLOW §7). Returns the updated client.
    */
   async rename(id: string, name: string, currentUser: CurrentUser, db: Kysely<DB>): Promise<ClientListItem> {
-    const updated = await db.transaction().execute(async (trx) => {
+    const updated = await transactionWithEmits(db, async (trx) => {
       const before = await softDeletable(trx.selectFrom('clients').selectAll())
         .where('id', '=', id)
         .executeTakeFirst();

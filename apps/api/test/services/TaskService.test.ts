@@ -128,7 +128,7 @@ describe('create + ADR-006 fan-out', () => {
 
     expect(notifs).toHaveLength(2); // N for N, actor excluded, never combined
     expect(notifs.map((n) => n.staff_id).sort()).toEqual([ASSIGNEE_1, ASSIGNEE_2].sort());
-    const payload = notifs[0].payload as Record<string, unknown>;
+    const payload = notifs[0]!.payload as Record<string, unknown>;
     expect(payload).toMatchObject({ taskId: task.id, assignedBy: ACTOR_ID });
   });
 });

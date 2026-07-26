@@ -6,6 +6,7 @@ import { sql, type Kysely, type Transaction } from 'kysely';
 import { AttendanceService } from './AttendanceService.js';
 import { AuditService } from './AuditService.js';
 import { NotificationService } from './NotificationService.js';
+import { transactionWithEmits } from '../lib/emit-after-commit.js';
 
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { DB } from '@skaly/shared';
@@ -206,7 +207,7 @@ export class AuthService {
       };
     };
 
-    return params.trx ? run(params.trx) : this.db.transaction().execute(run);
+    return params.trx ? run(params.trx) : transactionWithEmits(this.db, run);
   }
 
   /**
@@ -244,7 +245,7 @@ export class AuthService {
   ): Promise<{ staffId: string; supabaseUid: string }> {
     const { token, password, name, dateOfBirth, mobileNumber } = params;
 
-    return this.db.transaction().execute(async (trx) => {
+    return transactionWithEmits(this.db, async (trx) => {
       // a. Lock the invite row for the duration of the transaction.
       const invite = await trx
         .selectFrom('invite_links')
@@ -392,7 +393,7 @@ export class AuthService {
       }
     }
 
-    return this.db.transaction().execute(async (trx) => {
+    return transactionWithEmits(this.db, async (trx) => {
       // H-04 check #1 (fast path): any staff row with this email, in ANY state
       // (deleted_at NOT filtered) blocks a new request.
       const existingStaff = await trx
@@ -496,7 +497,7 @@ export class AuthService {
     roleAssigned: Role,
     reviewerStaffId: string,
   ): Promise<{ staffId: string; supabaseUid: string; attendanceRowsCreated: number }> {
-    const outcome = await this.db.transaction().execute(async (trx) => {
+    const outcome = await transactionWithEmits(this.db, async (trx) => {
       // a. Lock the request row for the transaction.
       const row = await trx
         .selectFrom('signup_requests')
@@ -659,7 +660,7 @@ export class AuthService {
     publicRejectionMessage: string | undefined,
     reviewerStaffId: string,
   ): Promise<{ status: 'rejected' }> {
-    return this.db.transaction().execute(async (trx) => {
+    return transactionWithEmits(this.db, async (trx) => {
       const row = await trx
         .selectFrom('signup_requests')
         .select(['id', 'status'])
@@ -844,7 +845,7 @@ export class AuthService {
     // unsalted SHA-256 is the right primitive (bcrypt is for low-entropy human
     // passwords). Replace any prior set so re-enrollment invalidates old codes.
     const codes = Array.from({ length: 10 }, () => randomBytes(5).toString('hex'));
-    await this.db.transaction().execute(async (trx) => {
+    await transactionWithEmits(this.db, async (trx) => {
       await trx.deleteFrom('mfa_recovery_codes').where('staff_id', '=', staffId).execute();
       await trx
         .insertInto('mfa_recovery_codes')
@@ -970,7 +971,7 @@ export class AuthService {
       }
     }
 
-    await this.db.transaction().execute(async (trx) => {
+    await transactionWithEmits(this.db, async (trx) => {
       await trx
         .updateTable('staff')
         .set({ mfa_enrolled: false })

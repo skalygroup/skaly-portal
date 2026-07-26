@@ -27,6 +27,7 @@ import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, type Executor } from './BaseService.js';
 import { NotificationService } from './NotificationService.js';
 import { db } from '../lib/db.js';
+import { transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 import { softDelete } from '../lib/queries.js';
 
@@ -432,7 +433,7 @@ export class TaskService {
     status: string,
     executor: Kysely<DB> = db,
   ): Promise<TaskDetailDTO> {
-    return executor.transaction().execute((trx) => this.update(id, { status }, currentUser, trx));
+    return transactionWithEmits(executor, (trx) => this.update(id, { status }, currentUser, trx));
   }
 
   /** Soft-delete. admin/manager only. Assignee rows are preserved (no cascade on soft-delete). */

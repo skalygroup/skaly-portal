@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { transactionWithEmits } from '../../lib/emit-after-commit.js';
 import { HolidayService } from '../../services/HolidayService.js';
 
 import type { CurrentUser } from '../../services/AttendanceService.js';
@@ -57,9 +58,7 @@ export default async function holidaysRoutes(app: FastifyInstance) {
       const currentUser: CurrentUser = { staffId: request.user.id, role: request.user.role };
       const { period, date, name } = request.body;
 
-      const holiday = await app.db
-        .transaction()
-        .execute((trx) => service.create({ period, date, name, currentUser, trx }));
+      const holiday = await transactionWithEmits(app.db, (trx) => service.create({ period, date, name, currentUser, trx }));
 
       return reply.status(201).send({ data: { id: holiday.id, period, date, name } });
     },
@@ -77,9 +76,7 @@ export default async function holidaysRoutes(app: FastifyInstance) {
     },
     async (request) => {
       const currentUser: CurrentUser = { staffId: request.user.id, role: request.user.role };
-      const result = await app.db
-        .transaction()
-        .execute((trx) => service.remove(request.params.id, currentUser, trx));
+      const result = await transactionWithEmits(app.db, (trx) => service.remove(request.params.id, currentUser, trx));
       return { data: result };
     },
   );

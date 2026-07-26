@@ -141,7 +141,7 @@ describe('AuthService.signupRequest (integration)', () => {
 
     const puts = s3Mock.commandCalls(PutObjectCommand);
     expect(puts.length).toBe(1);
-    const input = puts[0].args[0].input;
+    const input = puts[0]!.args[0].input;
     expect(input.Bucket).toBe(R2_BUCKET);
     expect(input.Key).toBe(`cvs/requests/${res.requestId}/cv.pdf`);
     expect(input.ContentType).toBe('application/pdf');

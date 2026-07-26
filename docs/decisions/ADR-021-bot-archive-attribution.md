@@ -84,6 +84,43 @@ Two mechanisms, two questions. `parent_id` answers *"whose message"*; `bot_sessi
 `bot_sessions` to answer "whose message is this", you have recreated the dual-write problem
 inside one feature.
 
+## Addendum — `messages_parent_id_fkey` and the retention job (build: Sprint 12)
+
+Introducing `parent_id` links raises how the 12-month retention job (NFR §5.2) deletes them.
+Sprint 10's test teardowns hit this immediately, which is the useful part: **the failure mode
+already has a working reproduction**, and it would otherwise be rediscovered under a cron job
+at 02:00 IST.
+
+**The constraint is `NO ACTION`, and that is not `RESTRICT`.** Postgres checks a `NO ACTION`
+FK at the *end of the statement*; `RESTRICT` checks per row, immediately. So a single
+`DELETE FROM messages WHERE id IN (…)` that removes a parent **and its children together**
+already succeeds today, with no schema change. What fails is *two* statements, or parent-first
+ordering — exactly what the teardowns were doing.
+
+That reframes the question away from cascade-vs-unlink:
+
+| Option | Ruling |
+|---|---|
+| `ON DELETE SET NULL` | **Rejected.** It re-orphans bot replies — precisely the bug this ADR exists to fix. |
+| `ON DELETE CASCADE` | **Rejected.** `parent_id` is also the chat thread link, so one hard-deleted parent could silently take replies still inside their own retention window. Data loss adopted to solve an ordering problem. |
+| **Keep `NO ACTION`; make the job session-scoped and single-statement** | **Accepted.** No migration. |
+
+**The job's shape:**
+
+- **Bot channel** — scope by `bot_sessions.last_activity_at`, not by per-row `created_at`.
+  The session is the boundary, so whole conversations age out together and a turn-pair is
+  never split across the cutoff. This is where `bot_sessions` stops being bookkeeping and
+  earns its place.
+- **Chat channel** — threads have no session envelope, so exclude any parent whose replies
+  are newer than the cutoff.
+- **Both** — one statement per batch. Never parent-first, never two statements.
+
+**Write the job's test from the teardown's fix.** Sprint 9's suite produced a working
+demonstration of the failure; that is a free test case for a job that does not exist yet, and
+it expires from memory in about two sprints if nobody writes it down. See
+`apps/api/test/routes/bot.test.ts` and `test/services/BotService.test.ts` — the "delete the
+conversation, not rows carrying my id" cleanup is the shape the job needs.
+
 ## Rationale
 
 Storing the owner directly on the bot row (what the code did) is simpler to read and was

@@ -12,18 +12,17 @@
  *     DELETE grant on holidays (§11) — never DELETE FROM holidays.
  *   - Holiday logic only ever touches WORKING/HOLIDAY rows; sunday rows are left
  *     alone (a holiday on a Sunday changes nothing — reconciliation #4).
- *   - The socket broadcast fires AFTER the DB writes, fire-and-forget: a socket
- *     failure (or sockets not yet initialised) is logged, never rolled back onto
- *     the DB. (Bell notifications for holidays are Sprint 10 — not here.)
+ *   - The socket broadcast fires after COMMIT, via lib/emit-after-commit.ts —
+ *     fire-and-forget: a socket failure (or sockets not yet initialised) is logged,
+ *     never rolled back onto the DB. It used to fire after the WRITE, which meant a
+ *     caller that rolled back still told every connected client to refetch.
  */
 import { sql, type Selectable, type Transaction } from 'kysely';
 
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked } from './BaseService.js';
+import { emitAfterCommit } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
-import { logger } from '../lib/logger.js';
-import { getIo } from '../sockets/index.js';
-
 
 import type { CurrentUser } from './AttendanceService.js';
 import type { Executor } from './BaseService.js';
@@ -199,13 +198,14 @@ export class HolidayService {
   /**
    * Broadcast a grid-sync event to every connected client (org:all). Fire-and-
    * forget: a socket failure never rolls back the committed holiday change.
-   * Cross-user live refresh + bell notifications are wired in Sprint 10.
+   *
+   * Routed through the emit seam, so a holiday added inside a transaction that then
+   * rolls back broadcasts nothing. That matters more here than almost anywhere:
+   * ADR-022 makes this event invalidate-only precisely because the H-01 cascade
+   * flips every staff column for the date, and a spurious one would send every
+   * connected client refetching a change that never happened.
    */
   private broadcast(event: 'attendance:holiday_added' | 'attendance:holiday_removed', payload: Record<string, string>): void {
-    try {
-      getIo().of(NOTIFY_NAMESPACE).to(ORG_ROOM).emit(event, payload);
-    } catch (err) {
-      logger.warn({ err, event, payload }, 'holiday broadcast emit failed');
-    }
+    emitAfterCommit(NOTIFY_NAMESPACE, ORG_ROOM, event, payload);
   }
 }

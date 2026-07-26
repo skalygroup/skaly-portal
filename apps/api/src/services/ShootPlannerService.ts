@@ -24,6 +24,7 @@ import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, getCurrentPeriod, type Executor } from './BaseService.js';
 import { NotificationService } from './NotificationService.js';
 import { generateShootSlotsForClient } from './period-generation.js';
+import { transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 import { eventBus } from '../lib/EventBus.js';
 import { softDeletable } from '../lib/queries.js';
@@ -189,7 +190,7 @@ export class ShootPlannerService {
   async update(id: string, patch: SlotPatch, currentUser: CurrentUser, db: Kysely<DB>): Promise<SlotDTO> {
     this.assertAdminOrManager(currentUser);
 
-    const { updated, clientName, effectiveDate } = await db.transaction().execute(async (trx) => {
+    const { updated, clientName, effectiveDate } = await transactionWithEmits(db, async (trx) => {
       const slot = await this.loadSlotRow(id, trx);
       await assertPeriodNotLocked(slot.period, trx);
 
@@ -298,7 +299,7 @@ export class ShootPlannerService {
       );
     }
 
-    const slot = await db.transaction().execute(async (trx) => {
+    const slot = await transactionWithEmits(db, async (trx) => {
       const row = await this.loadSlotRow(id, trx);
       await assertPeriodNotLocked(row.period, trx);
 
@@ -396,7 +397,7 @@ export class ShootPlannerService {
       throw new AppError('VALIDATION_ERROR', 'slotsPerMonth must be an integer between 1 and 20.');
     }
 
-    return db.transaction().execute(async (trx) => {
+    return transactionWithEmits(db, async (trx) => {
       const client = await trx
         .selectFrom('clients')
         .select(['id', 'shoot_slots_per_month', 'pieces_per_visit', 'active', 'is_internal'])

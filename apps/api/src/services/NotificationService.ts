@@ -5,15 +5,17 @@
  * Delivery contract:
  *   1. DB write FIRST — the row is the durable record; an offline recipient
  *      fetches it later via GET /v1/notifications.
- *   2. Emit SECOND — io.of('/ws/notify').to('user:{id}').emit('notify:new', row).
+ *   2. Emit SECOND, and after COMMIT — via lib/emit-after-commit.ts. This method
+ *      writes through the caller's `trx`, so "after the write" is not yet durable;
+ *      the seam holds the emit until the caller's transaction commits and drops it
+ *      if that transaction rolls back.
  *      Fire-and-forget: a socket failure (or sockets not yet initialised) is
  *      logged and swallowed, NEVER rolled back onto the DB write.
  */
 import { sql, type Selectable } from 'kysely';
 
+import { emitAfterCommit } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
-import { logger } from '../lib/logger.js';
-import { getIo } from '../sockets/index.js';
 
 import type { Executor } from './BaseService.js';
 import type { Notifications } from '@skaly/shared';
@@ -92,12 +94,13 @@ export class NotificationService {
       .returningAll()
       .executeTakeFirstOrThrow();
 
-    // 2. Emit second — fire-and-forget; a socket failure must not lose the row.
-    try {
-      getIo().of(NOTIFY_NAMESPACE).to(`user:${recipientId}`).emit('notify:new', row);
-    } catch (err) {
-      logger.warn({ err, recipientId, notificationId: row.id }, 'notify:new emit failed');
-    }
+    // 2. Emit second — and, inside a transactionWithEmits window, only once that
+    //    transaction COMMITS. This method writes through the CALLER's trx, so the row
+    //    above is written but not durable; emitting here used to send a notification
+    //    the caller could still roll back. Under ADR-022 the bell patches its cache
+    //    from this payload, so a rolled-back emit leaves a client showing a
+    //    notification that does not exist, with no refetch coming to correct it.
+    emitAfterCommit(NOTIFY_NAMESPACE, `user:${recipientId}`, 'notify:new', row);
 
     return row;
   }

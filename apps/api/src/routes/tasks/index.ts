@@ -21,6 +21,7 @@ import {
 } from '@skaly/shared';
 import { z } from 'zod';
 
+import { transactionWithEmits } from '../../lib/emit-after-commit.js';
 import { TaskAttachmentService } from '../../services/TaskAttachmentService.js';
 import { TaskService } from '../../services/TaskService.js';
 
@@ -97,7 +98,7 @@ export default async function tasksRoutes(app: FastifyInstance) {
     '/tasks',
     { ...writeRoles, schema: { body: TaskCreateSchema, response: { 201: z.object({ data: TaskDetailSchema }) }, ...bearer } },
     async (request, reply) => {
-      const data = await app.db.transaction().execute((trx) => tasks.create(request.body, currentUser(request), trx));
+      const data = await transactionWithEmits(app.db, (trx) => tasks.create(request.body, currentUser(request), trx));
       return reply.status(201).send({ data });
     },
   );
@@ -113,9 +114,7 @@ export default async function tasksRoutes(app: FastifyInstance) {
     { ...readRoles, schema: { params: IdParam, body: TaskUpdateSchema, response: { 200: z.object({ data: TaskDetailSchema }) }, ...bearer } },
     async (request) => {
       // team_member ownership is enforced inside the service (layer 3).
-      const data = await app.db
-        .transaction()
-        .execute((trx) => tasks.update(request.params.id, request.body, currentUser(request), trx));
+      const data = await transactionWithEmits(app.db, (trx) => tasks.update(request.params.id, request.body, currentUser(request), trx));
       return { data };
     },
   );
@@ -124,7 +123,7 @@ export default async function tasksRoutes(app: FastifyInstance) {
     '/tasks/:id',
     { ...writeRoles, schema: { params: IdParam, response: { 200: z.object({ data: z.object({ deleted: z.literal(true) }) }) }, ...bearer } },
     async (request) => {
-      const data = await app.db.transaction().execute((trx) => tasks.remove(request.params.id, currentUser(request), trx));
+      const data = await transactionWithEmits(app.db, (trx) => tasks.remove(request.params.id, currentUser(request), trx));
       return { data };
     },
   );
@@ -135,9 +134,7 @@ export default async function tasksRoutes(app: FastifyInstance) {
     '/tasks/:id/assignees',
     { ...writeRoles, schema: { params: IdParam, body: AssignSchema, response: { 200: z.object({ data: TaskDetailSchema }) }, ...bearer } },
     async (request) => {
-      const data = await app.db
-        .transaction()
-        .execute((trx) => tasks.assign(request.params.id, request.body.staffIds, currentUser(request), trx));
+      const data = await transactionWithEmits(app.db, (trx) => tasks.assign(request.params.id, request.body.staffIds, currentUser(request), trx));
       return { data };
     },
   );
@@ -149,9 +146,7 @@ export default async function tasksRoutes(app: FastifyInstance) {
       schema: { params: z.object({ id: z.string().uuid(), staffId: z.string().uuid() }), response: { 200: z.object({ data: TaskDetailSchema }) }, ...bearer },
     },
     async (request) => {
-      const data = await app.db
-        .transaction()
-        .execute((trx) => tasks.unassign(request.params.id, request.params.staffId, currentUser(request), trx));
+      const data = await transactionWithEmits(app.db, (trx) => tasks.unassign(request.params.id, request.params.staffId, currentUser(request), trx));
       return { data };
     },
   );
@@ -187,9 +182,7 @@ export default async function tasksRoutes(app: FastifyInstance) {
     '/tasks/:id/attachments/confirm',
     { ...readRoles, schema: { params: IdParam, body: AttachmentConfirmSchema, response: { 201: z.object({ data: AttachmentSchema }) }, ...bearer } },
     async (request, reply) => {
-      const data = await app.db
-        .transaction()
-        .execute((trx) => attachments.confirmAttachment(request.params.id, request.body, currentUser(request), trx));
+      const data = await transactionWithEmits(app.db, (trx) => attachments.confirmAttachment(request.params.id, request.body, currentUser(request), trx));
       return reply.status(201).send({ data });
     },
   );
@@ -212,9 +205,7 @@ export default async function tasksRoutes(app: FastifyInstance) {
       schema: { params: z.object({ id: z.string().uuid(), aid: z.string().uuid() }), response: { 200: z.object({ data: z.object({ deleted: z.literal(true) }) }) }, ...bearer },
     },
     async (request) => {
-      const data = await app.db
-        .transaction()
-        .execute((trx) => attachments.deleteAttachment(request.params.id, request.params.aid, currentUser(request), trx));
+      const data = await transactionWithEmits(app.db, (trx) => attachments.deleteAttachment(request.params.id, request.params.aid, currentUser(request), trx));
       return { data };
     },
   );

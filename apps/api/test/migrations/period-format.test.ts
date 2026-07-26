@@ -35,7 +35,7 @@ describeDb('months_period_format regex (migration 002)', () => {
     const { rows } = await sql<{ ok: boolean }>`
       SELECT ${value} ~ ${PERIOD_REGEX} AS ok
     `.execute(db);
-    return rows[0].ok;
+    return rows[0]!.ok;
   }
 
   it('accepts a valid YYYY-MM period', async () => {

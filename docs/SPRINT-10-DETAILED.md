@@ -152,6 +152,45 @@ pnpm --filter @skaly/api db:status                 # 0 pending
 pnpm typecheck && pnpm lint && pnpm --filter @skaly/api test
 ```
 
+### 1.1a — ⚠️ Make `pnpm typecheck` an honest gate (do this FIRST)
+
+`apps/api/tsconfig.json` had `include: ["src/**/*.ts"]` on the config that **also emitted**, so
+`pnpm typecheck` never read a test file. STEP 2 changed a required field and broke 33 call sites
+under `test/` while the gate stayed green — they surfaced only under vitest, at runtime. Eleven
+of this sprint's thirteen steps lean on that gate. **A gate that passes while broken is worse
+than no gate: it converts "I checked" into "I didn't check, confidently."**
+
+Fix with a **config split, not a broadened `include`** — and note the trap in doing it the
+obvious way. If you widen `include` on the config that emits, TypeScript widens the inferred
+common source root and `dist/server.js` silently becomes `dist/src/server.js`, breaking Railway's
+`start: node dist/server.js`. You would find that on deploy, not in CI.
+
+- `apps/api/tsconfig.json` → `include: ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]`, `noEmit: true`
+- `apps/api/tsconfig.build.json` → `rootDir: "src"`, `include: ["src/**/*.ts"]`, emits
+- `package.json` → `"build": "tsc -p tsconfig.build.json"`, `"typecheck": "tsc -p tsconfig.json"`
+
+```bash
+# check the other workspaces for the same narrow include
+grep -n '"include"' apps/web/tsconfig.json packages/*/tsconfig.json
+# ^ apps/web is already **/*.ts + noEmit; packages/shared has no tests. Only api was wrong.
+
+# prove the fix by BREAKING it — the "every test fails without its fix" discipline,
+# applied to the toolchain. It is the only way to know the program actually widened.
+echo 'const x: number = "nope";' >> apps/api/test/services/BotArchive.test.ts
+pnpm typecheck                      # MUST fail
+sed -i '/const x: number/d' apps/api/test/services/BotArchive.test.ts
+pnpm typecheck                      # green again
+
+# and prove the deploy path did not move
+rm -rf apps/api/dist && pnpm --filter @skaly/api build
+ls apps/api/dist/server.js          # must exist; dist/src/ must NOT
+```
+
+**Expect a fresh crop of errors on the first honest run** — 15 of them, in 10 test files. That is
+pre-existing debt becoming visible, not new breakage. (Sprint 10 found: 11 missing non-null
+assertions, `jose` v6 dropping `KeyLike` in favour of `CryptoKey`, one bogus `as unknown as Date`,
+one untyped `decorate` stub.)
+
 ### 1.2 — ⚠️ Re-verify the E2E clearance
 
 Sprint 9 STEP 1.2 was supposed to fix the four carried failures (3 shoot-planner, 1 signup-requests).
@@ -433,7 +472,36 @@ git checkout -b sprint-10-chat-notifications
 >
 > 4. **Existing orphan rows** (finding C only): count them, and leave them. Do **not** guess ownership by timestamp proximity. Add one line to the ADR recording the count and that they are unattributable by design of the old write path.
 >
-> 5. **Persist-then-emit is preserved** (Sprint 9 STEP 5C) — the DB write and the session append both precede the socket emit.
+> 5. **Persist-then-emit becomes a SEAM, and the rule sharpens to "emit after COMMIT, not after write."**
+>
+>    Sprint 9's rule had a test, and it passed for nine sprints by luck: `finalise` happened to
+>    `await` a DB write *after* the emit, and that await gave the async assertion time to observe
+>    an already-persisted session. Move both durable writes ahead of the emit — which ADR-021
+>    correctly requires — and the test fails with no product regression. **An outcome test cannot
+>    distinguish ordered from luckily ordered.** It is an unenforced invariant, not a fixed bug,
+>    and Sprint 10 adds five more emitters (`chat:message`, `chat:deleted`, `notify:new`,
+>    `notify:read`, `presence:changed`) plus every enriched grid payload from ADR-022. Each is a
+>    fresh roll of the same dice.
+>
+>    **Why COMMIT and not WRITE:** `NotificationService.create` runs inside the *caller's*
+>    transaction — it inserts through `trx` and emits. The row is written but not durable. Before
+>    ADR-022 a rolled-back caller meant a spurious bell; after it, subscribers **patch** their
+>    caches from these payloads, so fifty clients are left holding a state that never existed in
+>    the database, with no refetch coming to correct them. A patch is only safe if the thing it
+>    describes is durable.
+>
+>    Build `apps/api/src/lib/emit-after-commit.ts` — `AsyncLocalStorage`, matching
+>    `lib/bot/actor-context.ts` (same argument ADR-016 made: threading a buffer through every
+>    signature means "forgot one" is silent). Every emitter goes through `emitAfterCommit()`;
+>    every `db.transaction().execute(fn)` becomes `transactionWithEmits(db, fn)` — the parens
+>    balance, so it is a prefix rewrite.
+>
+>    **The test asserts ordering explicitly**, not by outcome:
+>    ```ts
+>    expect(persistSpy.mock.invocationCallOrder[0])
+>      .toBeLessThan(emitSpy.mock.invocationCallOrder[0]);
+>    ```
+>    plus: **a throwing transaction emits nothing** (and leaves no row).
 >
 > 6. **Tests** `apps/api/test/services/BotArchive.test.ts`:
 >    - A bot exchange writes exactly two `messages` rows, correctly shaped and linked.
@@ -1025,6 +1093,8 @@ Open the PR to `main`; CI fully green before merge. Merge, then `git checkout ma
 - **Audit log export at 50k rows.** Settings → Audit Log needs filter + export (NFR §5.3). At 12 months the table is ~50,000 rows (NFR §2.2). Decide whether export streams (CSV via a cursor) or buffers — a buffered 50k-row JSON response is a memory spike on the same single instance that's now also rendering PDFs. *Recommendation: stream CSV with a cursor; it's less code than pagination and has no memory ceiling.*
 
 - **The 5-minute permissions cache vs. the Settings → Permissions UI.** `perms:{staffId}` has a 5-minute TTL with invalidation on write (Auth-Matrix §6.3). Sprint 11 gives admins a UI to toggle permissions, so they will change one and immediately test it. Confirm the invalidation actually fires on every write path the new UI uses — and note 8.1 STEP 3.4 deliberately deferred the *push* event, so the affected user's open session still won't learn about it until their next request. Decide whether Sprint 11 adds that push now that there's a UI making changes routine.
+
+- **⚠️ The 12-month retention job's delete shape — ruled in ADR-021's addendum, built in Sprint 12.** Sprint 10's `parent_id` link makes deletion order matter, and the test teardowns already produced a working reproduction of the failure. `messages_parent_id_fkey` is `NO ACTION`, which is **not** `RESTRICT`: Postgres checks it at *statement end*, so a single `DELETE … WHERE id IN (…)` removing parent and children **together** already works with no schema change. What fails is two statements, or parent-first. `SET NULL` is rejected (it re-orphans bot replies — the exact bug ADR-021 fixes); `CASCADE` is rejected (`parent_id` is also the chat thread link, so one hard-deleted parent could take replies still inside their own retention window — data loss adopted to solve an ordering problem). Keep `NO ACTION`; make the job **session-scoped and single-statement**: bot rows age out by `bot_sessions.last_activity_at` so a turn-pair is never split across the cutoff, and chat threads — which have no session envelope — exclude any parent whose replies are newer than the cutoff. **Write the job's test from the teardown's fix** before it expires from memory.
 
 - **Still deferred, on schedule:** comment system + `new_comment` producer (Sprint 12), attachment orphan cron + `coming_shoot_date` rollover recompute (Sprint 12), rollover + its four notification types (Sprint 12–13), Socket.io Redis adapter verification if STEP 1.5 found it missing (before any second API instance).
 

@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
-import { SignJWT, generateKeyPair, type KeyLike } from 'jose';
+import { SignJWT, generateKeyPair, type CryptoKey } from 'jose';
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 
 // ── Shared mock state (hoisted so vi.mock factories can close over it) ──────
@@ -7,7 +7,7 @@ const h = vi.hoisted(() => {
   const redisStore = new Map<string, string>();
   return {
     // Public key the mocked createRemoteJWKSet resolves to; set in beforeAll.
-    keyHolder: { publicKey: undefined as unknown as KeyLike },
+    keyHolder: { publicKey: undefined as unknown as CryptoKey },
     // DB lookup spy — lets us assert how many times the staff row was queried.
     executeTakeFirst: vi.fn(),
     redisStore,
@@ -67,7 +67,7 @@ import authPlugin, { invalidateStaffCache } from '../../src/middleware/auth.plug
 const ISSUER = 'https://test.supabase.co/auth/v1';
 const UID = '5aaf8b90-0444-4649-9229-32204ef8a633';
 
-let privateKey: KeyLike;
+let privateKey: CryptoKey;
 
 function signToken(opts?: { sub?: string; issuer?: string; audience?: string }) {
   return new SignJWT({})

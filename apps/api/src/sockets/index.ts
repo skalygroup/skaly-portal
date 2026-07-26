@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 
 import { attachPresence } from './presence.js';
 import { verifySupabaseToken } from '../lib/auth-verify.js';
+import { emitAfterCommit, setEmitter } from '../lib/emit-after-commit.js';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { setupSocketTokenWatcher } from '../middleware/socketTokenWatcher.plugin.js';
@@ -43,11 +44,7 @@ export function getIo(): Server {
  * HolidayService predates this helper and keeps its own equivalent copy.
  */
 export function broadcastToOrg(event: string, payload: Record<string, unknown>): void {
-  try {
-    getIo().of('/ws/notify').to('org:all').emit(event, payload);
-  } catch (err) {
-    logger.warn({ err, event, payload }, 'org broadcast emit failed');
-  }
+  emitAfterCommit('/ws/notify', 'org:all', event, payload);
 }
 
 /**
@@ -134,6 +131,12 @@ export function registerSockets(httpServer: HttpServer): SocketSetup {
   }
 
   ioInstance = io;
+  // Hand the emit seam a live sender. Injected rather than imported so
+  // lib/emit-after-commit.ts stays free of the sockets → services → lib → sockets
+  // cycle, and so a unit test without a socket server simply has no sender.
+  setEmitter((namespace, room, event, payload) => {
+    io.of(namespace).to(room).emit(event, payload);
+  });
   logger.info(`socket.io listening on ${SOCKET_NAMESPACES.join(',')}`);
 
   return { io, pubClient, subClient };

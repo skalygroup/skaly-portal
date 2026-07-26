@@ -197,8 +197,8 @@ describe('Trigger 2 — pipeline:posted → content_calendar via the real EventB
       const c = await readCell(cellId);
       return c.status === 'Posted' ? c : null;
     });
-    expect(cell.status).toBe('Posted');
-    expect(cell.source).toBe('pipeline_trigger');
+    expect(cell!.status).toBe('Posted');
+    expect(cell!.source).toBe('pipeline_trigger');
   });
 
   test('CORRECTION 1 (null-safety): the cell’s source starts NULL and IS written', async () => {

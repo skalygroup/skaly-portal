@@ -25,6 +25,7 @@ import { sql, type Kysely } from 'kysely';
 
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, optimisticUpdate, type Executor } from './BaseService.js';
+import { transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { softDeletable } from '../lib/queries.js';
@@ -234,7 +235,7 @@ export class ContentCalendarService {
       });
     }
 
-    const updated = await db.transaction().execute(async (trx) => {
+    const updated = await transactionWithEmits(db, async (trx) => {
       const before = await trx
         .selectFrom('content_calendar')
         .select(['period', 'status', 'note', 'source'])
@@ -357,7 +358,7 @@ export class ContentCalendarService {
       return null;
     }
 
-    const wrote = await db.transaction().execute(async (trx) => {
+    const wrote = await transactionWithEmits(db, async (trx) => {
       // ADR-013 case 2 — same-column system write, version IS bumped. `status` is
       // the column users edit, so a user holding a stale version SHOULD get a 409;
       // that is optimistic locking working, not a false conflict. (Contrast
