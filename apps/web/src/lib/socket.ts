@@ -6,16 +6,15 @@ import { io, type Socket } from 'socket.io-client';
 import { createClient } from '@/lib/supabase/client';
 
 /**
- * The shared /ws/notify client — ONE connection per tab (ADR-010 amendment,
- * minimal scope). Sprint 8 builds only:
- *   - the connection (with the TRD §8 reconnection policy),
- *   - the C-05 refresh handshake (a 1-hour JWT expires mid-conversation and would
- *     otherwise drop the bot socket), and
- *   - the ability to subscribe (the bot chat consumes bot:token / bot:message).
+ * The shared socket client — ONE connection per namespace (ADR-010 amendment).
  *
- * Sprint 10 attaches grid subscriptions + the bell/notification UI here; this
- * file is the shared client and the // TODO(Sprint 10) markers in the modules
- * stay valid.
+ * Sprint 8 built the connection itself: the TRD §8 reconnection policy, the C-05
+ * refresh handshake (a 1-hour JWT expires mid-conversation and would otherwise drop
+ * the bot socket), and the ability to subscribe.
+ *
+ * Sprint 10 attached the consumers — grid subscriptions (ADR-022), the bell, chat and
+ * presence — and generalised this from a single /ws/notify singleton to one connection
+ * per namespace. Every `// TODO(Sprint 10)` marker in the module grids is now retired.
  */
 
 /**
