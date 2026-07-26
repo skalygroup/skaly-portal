@@ -42,10 +42,24 @@ const asFreelancer = as(FREELANCER, 'freelancer');
 const send = (content: string, user: CurrentUser = asMember, parentId?: string) =>
   transactionWithEmits(db, (trx) => svc.send({ content, parentId }, user, trx));
 
+/**
+ * Clear everything this suite writes — chat rows AND the bot rows the cross-channel
+ * leak test seeds.
+ *
+ * In beforeEach rather than inline after an assertion: a cleanup that trails its
+ * assertion never runs when the assertion fails, and the leftovers then break the NEXT
+ * run for a reason that has nothing to do with the test. That is exactly what happened
+ * while proving this suite catches the channel-filter bug.
+ *
+ * Scoped by OWNERSHIP and issued as ONE statement, for the ADR-021 reason: parent and
+ * children must go together, or `messages_parent_id_fkey` refuses the delete.
+ */
 async function clearChat(): Promise<void> {
   await sql`
     DELETE FROM messages
-    WHERE channel = 'common'
+    WHERE sender_id = ANY(${staffIds})
+       OR parent_id IN (SELECT id FROM messages WHERE sender_id = ANY(${staffIds}))
+       OR channel = 'common'
        OR parent_id IN (SELECT id FROM messages WHERE channel = 'common')
   `.execute(db);
   await db.deleteFrom('notifications').where('staff_id', 'in', staffIds).execute();
@@ -335,8 +349,8 @@ describe('threads', () => {
 
     const thread = await svc.getThread(botTurn.id, asMember, db);
     expect(thread).toEqual([]);
-
-    await sql`DELETE FROM messages WHERE channel = 'bot' AND (sender_id = ${ADMIN} OR parent_id = ${botTurn.id})`.execute(db);
+    // No cleanup here on purpose — clearChat() owns it, so a failing assertion above
+    // cannot leak bot rows into the next run.
   });
 });
 
