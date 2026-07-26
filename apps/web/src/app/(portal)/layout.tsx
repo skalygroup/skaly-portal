@@ -1,3 +1,4 @@
+import { ConnectionBanner } from '@/components/shared/connection-banner';
 import { NotificationBell } from '@/components/shared/notification-bell';
 import { SearchPalette } from '@/components/shared/search-palette';
 
@@ -32,6 +33,8 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
             subscription and a single notifications cache entry for the whole app.
             Nav and the topbar search icon are deliberately NOT invented here; they
             belong to Sprint 11's Settings/Dashboard chrome. */}
+        {/* Non-blocking, fixed to the top of the viewport (Error-Handling §5.4). */}
+        <ConnectionBanner />
         <header className="flex h-14 items-center justify-end gap-2 px-8">
           <NotificationBell />
         </header>
