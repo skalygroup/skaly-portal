@@ -57,7 +57,20 @@ loadE2eEnv();
 export default defineConfig({
   testDir: './tests',
   testMatch: '**/*.spec.ts',
-  timeout: 30_000,
+  /**
+   * 60s, not Playwright's default 30s — because `login()` does not fit in 30s.
+   *
+   * The helper's own barriers add up: waitForURL past /login (15s) + the TOTP
+   * window step-over (up to 3.5s) + waitForURL past /mfa-challenge (15s) = 33.5s
+   * worst case for ONE admin sign-in. Any spec that signs in twice — search.spec
+   * §CMD+K, and every two-context real-time spec Sprint 10 adds — was over budget
+   * by construction, not flaky. It presented as a 30s timeout with the email field
+   * caught half-typed, which reads like broken auth and is not.
+   *
+   * Raised here rather than per-spec: the cost lives in the shared helper, so the
+   * budget belongs next to it. 60s still fails a genuine hang promptly.
+   */
+  timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
   /**
