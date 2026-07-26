@@ -87,7 +87,7 @@ export default async function botRoutes(app: FastifyInstance) {
       // Load the session (stable sessionId) + archive the user message
       // (messageId) BEFORE the 202, so a Redis/DB failure returns an error rather
       // than a false ack.
-      const session = await bot.loadSession(user.staffId);
+      const session = await bot.loadSession(user.staffId, app.db);
       const messageId = await bot.archiveUserMessage(user.staffId, request.body.content, app.db);
 
       // C-01: the body is an acknowledgement only — no content, no card.
@@ -103,6 +103,9 @@ export default async function botRoutes(app: FastifyInstance) {
           staffId: user.staffId,
           role: user.role,
           userText: request.body.content,
+          // ADR-021: the reply's parent_id. Already archived above, so the row it
+          // points at exists before the bot can finalise against it.
+          userMessageId: messageId,
           db: app.db,
           // ADR-014: the client may send ONLY these two. Never the tool, never the
           // arguments, never the version — those live in the server's pending record.
@@ -122,7 +125,7 @@ export default async function botRoutes(app: FastifyInstance) {
       preHandler: [app.verifyJwt],
       schema: { response: { 200: z.object({ data: SessionViewSchema }) }, security: [{ bearerAuth: [] }] },
     },
-    async (request) => ({ data: await service().sessionView(currentUser(request).staffId) }),
+    async (request) => ({ data: await service().sessionView(currentUser(request).staffId, app.db) }),
   );
 
   // ── DELETE /v1/bot/session/current — clear the session ──

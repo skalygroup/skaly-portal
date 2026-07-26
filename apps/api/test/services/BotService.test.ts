@@ -1,5 +1,5 @@
 import { Redis } from 'ioredis';
-import { Kysely, PostgresDialect } from 'kysely';
+import { Kysely, PostgresDialect, sql } from 'kysely';
 import pg from 'pg';
 import { describe, test, expect, beforeAll, afterAll, afterEach } from 'vitest';
 
@@ -107,8 +107,33 @@ function mockAnthropic(): Anthropic {
   } as unknown as Anthropic;
 }
 
+/**
+ * A real user turn for the bot's reply to hang off (ADR-021) — parent_id is a genuine
+ * FK to messages(id), so an invented id is no longer accepted.
+ */
+async function seedUserTurn(staffId: string): Promise<string> {
+  const row = await db
+    .insertInto('messages')
+    .values({ channel: 'bot', sender_id: staffId, sender_type: 'user', content: 'seed turn', content_type: 'text' })
+    .returning('id')
+    .executeTakeFirstOrThrow();
+  return row.id;
+}
+
 async function cleanup(): Promise<void> {
-  await db.deleteFrom('messages').where('sender_id', '=', ADMIN).execute();
+  // Delete the CONVERSATION, not "rows carrying my id" (ADR-021). Bot replies now
+  // have sender_id NULL and parent_id pointing at the user's turn, so deleting by
+  // sender_id alone strands them and the parent_id FK refuses the delete. Both sides
+  // go in one statement — Postgres checks the FK at statement end.
+  // MEMBER is here too: the parity test drives a turn as a team member, and its
+  // seeded user turn would otherwise outlive the suite.
+  const staff = [ADMIN, MEMBER];
+  await sql`
+    DELETE FROM messages
+    WHERE sender_id = ANY(${staff})
+       OR parent_id IN (SELECT id FROM messages WHERE sender_id = ANY(${staff}))
+  `.execute(db);
+  await db.deleteFrom('bot_sessions').where('staff_id', 'in', staff).execute();
   await redis.del(`bot:session:${ADMIN}`, `bot:pending:${ADMIN}`);
 }
 
@@ -241,7 +266,7 @@ describe('BotService — pending confirmation store (ADR-014 §3)', () => {
 
   test('the pending record lives outside the session blob, so clearing one keeps the other', async () => {
     const s = svc();
-    await s.loadSession(ADMIN);
+    await s.loadSession(ADMIN, db);
     await s.setPending(ADMIN, pending(A));
 
     await s.clearSession(ADMIN);
@@ -254,8 +279,8 @@ describe('BotService.handleMessage — list_tasks smoke (mocked Anthropic)', () 
     const emitted: Emitted[] = [];
     const svc = new BotService(mockAnthropic(), redis, mockIo(emitted));
 
-    const session = await svc.loadSession(ADMIN);
-    await svc.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'list my tasks', db });
+    const session = await svc.loadSession(ADMIN, db);
+    await svc.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'list my tasks', db, userMessageId: await seedUserTurn(ADMIN) });
 
     const tokens = emitted.filter((e) => e.event === 'bot:token');
     const terminals = emitted.filter((e) => e.event === 'bot:message');
@@ -283,26 +308,34 @@ describe('BotService.handleMessage — list_tasks smoke (mocked Anthropic)', () 
     // reply archived by handleMessage.
     const messageId = await svc.archiveUserMessage(ADMIN, 'list my tasks', db);
     expect(messageId).toBeTruthy();
-    const session = await svc.loadSession(ADMIN);
-    await svc.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'list my tasks', db });
+    const session = await svc.loadSession(ADMIN, db);
+    await svc.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'list my tasks', db, userMessageId: messageId });
 
+    // ADR-021: the query can no longer be `sender_id = ADMIN` — the bot's row is
+    // deliberately anonymous. Ownership comes from the join, which is the whole
+    // point of the change, so the test asks the question the same way the app does.
     const rows = await db
-      .selectFrom('messages')
-      .select(['channel', 'sender_type', 'content'])
-      .where('sender_id', '=', ADMIN)
-      .where('channel', '=', 'bot')
-      .orderBy('created_at', 'asc')
+      .selectFrom('messages as m')
+      .leftJoin('messages as p', 'p.id', 'm.parent_id')
+      .select(['m.channel', 'm.sender_type', 'm.content', 'm.sender_id', 'm.parent_id'])
+      .where('m.channel', '=', 'bot')
+      .where(sql<boolean>`COALESCE(m.sender_id, p.sender_id) = ${ADMIN}`)
+      .orderBy('m.created_at', 'asc')
       .execute();
 
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({ channel: 'bot', sender_type: 'user', content: 'list my tasks' });
+    expect(rows[0]!.sender_id).toBe(ADMIN);
     expect(rows[1]).toMatchObject({ channel: 'bot', sender_type: 'bot', content: 'Here are your tasks.' });
+    // The reply is anonymous and linked — the two halves of ADR-021.
+    expect(rows[1]!.sender_id).toBeNull();
+    expect(rows[1]!.parent_id).toBe(messageId);
   });
 
   test('persists the Redis session with an incremented turnCount', async () => {
     const svc = new BotService(mockAnthropic(), redis, mockIo([]));
-    const loaded = await svc.loadSession(ADMIN);
-    await svc.handleMessage({ session: loaded, staffId: ADMIN, role: 'admin', userText: 'list my tasks', db });
+    const loaded = await svc.loadSession(ADMIN, db);
+    await svc.handleMessage({ session: loaded, staffId: ADMIN, role: 'admin', userText: 'list my tasks', db, userMessageId: await seedUserTurn(ADMIN) });
 
     const raw = await redis.get(`bot:session:${ADMIN}`);
     expect(raw).toBeTruthy();
@@ -400,8 +433,8 @@ describe('BotService — permission filter (get_attendance overridden off)', () 
     ]);
     const emitted: Emitted[] = [];
     const svc = new BotService(client, redis, mockIo(emitted));
-    const session = await svc.loadSession(MEMBER);
-    await svc.handleMessage({ session, staffId: MEMBER, role: 'team_member', userText: 'attendance?', db });
+    const session = await svc.loadSession(MEMBER, db);
+    await svc.handleMessage({ session, staffId: MEMBER, role: 'team_member', userText: 'attendance?', db, userMessageId: await seedUserTurn(MEMBER) });
 
     // Filtered out of the tool list handed to Anthropic…
     const sentToolNames = (calls[0]?.tools ?? []).map((t) => t.name);
@@ -435,8 +468,8 @@ describe('BotService — Anthropic failure surfaces friendly copy only', () => {
 
     const emitted: Emitted[] = [];
     const svc = new BotService(client, redis, mockIo(emitted));
-    const session = await svc.loadSession(ADMIN);
-    await svc.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'hi', db });
+    const session = await svc.loadSession(ADMIN, db);
+    await svc.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'hi', db, userMessageId: await seedUserTurn(ADMIN) });
 
     const terminals = emitted.filter((e) => e.event === 'bot:message');
     expect(terminals).toHaveLength(1);

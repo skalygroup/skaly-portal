@@ -1,5 +1,5 @@
 import { Redis } from 'ioredis';
-import { Kysely, PostgresDialect } from 'kysely';
+import { Kysely, PostgresDialect, sql } from 'kysely';
 import pg from 'pg';
 import { describe, test, expect, beforeAll, afterEach, afterAll } from 'vitest';
 
@@ -135,12 +135,33 @@ async function resetTask(): Promise<void> {
     .execute();
 }
 
+/**
+ * A real user turn for the bot's reply to hang off (ADR-021). parent_id is a genuine
+ * FK to messages(id), so these tests can no longer hand handleMessage an invented id
+ * — which is the point: the link is enforced by the database, not by convention.
+ */
+async function seedUserTurn(staffId: string): Promise<string> {
+  const row = await db
+    .insertInto('messages')
+    .values({ channel: 'bot', sender_id: staffId, sender_type: 'user', content: 'seed turn', content_type: 'text' })
+    .returning('id')
+    .executeTakeFirstOrThrow();
+  return row.id;
+}
+
 async function cleanup(): Promise<void> {
   const staff = [ADMIN, MEMBER, MANAGER];
   await redis.del(
     ...staff.flatMap((id) => [`bot:session:${id}`, `bot:pending:${id}`, `perms:${id}`]),
   );
-  await db.deleteFrom('messages').where('sender_id', 'in', staff).execute();
+  // The conversation, not "rows carrying my id" — see ADR-021 and the same note in
+  // BotService.test.ts. Bot replies hang off parent_id with a NULL sender_id.
+  await sql`
+    DELETE FROM messages
+    WHERE sender_id = ANY(${staff})
+       OR parent_id IN (SELECT id FROM messages WHERE sender_id = ANY(${staff}))
+  `.execute(db);
+  await db.deleteFrom('bot_sessions').where('staff_id', 'in', staff).execute();
   await db.deleteFrom('audit_log').where('record_id', '=', TASK).execute();
 }
 
@@ -181,8 +202,8 @@ afterAll(async () => {
 async function turn1(sink: Emitted[] = []): Promise<{ confirmationId: string; sink: Emitted[] }> {
   const spy = mockAnthropic({ taskId: TASK, status: 'Done' });
   const s = svc(spy, sink);
-  const session = await s.loadSession(ADMIN);
-  await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'mark the naaz reel done', db });
+  const session = await s.loadSession(ADMIN, db);
+  await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'mark the naaz reel done', db, userMessageId: await seedUserTurn(ADMIN) });
 
   const terminal = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload;
   const card = terminal.card as { type: string; confirmationId: string };
@@ -245,8 +266,8 @@ describe('the tool loop is bounded, not two-phase', () => {
   test('a second round of tool_use is answered, not persisted dangling', async () => {
     const spy = twoRoundAnthropic();
     const s = svc(spy, []);
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'what is going on', db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'what is going on', db, userMessageId: await seedUserTurn(ADMIN) });
 
     // Three streams ran, so the loop went past Sprint 8's hard stop at two.
     expect(spy.calls.length).toBe(3);
@@ -261,8 +282,8 @@ describe('the tool loop is bounded, not two-phase', () => {
   test('a completed chain ends with the assistant answer', async () => {
     const spy = twoRoundAnthropic();
     const s = svc(spy, []);
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'what is going on', db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'what is going on', db, userMessageId: await seedUserTurn(ADMIN) });
 
     const stored = JSON.parse((await redis.get(`bot:session:${ADMIN}`))!) as {
       messages: Anthropic.MessageParam[];
@@ -296,10 +317,10 @@ describe('the tool loop is bounded, not two-phase', () => {
 
     const sink: Emitted[] = [];
     const s = svc({ client, calls }, sink);
-    const session = await s.loadSession(ADMIN);
+    const session = await s.loadSession(ADMIN, db);
     // Never throws — a hard error at the cap reads to the user as the very
     // "trouble connecting" bug this loop was rewritten to fix (ADR-018 §2).
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'loop forever', db });
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'loop forever', db, userMessageId: await seedUserTurn(ADMIN) });
 
     expect(calls.length).toBe(4); // MAX_TOOL_ROUNDS, and no extra closing stream
 
@@ -346,8 +367,8 @@ describe('the tool loop is bounded, not two-phase', () => {
 
     const spy = mockPlainAnthropic();
     const s = svc(spy, []);
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'try again', db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'try again', db, userMessageId: await seedUserTurn(ADMIN) });
 
     // What went to the API is what the API validates.
     const sent = JSON.stringify(spy.calls[0]!.messages);
@@ -393,8 +414,8 @@ describe('the tool loop is bounded, not two-phase', () => {
 
     const sink: Emitted[] = [];
     const s = new BotService(client, redis, mockIo(sink));
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'mark the naaz reel done', db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'mark the naaz reel done', db, userMessageId: await seedUserTurn(ADMIN) });
 
     // Staged, not executed.
     expect(await taskStatus()).toBe('In Progress');
@@ -437,8 +458,8 @@ describe('turn 1 — the gate', () => {
   test('feeds the model a synthetic tool_result, so the next request is valid', async () => {
     const spy = mockAnthropic({ taskId: TASK, status: 'Done' });
     const s = svc(spy, []);
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'mark it done', db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'mark it done', db, userMessageId: await seedUserTurn(ADMIN) });
 
     // Phase 2's request must contain a tool_result for toolu_1 — the Anthropic API
     // 400s on a tool_use with no matching result, and that 400 would land on the
@@ -457,8 +478,8 @@ describe('turn 1 — the gate', () => {
   test('a hallucinated id creates NO pending state', async () => {
     const spy = mockAnthropic({ taskId: 'e2000000-0000-4000-8000-00000000dead', status: 'Done' });
     const s = svc(spy, []);
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'mark the ghost done', db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'mark the ghost done', db, userMessageId: await seedUserTurn(ADMIN) });
 
     expect(await s.peekPending(ADMIN)).toBeNull();
   });
@@ -488,8 +509,8 @@ describe('manager — the role the E2E fixtures cannot reach', () => {
     const spy = mockAnthropic({ taskId: TASK, status: 'Done' });
     const sink: Emitted[] = [];
     const s = svc(spy, sink);
-    const session = await s.loadSession(MANAGER);
-    await s.handleMessage({ session, staffId: MANAGER, role: 'manager', userText: 'mark the naaz reel done', db });
+    const session = await s.loadSession(MANAGER, db);
+    await s.handleMessage({ session, staffId: MANAGER, role: 'manager', userText: 'mark the naaz reel done', db, userMessageId: await seedUserTurn(MANAGER) });
 
     // Turn 1 stages and writes nothing, exactly as for an admin.
     expect(await taskStatus()).toBe('In Progress');
@@ -500,7 +521,7 @@ describe('manager — the role the E2E fixtures cannot reach', () => {
     expect(card.type).toBe('confirmation');
 
     const s2 = svc(undefined, []);
-    const next = await s2.loadSession(MANAGER);
+    const next = await s2.loadSession(MANAGER, db);
     await s2.handleMessage({
       session: next,
       staffId: MANAGER,
@@ -509,6 +530,7 @@ describe('manager — the role the E2E fixtures cannot reach', () => {
       decision: 'confirm',
       confirmationId: card.confirmationId,
       db,
+      userMessageId: await seedUserTurn(MANAGER),
     });
 
     expect(await taskStatus()).toBe('Done');
@@ -531,8 +553,8 @@ describe('manager — the role the E2E fixtures cannot reach', () => {
     const spy = mockAnthropic({ clientId: '11111111-1111-4111-8111-111111111111' }, 'deactivate_client');
     const sink: Emitted[] = [];
     const s = svc(spy, sink);
-    const session = await s.loadSession(MANAGER);
-    await s.handleMessage({ session, staffId: MANAGER, role: 'manager', userText: 'deactivate that client', db });
+    const session = await s.loadSession(MANAGER, db);
+    await s.handleMessage({ session, staffId: MANAGER, role: 'manager', userText: 'deactivate that client', db, userMessageId: await seedUserTurn(MANAGER) });
 
     // Withheld: the tool never reached the model in the first place.
     const offered = (spy.calls[0]!.tools ?? []).map((t) => t.name);
@@ -558,7 +580,7 @@ describe('turn 2 — execution', () => {
     const sink: Emitted[] = [];
     // No Anthropic client at all: if turn 2 tried to stream, this would throw.
     const s = svc(undefined, sink);
-    const session = await s.loadSession(ADMIN);
+    const session = await s.loadSession(ADMIN, db);
     await s.handleMessage({
       session,
       staffId: ADMIN,
@@ -567,6 +589,7 @@ describe('turn 2 — execution', () => {
       decision: 'confirm',
       confirmationId,
       db,
+      userMessageId: await seedUserTurn(ADMIN),
     });
 
     expect(await taskStatus()).toBe('Done');
@@ -584,8 +607,8 @@ describe('turn 2 — execution', () => {
   test("the write is audited as 'bot', attributed to the human (ADR-016)", async () => {
     const { confirmationId } = await turn1();
     const s = svc(undefined, []);
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db, userMessageId: await seedUserTurn(ADMIN) });
 
     const row = await db
       .selectFrom('audit_log')
@@ -601,15 +624,15 @@ describe('turn 2 — execution', () => {
     const { confirmationId } = await turn1();
     const s = svc(undefined, []);
 
-    const first = await s.loadSession(ADMIN);
-    await s.handleMessage({ session: first, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db });
+    const first = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session: first, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db, userMessageId: await seedUserTurn(ADMIN) });
     expect(await taskStatus()).toBe('Done');
 
     // Replay the exact same click.
     const sink: Emitted[] = [];
     const s2 = svc(undefined, sink);
-    const second = await s2.loadSession(ADMIN);
-    await s2.handleMessage({ session: second, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db });
+    const second = await s2.loadSession(ADMIN, db);
+    await s2.handleMessage({ session: second, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db, userMessageId: await seedUserTurn(ADMIN) });
 
     const terminal = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload;
     expect(terminal.content).toBe("I've already handled that one. What would you like to do?");
@@ -621,8 +644,8 @@ describe('turn 2 — execution', () => {
     expect(confirmationId).toBeTruthy();
 
     const s = svc(undefined, []);
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'do it', db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'do it', db, userMessageId: await seedUserTurn(ADMIN) });
     expect(await taskStatus()).toBe('Done');
   });
 
@@ -631,8 +654,8 @@ describe('turn 2 — execution', () => {
 
     const sink: Emitted[] = [];
     const s = svc(undefined, sink);
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'Cancel', decision: 'cancel', confirmationId, db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'Cancel', decision: 'cancel', confirmationId, db, userMessageId: await seedUserTurn(ADMIN) });
 
     expect(await taskStatus()).toBe('In Progress');
     expect(await s.peekPending(ADMIN)).toBeNull();
@@ -650,8 +673,8 @@ describe('turn 2 — execution', () => {
 
     const sink: Emitted[] = [];
     const s2 = svc(undefined, sink);
-    const session = await s2.loadSession(ADMIN);
-    await s2.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db });
+    const session = await s2.loadSession(ADMIN, db);
+    await s2.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db, userMessageId: await seedUserTurn(ADMIN) });
 
     expect(await taskStatus()).toBe('In Progress');
     const terminal = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload;
@@ -662,7 +685,7 @@ describe('turn 2 — execution', () => {
     await turn1();
     const sink: Emitted[] = [];
     const s = svc(undefined, sink);
-    const session = await s.loadSession(ADMIN);
+    const session = await s.loadSession(ADMIN, db);
     await s.handleMessage({
       session,
       staffId: ADMIN,
@@ -671,6 +694,7 @@ describe('turn 2 — execution', () => {
       decision: 'confirm',
       confirmationId: 'e2000000-0000-4000-8000-0000000000ff',
       db,
+      userMessageId: await seedUserTurn(ADMIN),
     });
 
     expect(await taskStatus()).toBe('In Progress');
@@ -692,8 +716,8 @@ describe('turn 2 — execution', () => {
     try {
       const sink: Emitted[] = [];
       const s = svc(undefined, sink);
-      const session = await s.loadSession(ADMIN);
-      await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db });
+      const session = await s.loadSession(ADMIN, db);
+      await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db, userMessageId: await seedUserTurn(ADMIN) });
 
       expect(await taskStatus()).toBe('In Progress');
       const content = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload.content as string;
@@ -745,8 +769,8 @@ describe('the card shows values a human can consent to (ADR-014 §4)', () => {
 
     const sink: Emitted[] = [];
     const s = new BotService(client, redis, mockIo(sink));
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'do the thing', db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'do the thing', db, userMessageId: await seedUserTurn(ADMIN) });
     return {
       card: sink.filter((e) => e.event === 'bot:message').at(-1)!.payload.card as
         | { summary: { changes: Array<{ field: string; from: string; to: string }>; target: string } }
@@ -837,8 +861,8 @@ describe('turn 2 — re-validation between the summary and the yes', () => {
     try {
       const sink: Emitted[] = [];
       const s = svc(undefined, sink);
-      const session = await s.loadSession(ADMIN);
-      await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db });
+      const session = await s.loadSession(ADMIN, db);
+      await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db, userMessageId: await seedUserTurn(ADMIN) });
 
       expect(await taskStatus()).toBe('In Progress');
       const content = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload.content as string;
@@ -858,8 +882,8 @@ describe('turn 2 — re-validation between the summary and the yes', () => {
     await db.updateTable('months').set({ locked: true }).where('period', '=', PERIOD).execute();
     try {
       const s = svc(undefined, []);
-      const session = await s.loadSession(ADMIN);
-      await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db });
+      const session = await s.loadSession(ADMIN, db);
+      await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db, userMessageId: await seedUserTurn(ADMIN) });
       expect(await s.peekPending(ADMIN)).toBeNull();
     } finally {
       await db.updateTable('months').set({ locked: false }).where('period', '=', PERIOD).execute();
@@ -874,13 +898,14 @@ describe('turn 2 — a qualified yes is not consent', () => {
     // A fresh model mock: the message falls through to the normal Sprint 8 flow.
     const spy = mockAnthropic({ taskId: TASK, status: 'Done' });
     const s = svc(spy, []);
-    const session = await s.loadSession(ADMIN);
+    const session = await s.loadSession(ADMIN, db);
     await s.handleMessage({
       session,
       staffId: ADMIN,
       role: 'admin',
       userText: 'yes, but make it Friday',
       db,
+      userMessageId: await seedUserTurn(ADMIN),
     });
 
     // It did NOT execute the summarised change...
@@ -895,8 +920,8 @@ describe('turn 2 — a qualified yes is not consent', () => {
 
     // The model answers the new question plainly — no fresh mutation intent.
     const s = svc(mockPlainAnthropic(), []);
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'what are my overdue tasks?', db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'what are my overdue tasks?', db, userMessageId: await seedUserTurn(ADMIN) });
 
     // A stale confirmation must not survive to be answered by a later bare "yes".
     expect(await s.peekPending(ADMIN)).toBeNull();
@@ -906,13 +931,13 @@ describe('turn 2 — a qualified yes is not consent', () => {
   test('after an unrelated message, a bare "yes" executes nothing', async () => {
     await turn1();
 
-    const first = await svc(mockPlainAnthropic(), []).loadSession(ADMIN);
+    const first = await svc(mockPlainAnthropic(), []).loadSession(ADMIN, db);
     const s = svc(mockPlainAnthropic(), []);
-    await s.handleMessage({ session: first, staffId: ADMIN, role: 'admin', userText: 'never mind, what is the weather', db });
+    await s.handleMessage({ session: first, staffId: ADMIN, role: 'admin', userText: 'never mind, what is the weather', db, userMessageId: await seedUserTurn(ADMIN) });
 
     const s2 = svc(mockPlainAnthropic(), []);
-    const second = await s2.loadSession(ADMIN);
-    await s2.handleMessage({ session: second, staffId: ADMIN, role: 'admin', userText: 'yes', db });
+    const second = await s2.loadSession(ADMIN, db);
+    await s2.handleMessage({ session: second, staffId: ADMIN, role: 'admin', userText: 'yes', db, userMessageId: await seedUserTurn(ADMIN) });
 
     // The "yes" is now just a message — there is nothing pending for it to confirm.
     expect(await taskStatus()).toBe('In Progress');
@@ -924,6 +949,15 @@ describe('persist-then-emit', () => {
     const { confirmationId } = await turn1();
 
     let sessionAtEmitTime: string | null = null;
+    // The handler is async and BotService fires it without awaiting (emit is
+    // fire-and-forget by design), so the test must wait for the read itself. It used
+    // to pass by luck: the DB archive ran after the emit and its await gave this
+    // handler time to finish. ADR-021 moved both durable writes ahead of the emit —
+    // correctly — leaving nothing behind it to await.
+    let observed!: () => void;
+    const emitObserved = new Promise<void>((resolve) => {
+      observed = resolve;
+    });
     const io = {
       of: () => ({
         to: () => ({
@@ -931,6 +965,7 @@ describe('persist-then-emit', () => {
             // Read the session AT the moment of the emit: it must already be there.
             if (event === 'bot:message' && sessionAtEmitTime === null) {
               sessionAtEmitTime = await redis.get(`bot:session:${ADMIN}`);
+              observed();
             }
           },
         }),
@@ -938,14 +973,15 @@ describe('persist-then-emit', () => {
     } as unknown as Server;
 
     const s = new BotService({} as Anthropic, redis, io);
-    const session = await s.loadSession(ADMIN);
-    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db });
+    const session = await s.loadSession(ADMIN, db);
+    await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'yes', decision: 'confirm', confirmationId, db, userMessageId: await seedUserTurn(ADMIN) });
 
+    await emitObserved;
     expect(sessionAtEmitTime).not.toBeNull();
     expect(sessionAtEmitTime!).toContain('Done — Mark task as Done');
 
     // And the recovery path sees it.
-    const view = await s.sessionView(ADMIN);
+    const view = await s.sessionView(ADMIN, db);
     expect(view.messages.at(-1)).toMatchObject({ role: 'assistant' });
     expect(view.messages.at(-1)!.content).toContain('Done — Mark task as Done');
   });
