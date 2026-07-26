@@ -107,13 +107,28 @@ That reframes the question away from cascade-vs-unlink:
 
 **The job's shape:**
 
-- **Bot channel** — scope by `bot_sessions.last_activity_at`, not by per-row `created_at`.
-  The session is the boundary, so whole conversations age out together and a turn-pair is
-  never split across the cutoff. This is where `bot_sessions` stops being bookkeeping and
-  earns its place.
-- **Chat channel** — threads have no session envelope, so exclude any parent whose replies
-  are newer than the cutoff.
-- **Both** — one statement per batch. Never parent-first, never two statements.
+- **One rule, both channels** — delete a message past the cutoff **unless it still has a
+  reply inside the window**. `parent_id` is what keeps a pair together: a bot reply is a
+  child of its question, so the question cannot be deleted while the answer is live.
+- **One statement per batch.** Never parent-first, never two statements.
+
+> **Correction (Sprint 10 STEP 8, found by test).** This addendum originally said to scope
+> the bot channel by `bot_sessions.last_activity_at`, "so whole conversations age out
+> together". **That is not expressible.** `messages` carries no session reference — this
+> ADR deliberately gave `parent_id` the message graph and `bot_sessions` the session
+> lifecycle, and never linked a row to a session. The first implementation therefore
+> joined `bot_sessions` on `staff_id`, which means **one expired session deletes that
+> person's entire bot history, live conversations included.**
+>
+> The turn-pair guarantee the session scoping was reaching for is already provided by
+> `parent_id`, and the two turns are written seconds apart so they cross the cutoff
+> together. Scoping by session bought nothing the graph did not already give, and cost a
+> silent data-loss bug.
+>
+> If whole-conversation retention is ever genuinely wanted, it needs a `session_id` column
+> on `messages` — a migration, and a deliberate decision — not a join on the staff member.
+> Tested in `test/services/MessageRetention.test.ts`, including the straddling pair and
+> the two-conversations-one-person regression.
 
 **Write the job's test from the teardown's fix.** Sprint 9's suite produced a working
 demonstration of the failure; that is a free test case for a job that does not exist yet, and

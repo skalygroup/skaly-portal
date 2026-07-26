@@ -260,39 +260,40 @@ export class NotificationService {
    * Messages past the NFR §5.2 retention horizon.
    *
    * Built and tested now so Sprint 12's cron is a one-liner rather than a design
-   * session at 02:00 IST. See ADR-021's addendum for why this MUST stay a single
-   * statement: `messages_parent_id_fkey` is NO ACTION, checked at statement end, so
-   * one DELETE removing a parent and its children together succeeds — while two
-   * statements, or parent-first, fail. Bot rows age out by their session's
-   * last_activity_at so a turn-pair is never split across the cutoff; chat parents
-   * with newer replies are held back.
+   * session at 02:00 IST.
+   *
+   * ONE STATEMENT, and that is load-bearing (ADR-021 addendum):
+   * `messages_parent_id_fkey` is NO ACTION, which Postgres checks at STATEMENT END —
+   * so a single DELETE removing a parent and its children together succeeds, while two
+   * statements or parent-first ordering raise the constraint. Sprint 10's teardowns hit
+   * that wall three times.
+   *
+   * ONE RULE FOR BOTH CHANNELS: delete a message past the cutoff unless it still has a
+   * reply inside the window.
+   *
+   * The ADR's first draft scoped bot rows by `bot_sessions.last_activity_at`. That is
+   * not expressible: `messages` carries no session reference — ADR-021 deliberately
+   * gave parent_id the message graph and bot_sessions the session lifecycle, and never
+   * linked a row to a session. Joining bot_sessions on staff_id instead, as the first
+   * implementation did, means ONE expired session deletes that person's ENTIRE bot
+   * history including live conversations. A test caught it; the ADR addendum is
+   * corrected to match.
+   *
+   * The turn-pair guarantee the session scoping was meant to provide is what parent_id
+   * already gives: a bot reply is a child of its question, so the question cannot be
+   * deleted while the answer is inside the window, and both are written seconds apart
+   * so they cross the cutoff together.
    */
   async deleteExpiredMessages(trx: Executor): Promise<number> {
     const cutoff = sql`now() - interval '${sql.raw(String(RETENTION_MONTHS))} months'`;
 
     const result = await sql<{ id: string }>`
       DELETE FROM messages m
-      WHERE m.id IN (
-        -- Bot: whole conversations, keyed by the session envelope (ADR-021 §4).
-        SELECT b.id
-        FROM messages b
-        LEFT JOIN messages bp ON bp.id = b.parent_id
-        JOIN bot_sessions s
-          ON s.staff_id = COALESCE(b.sender_id, bp.sender_id)
-        WHERE b.channel = 'bot'
-          AND s.last_activity_at < ${cutoff}
-        UNION
-        -- Chat: no session envelope, so hold back any parent whose replies are still
-        -- inside their own window. CASCADE here would take them with it.
-        SELECT c.id
-        FROM messages c
-        WHERE c.channel <> 'bot'
-          AND c.created_at < ${cutoff}
-          AND NOT EXISTS (
-            SELECT 1 FROM messages r
-            WHERE r.parent_id = c.id AND r.created_at >= ${cutoff}
-          )
-      )
+      WHERE m.created_at < ${cutoff}
+        AND NOT EXISTS (
+          SELECT 1 FROM messages r
+          WHERE r.parent_id = m.id AND r.created_at >= ${cutoff}
+        )
       RETURNING m.id
     `.execute(trx);
 
