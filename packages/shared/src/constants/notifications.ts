@@ -138,12 +138,20 @@ export const NOTIFICATION_REGISTRY = {
     producerSprint: 2,
   },
   signup_rejected: {
-    title: 'Your access request was declined',
+    title: 'A signup request was declined',
     template:
-      'An admin rejects a signup request. Carries the PUBLIC message only — never rejection_note.',
+      'An admin rejects a signup request. Goes to the OTHER admins — the applicant has no staff row and is unreachable in-app (ADR-020). Carries the PUBLIC message only, never rejection_note.',
     icon: 'UserX',
     severity: 'warning',
-    linkBuilder: (_payload: Record<string, unknown>) => null,
+    // The queue defaults to PENDING, and the thing being linked to is by definition no
+    // longer pending — so the filter is part of the address, not a nicety. Without it
+    // the notification drops the admin on an empty list.
+    linkBuilder: (p) => {
+      const id = str(p, 'requestId');
+      return id
+        ? `/settings/signup-requests?status=rejected&highlight=${id}`
+        : '/settings/signup-requests?status=rejected';
+    },
     producerSprint: 2,
   },
   account_reactivated: {

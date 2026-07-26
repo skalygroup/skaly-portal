@@ -1,6 +1,8 @@
+import { NOTIFICATION_REGISTRY } from '@skaly/shared';
 import { Kysely, PostgresDialect, sql } from 'kysely';
 import pg from 'pg';
 import { describe, test, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+
 
 import { transactionWithEmits } from '../../src/lib/emit-after-commit.js';
 import { AuthService } from '../../src/services/AuthService.js';
@@ -60,6 +62,12 @@ beforeAll(async () => {
   await db
     .insertInto('staff')
     .values([
+      // TWO admins, deliberately. signup_rejected routes to the NON-ACTOR admins, so
+      // with a single admin the recipient set is empty and the type produces zero
+      // rows — an assertion written against one admin would pass vacuously and prove
+      // nothing. ACTOR rejects; OTHER is the recipient the test needs to exist.
+      // (See the single-admin test below: zero rows is the CORRECT behaviour, and
+      // it is likely the real one at MVP, where Skaly may run with one admin.)
       { id: ACTOR, name: 'Producer Actor', email: `actor${DOMAIN}`, role: 'admin', active: true },
       { id: OTHER, name: 'Producer Other', email: `other${DOMAIN}`, role: 'admin', active: true },
       { id: MEMBER, name: 'Producer Member', email: `member${DOMAIN}`, role: 'team_member', active: true },
@@ -204,6 +212,49 @@ describe('signup_rejected — the gap Sprint 2 left', () => {
     expect(serialised).not.toContain('rejection_note');
 
     await db.deleteFrom('signup_requests').where('id', '=', request.id).execute();
+  });
+
+  test('with a SINGLE admin the type produces nothing — correct, and likely the MVP reality', async () => {
+    // The non-actor rule means a lone admin rejecting a request notifies nobody.
+    // That is right (telling you what you just did is noise), but it means this type
+    // may genuinely never fire in production if Skaly runs one admin. Asserted so the
+    // behaviour is a recorded decision rather than something discovered as a "bug".
+    await db.updateTable('staff').set({ role: 'manager' }).where('id', '=', OTHER).execute();
+
+    const auth = new AuthService(
+      db,
+      {} as never,
+      {} as never,
+      { warn: () => {}, error: () => {}, info: () => {}, debug: () => {} } as never,
+      {} as never,
+      'test-bucket',
+    );
+
+    const request = await db
+      .insertInto('signup_requests')
+      .values({
+        name: 'Lone Admin Applicant',
+        email: `lone${DOMAIN}`,
+        date_of_birth: '1995-01-01',
+        mobile_number: '9000000001',
+        role_requested: 'team_member',
+        status: 'pending',
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    await auth.rejectSignupRequest(request.id, 'INTERNAL', 'Thanks for applying.', ACTOR);
+
+    expect(await notifsOf('signup_rejected')).toHaveLength(0);
+
+    await db.deleteFrom('signup_requests').where('id', '=', request.id).execute();
+    await db.updateTable('staff').set({ role: 'admin' }).where('id', '=', OTHER).execute();
+  });
+
+  test('the deep link carries the filter AND the target, not just the page', () => {
+    // The queue defaults to pending; a rejected request is by definition not there.
+    const link = NOTIFICATION_REGISTRY.signup_rejected.linkBuilder({ requestId: 'req-9' });
+    expect(link).toBe('/settings/signup-requests?status=rejected&highlight=req-9');
   });
 });
 

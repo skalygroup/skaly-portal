@@ -75,6 +75,52 @@ It is therefore reclassified from **gap** to **deferred, owned by Sprint 11**, a
 
 **After Sprint 10 closes the five real gaps: 11 with producers, 7 deferred, 18 total.**
 
+### `signup_rejected` has no applicant-facing recipient, by construction
+
+Recorded because the type name invites the opposite assumption. Someone reading the enum
+in six months will see `signup_rejected`, conclude the applicant is told, and "fix" it.
+
+**The applicant cannot receive it.** `notifications.staff_id` is a NOT NULL FK to
+`staff(id)`; rejection never creates a staff row; and operational notifications are in-app
+only (email is Supabase's auth flow, not a channel this system sends on). There was no
+applicant-facing delivery path to choose. The alternatives were a nullable `staff_id` plus
+a pending-recipient concept — a migration for one type — or parking it with the deferred,
+which would be dishonest since the producer exists and fires.
+
+**It routes to the NON-ACTOR admins.** The loop opens with admins (`signup_request`) and
+closes with them, which is coherent rather than a workaround, and it carries real
+operational value independent of any coverage test: with more than one admin, B needs to
+know A already handled it, or B opens the queue, finds it empty, and wonders what broke.
+The audit log answers that on a pull; a notification answers it on a push.
+
+Excluding the actor is ADR-006's non-actor rule generalised — the detail most often missed
+when a notification is redirected to a group containing whoever triggered it.
+
+**Consequence, accepted:** with a single admin the recipient set is empty and the type
+produces nothing. That is correct (telling you what you just did is noise), and it may be
+the MVP reality. Both the two-admin fixture and the zero-row single-admin case are
+asserted in `test/services/NotificationProducers.test.ts` so neither is discovered later
+as a bug.
+
+**`rejection_note` is audit-only.** The payload carries `publicRejectionMessage`. A payload
+is the least-guarded thing this system sends, and the internal note must never ride it.
+
+**The deep link needs the filter, not just the page.** The queue defaults to *pending*, and
+a rejected request is by definition no longer there — so `linkBuilder` produces
+`/settings/signup-requests?status=rejected&highlight={requestId}`.
+
+> **Out of scope, and named so it is not lost:** none of this tells the *applicant*
+> anything. A rejected or still-pending applicant learns nothing from any channel. If
+> self-signup creates the Supabase auth user up front, both can authenticate and then fail
+> the `supabase_uid` → staff lookup, and Error-Handling §2 has no `SIGNUP_PENDING` or
+> `SIGNUP_REJECTED` to distinguish them — both land on a generic auth failure. The
+> applicant's whole experience is submitting a form and then being unable to log in, with
+> no explanation, indefinitely. That is almost certainly what this type was originally
+> gesturing at, and routing it to admins does not close it. The fix is small (two error
+> codes plus a login-screen message keyed off the `signup_requests` row) but it belongs at
+> the **pre-launch gate**, beside the recovery-code redeem path — not squeezed into
+> Sprint 10.
+
 ## Decision
 
 1. **The canonical count is 18.** `PRD` §4.9 (FR-NOTIF-02) and `IMPL-PLAN` §13 are patched
