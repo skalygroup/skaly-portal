@@ -312,11 +312,33 @@ export class BotService {
       .execute()
       .catch((err: unknown) => logger.error({ err, staffId }, 'bot session envelope insert failed'));
 
+    // A live session supersedes any "cleared" marker — leaving it would only matter if
+    // this session later expired, and by then the clear is long spent.
+    await this.redis.del(this.clearedKey(staffId));
+
     return session;
   }
 
+  /**
+   * "New conversation" — drop the live session AND record that it was deliberate.
+   *
+   * The marker exists because the ADR-021 archive fallback cannot otherwise tell two
+   * very different situations apart: a session that EXPIRED after 12h (where the user
+   * wants their history back) and one the user explicitly CLEARED (where they asked for
+   * a blank slate). Both leave Redis empty, so without this the Clear button appears to
+   * do nothing — the old conversation is immediately resurrected from the archive.
+   *
+   * Scoped to the session TTL on purpose: "start fresh" is an intent about the current
+   * session, and once that window has passed the live session would have expired
+   * anyway, so letting the archive become reachable again is the correct end state.
+   */
   async clearSession(staffId: string): Promise<void> {
     await this.redis.del(this.sessionKey(staffId));
+    await this.redis.set(this.clearedKey(staffId), '1', 'EX', SESSION_TTL_SECONDS);
+  }
+
+  private clearedKey(staffId: string): string {
+    return `bot:cleared:${staffId}`;
   }
 
   /** Read-only conversational view for GET — never creates a session; returns the
@@ -326,7 +348,15 @@ export class BotService {
     // ADR-021 §5: Redis first, then the archive. Without this fallback the 12-month
     // retention keeps rows nobody can reach — attributable but write-only, which is
     // barely better than unattributable.
-    if (!raw) return this.archivedView(staffId, db);
+    //
+    // …but NOT after an explicit clear. See clearSession: an expired session and a
+    // cleared one are indistinguishable from Redis alone, and resurrecting a
+    // conversation the user just dismissed is worse than losing the fallback.
+    if (!raw) {
+      const cleared = await this.redis.get(this.clearedKey(staffId));
+      if (cleared) return { sessionId: null, messages: [], turnCount: 0, lastActivityAt: null };
+      return this.archivedView(staffId, db);
+    }
     const s = JSON.parse(raw) as BotSession;
     const messages = s.messages
       .map((m) => ({ role: m.role, content: extractText(m.content) }))

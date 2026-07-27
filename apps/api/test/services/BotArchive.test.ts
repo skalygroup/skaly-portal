@@ -98,7 +98,13 @@ async function cleanup(): Promise<void> {
        OR parent_id IN (SELECT id FROM messages WHERE sender_id = ANY(${staff}))
   `.execute(db);
   await db.deleteFrom('bot_sessions').where('staff_id', 'in', staff).execute();
-  await redis.del(`bot:session:${A}`, `bot:session:${B}`, `bot:pending:${A}`, `bot:pending:${B}`);
+  await redis.del(
+    `bot:session:${A}`, `bot:session:${B}`,
+    `bot:pending:${A}`, `bot:pending:${B}`,
+    // The clear marker is session state too — leaving it makes the NEXT test's
+    // fallback silently return empty for a reason it never set up.
+    `bot:cleared:${A}`, `bot:cleared:${B}`,
+  );
 }
 
 beforeAll(async () => {
@@ -321,5 +327,39 @@ describe('ADR-021 — the DB fallback behind GET /v1/bot/session/current', () =>
   test('no session and no archive → the null shape, unchanged', async () => {
     const view = await svc().sessionView(B, db);
     expect(view).toMatchObject({ sessionId: null, messages: [], turnCount: 0, lastActivityAt: null });
+  });
+
+  test('⭐ an EXPLICIT clear does NOT resurrect the archive', async () => {
+    const s = svc('an answer');
+    await exchange(A, 'a question', 'an answer');
+
+    // "New conversation" — the user asked for a blank slate.
+    await s.clearSession(A);
+
+    const view = await s.sessionView(A, db);
+    // An expired session and a cleared one both leave Redis empty. Without the clear
+    // marker the fallback fires and the conversation the user just dismissed comes
+    // straight back, so the Clear button appears to do nothing.
+    expect(view.messages).toEqual([]);
+    expect(view.sessionId).toBeNull();
+  });
+
+  test('the archive is still reachable after a clear EXPIRES', async () => {
+    const s = svc('an answer');
+    await exchange(A, 'a question', 'an answer');
+    await s.clearSession(A);
+    // Simulate the marker's TTL lapsing — at which point the live session would have
+    // expired anyway, so the archive becoming reachable again is the correct end state.
+    await redis.del(`bot:cleared:${A}`);
+
+    const view = await s.sessionView(A, db);
+    expect(view.messages).toHaveLength(2);
+  });
+
+  test('starting a new session drops the clear marker', async () => {
+    const s = svc();
+    await s.clearSession(A);
+    await s.loadSession(A, db);
+    expect(await redis.get(`bot:cleared:${A}`)).toBeNull();
   });
 });

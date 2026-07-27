@@ -163,6 +163,10 @@ async function cleanup(): Promise<void> {
   `.execute(db);
   await db.deleteFrom('bot_sessions').where('staff_id', 'in', staff).execute();
   await db.deleteFrom('audit_log').where('record_id', '=', TASK).execute();
+  // The add_holiday / remove_holiday bot tools now notify every active staff member
+  // (ADR-020 closed that gap in Sprint 10), so these fixtures accumulate notification
+  // rows that FK staff — and staff cannot be deleted while they exist.
+  await db.deleteFrom('notifications').where('staff_id', 'in', staff).execute();
 }
 
 beforeAll(async () => {
