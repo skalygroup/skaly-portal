@@ -90,11 +90,21 @@ export class HolidayService {
     this.assertAdminOrManager(currentUser);
     await assertPeriodNotLocked(period, trx);
 
+    // Adding a holiday on a date that already has one is a user mistake, not a
+    // server fault — but nothing translated the unique violation, so it surfaced as
+    // a raw 500. Caught rather than pre-read: a SELECT-then-INSERT check is racy,
+    // and the index is the only thing that actually decides.
     const holiday = await trx
       .insertInto('holidays')
       .values({ period, date, name, active: true, added_by: currentUser.staffId })
       .returningAll()
-      .executeTakeFirstOrThrow();
+      .executeTakeFirstOrThrow()
+      .catch((err: unknown) => {
+        if ((err as { code?: string }).code === '23505') {
+          throw new AppError('ALREADY_PROCESSED', `${date} is already a holiday.`);
+        }
+        throw err;
+      });
 
     // Only working days flip; sunday rows are intentionally left as-is.
     await trx

@@ -171,7 +171,10 @@ describe('backfillCurrentPeriod — mid-month hire', () => {
       await db
         .insertInto('holidays')
         .values({ period, date: holidayDate, name: HOLIDAY_MARKER, added_by: OWNER_ID })
-        .onConflict((oc) => oc.columns(['period', 'date']).doNothing())
+        // `.where('active')` mirrors migration 030's index predicate — ON CONFLICT
+        // must name the partial index it is targeting, or Postgres finds no
+        // matching constraint at all.
+        .onConflict((oc) => oc.columns(['period', 'date']).where('active', '=', true).doNothing())
         .execute();
     }
 
