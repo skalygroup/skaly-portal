@@ -1,9 +1,9 @@
 'use client';
 
-import { useQueryClient } from '@tanstack/react-query';
+
 import { useEffect, useState } from 'react';
 
-import { getSocket, WS_NOTIFY } from '@/lib/socket';
+import { getSocket, useSocketRooms, WS_NOTIFY } from '@/lib/socket';
 
 /**
  * Connection state for the Error-Handling §5.4 banner.
@@ -12,15 +12,23 @@ import { getSocket, WS_NOTIFY } from '@/lib/socket';
  * (1s → 2s → 4s → 8s, capped at 30s) and lib/socket.ts configures it. Re-implementing
  * it here would give two competing retry schedules on one socket.
  *
- * ON RECONNECT, REFETCH UNCONDITIONALLY — once, not per query. The socket has no
- * replay: anything broadcast while we were down is simply gone, so the cache is stale
- * by an unknown amount and there is nothing to reconcile against. `invalidateQueries`
- * with no key marks everything stale and refetches what is actually mounted.
+ * ⚠️ THIS NO LONGER REFETCHES (ADR-025, Sprint 10.1). It used to call
+ * `invalidateQueries()` with no key on every 'connect' — the original
+ * 09-ERROR-HANDLING §5.4 instruction. The reasoning was sound (the socket has no
+ * replay, so the cache is stale by an unknown amount) and the timing was not: the
+ * refetch went out before room membership was re-established, so it could resolve
+ * from a snapshot taken before an event that arrived in the meantime and overwrite
+ * it. Resync now belongs to `useRealtimeQuery`, which runs it after the ack and
+ * buffers anything landing during the fetch.
+ *
+ * What is left here is presentation: the banner. It reports CONNECTED only once the
+ * rooms are acked, because between 'connect' and that ack the user is transported
+ * but not subscribed.
  */
 export type ConnectionState = 'connected' | 'reconnecting' | 'offline';
 
 export function useConnectionState(): ConnectionState {
-  const queryClient = useQueryClient();
+  const { subscribed } = useSocketRooms(WS_NOTIFY);
   const [socketUp, setSocketUp] = useState(true);
   const [browserOnline, setBrowserOnline] = useState(true);
 
@@ -56,11 +64,15 @@ export function useConnectionState(): ConnectionState {
     // still surfaces — just without the false positive on every load.
     if (socket.connected) setSocketUp(true);
 
-    const onConnect = () => {
-      setSocketUp(true);
-      // Missed events are the whole reason this is unconditional.
-      void queryClient.invalidateQueries();
-    };
+    /**
+     * ⚠️ This used to call `queryClient.invalidateQueries()` unconditionally on
+     * 'connect' — 09-ERROR-HANDLING §5.4 as originally written. ADR-025 removes it:
+     * the refetch was issued BEFORE room membership was re-established, so it could
+     * resolve from a snapshot taken before an event that arrived in the meantime and
+     * silently overwrite it. Resync now belongs to `useRealtimeQuery`, which runs it
+     * after the ack and buffers anything that lands during the fetch.
+     */
+    const onConnect = () => setSocketUp(true);
     const onDisconnect = () => setSocketUp(false);
 
     socket.on('connect', onConnect);
@@ -69,8 +81,12 @@ export function useConnectionState(): ConnectionState {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
     };
-  }, [queryClient]);
+  }, []);
 
   if (!browserOnline) return 'offline';
-  return socketUp ? 'connected' : 'reconnecting';
+  // "Connected" means SUBSCRIBED, not merely transported (ADR-025). Between
+  // 'connect' and the room:join ack the socket is up while broadcasts still land
+  // nowhere — clearing the banner there tells the user they are live when they are
+  // not, which is worse than showing it a moment longer.
+  return socketUp && subscribed ? 'connected' : 'reconnecting';
 }

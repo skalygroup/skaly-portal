@@ -120,8 +120,29 @@ export function useSocketRooms(namespace: string = WS_NOTIFY): { subscribed: boo
     // again, so ask now.
     if (socket.connected) join();
 
+    /**
+     * DEGRADED FALLBACK — never let a missing socket hide the page.
+     *
+     * Gating the fetch on the ack is what closes the window, but it also means a
+     * client that can never reach the socket (a corporate proxy blocking
+     * websockets, an outage) would sit on an empty grid forever. A stale-risk page
+     * beats a blank one: after this timeout we proceed unsubscribed, accepting the
+     * window we would otherwise have had anyway — which is exactly the pre-ADR-025
+     * behaviour, and no worse.
+     */
+    const fallback = setTimeout(() => {
+      if (!cancelled) {
+        console.warn(
+          '[socket] no room:join ack after 5s — loading without realtime. ' +
+            'Updates from other users may be missed until this tab reloads.',
+        );
+        setSubscribed(true);
+      }
+    }, 5_000);
+
     return () => {
       cancelled = true;
+      clearTimeout(fallback);
       socket.off('connect', join);
       socket.off('disconnect', onDisconnect);
     };

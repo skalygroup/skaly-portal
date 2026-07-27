@@ -16,7 +16,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
-import { useRealtimeSync } from '@/lib/hooks/use-realtime-sync';
+import { INVALIDATE, useRealtimeQuery } from '@/lib/hooks/use-realtime-query';
 import { handleMutationError } from '@/lib/mutation-errors';
 
 const mono = { fontFamily: 'var(--font-mono)' } as const;
@@ -295,15 +295,19 @@ const DROPPER_EVENTS = ['content-dropper:updated', 'shoot:slot_updated'] as cons
 
 export function ContentDropperGrid() {
   const { period } = useMonthContext();
-  useRealtimeSync(DROPPER_EVENTS);
   const queryClient = useQueryClient();
   const today = useMemo(() => todayIstIso(), []);
   const gridKey = useMemo(() => ['content-dropper', period] as const, [period]);
 
-  const { data: rows, isPending, isError, error, refetch } = useQuery({
+  const { data: rows, isPending, isError, error, refetch } = useRealtimeQuery<PipelineRow[]>({
     queryKey: gridKey,
     queryFn: async () => (await api<{ data: PipelineRow[] }>(`/v1/content-dropper?period=${period}`)).data,
     staleTime: 30_000,
+    events: DROPPER_EVENTS,
+    // Invalidate-only, unchanged from ADR-022: per ADR-013 the derived status is
+    // recomputed server-side and the payload carries only {clientId, period}, so
+    // it cannot express what changed. Same for the shoot Trigger-1 recompute.
+    applyEvent: () => INVALIDATE,
   });
 
   const { data: months } = useQuery({

@@ -45,13 +45,19 @@ function fire(event: string, payload: unknown): void {
   for (const fn of handlers.get(event) ?? []) fn(payload);
 }
 
+/**
+ * Lets a test force the subscribed flag (used by the reconnect case); `null` means
+ * "behave normally and wait for the ack".
+ */
+let subscribedOverride: boolean | null = null;
+
 /** Mirrors the real hook's contract; the ack is held so the test controls ordering. */
 function useFakeSocketRooms(): { subscribed: boolean } {
   const [subscribed, setSubscribed] = useState(false);
   useEffect(() => {
     fakeSocket.emit('room:join', () => setSubscribed(true));
   }, []);
-  return { subscribed };
+  return { subscribed: subscribedOverride ?? subscribed };
 }
 
 vi.mock('@/lib/socket', async (importOriginal) => {
@@ -88,6 +94,7 @@ beforeEach(() => {
   handlers.clear();
 
   ackJoin = null;
+  subscribedOverride = null;
 });
 
 describe('ADR-025 — subscribe before fetch', () => {
@@ -208,6 +215,49 @@ describe('ADR-025 — subscribe before fetch', () => {
       fire('reset', {});
     });
     await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(2));
+  });
+
+  test('⭐ on RE-subscribe the query resyncs; on first subscribe it does not double-fetch', async () => {
+    // The reconnect path, and the one that is easy to get subtly wrong: tracking
+    // "were we subscribed last render" instead of "have we ever been subscribed"
+    // makes a reconnect look like a first subscribe, and the resync silently never
+    // fires. That bug was written here first and caught by this test.
+    const queryFn = vi.fn(async () => [{ id: 'a', n: 1 }]);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const localWrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client }, children);
+
+    const { result, rerender } = renderHook(
+      () =>
+        useRealtimeQuery<Row[]>({
+          queryKey: ['t5'],
+          queryFn,
+          events: ['add'],
+          applyEvent,
+        }),
+      { wrapper: localWrapper },
+    );
+
+    await act(async () => {
+      ackJoin?.();
+    });
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+    // The FIRST subscribe must not invalidate — the gated fetch already ran, and
+    // invalidating here would double-fetch on every page load.
+    expect(invalidate).not.toHaveBeenCalled();
+
+    // Drop and restore.
+    await act(async () => {
+      subscribedOverride = false;
+      rerender();
+    });
+    await act(async () => {
+      subscribedOverride = true;
+      rerender();
+    });
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['t5'] }));
   });
 
   test('applyEvent is pure — same input, same output, no cache access', () => {

@@ -259,9 +259,31 @@ Mutation fails with network error:
 WebSocket disconnect:
   → Socket.io reconnects: 1s → 2s → 4s → 8s... max 30s between attempts
   → Reconnecting banner (amber badge, non-blocking)
-  → On reconnect: all stale TanStack Query data refetched
-  → Banner clears
+  → Client re-emits room:join and AWAITS the server acknowledgement
+  → Only then are stale queries refetched — events arriving during the refetch
+    are buffered and replayed onto the result (ADR-025)
+  → Banner clears on ACK, not on connect
 ```
+
+> **⚠️ Amended in Sprint 10.1 — see ADR-025.**
+>
+> This section previously read *"On reconnect: all stale TanStack Query data
+> refetched"*, and that instruction is unsafe. It describes invalidate-on-connect,
+> which carries a race **on every reconnect**: the refetch is issued before
+> membership is re-established, so it can resolve from a server snapshot taken
+> *before* an event that arrived in the meantime, and overwrite it.
+>
+> It was tried during Sprint 10 exactly as written here, and it made the failure
+> worse rather than better — the race moved later and became rarer, so it stopped
+> failing the test suite and started reaching users as an unreproducible "it
+> sometimes doesn't update".
+>
+> **'connect' is a transport signal, not a subscription signal.** Between the two
+> the client is connected but not yet in any room, which is why the banner must
+> clear on the ack: clearing on connect tells the user they are live while
+> broadcasts are still landing nowhere.
+>
+> Mount and reconnect are the same mechanism, used twice.
 
 ---
 

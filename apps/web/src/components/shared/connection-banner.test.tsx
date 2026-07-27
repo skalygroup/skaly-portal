@@ -19,15 +19,22 @@ const socket = vi.hoisted(() => {
   return {
     handlers,
     connected: true,
+    subscribed: true,
     on: (e: string, fn: () => void) => handlers.set(e, fn),
     off: (e: string) => handlers.delete(e),
     fire: (e: string) => handlers.get(e)?.(),
   };
 });
 
+/**
+ * `useSocketRooms` is mocked alongside the socket because the banner now reports
+ * CONNECTED only once rooms are ACKED (ADR-025) — not merely when the transport is
+ * up. `socket.subscribed` is the ack state these tests drive.
+ */
 vi.mock('@/lib/socket', () => ({
   WS_NOTIFY: '/ws/notify',
   getSocket: () => socket,
+  useSocketRooms: () => ({ subscribed: socket.subscribed }),
 }));
 
 let client: QueryClient;
@@ -89,8 +96,22 @@ describe('visibility', () => {
   });
 });
 
-describe('⭐ reconnect refetches once, unconditionally', () => {
-  test('a reconnect invalidates everything — the socket has no replay', async () => {
+describe('⚠️ the banner must NOT refetch on connect (ADR-025 regression guard)', () => {
+  test('a reconnect does not blanket-invalidate — that is the fix that made it worse', async () => {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and it was wrong in a way that read as
+    // obviously right: "the socket has no replay, so refetch everything on connect".
+    // 09-ERROR-HANDLING §5.4 said the same thing until Sprint 10.1 amended it.
+    //
+    // The flaw is timing, not intent. A refetch issued on 'connect' goes out BEFORE
+    // room membership is re-established, so it can resolve from a server snapshot
+    // taken before an event that arrived in the meantime — and overwrite it. Tried
+    // in Sprint 10: it moved the race later and made it rarer, so it stopped failing
+    // the suite and started reaching users as "it sometimes doesn't update".
+    //
+    // Resync now belongs to useRealtimeQuery, which runs it AFTER the ack and buffers
+    // anything landing during the fetch. This guard exists because the next person to
+    // look at a missed event will reach for invalidateQueries-on-connect within about
+    // ninety seconds; they should get a red test rather than a plausible diff.
     mount();
     await waitFor(() => expect(socket.handlers.size).toBeGreaterThan(0));
     const spy = vi.spyOn(client, 'invalidateQueries');
@@ -98,10 +119,7 @@ describe('⭐ reconnect refetches once, unconditionally', () => {
     await act(async () => socket.fire('disconnect'));
     await act(async () => socket.fire('connect'));
 
-    // No key: anything broadcast while we were down is simply gone, so there is
-    // nothing to reconcile against and everything mounted must refetch.
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalledWith();
+    expect(spy).not.toHaveBeenCalled();
   });
 
   test('a disconnect alone does not refetch', async () => {

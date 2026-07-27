@@ -21,7 +21,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
-import { useRealtimeSync } from '@/lib/hooks/use-realtime-sync';
+import { INVALIDATE, useRealtimeQuery } from '@/lib/hooks/use-realtime-query';
 import { handleMutationError } from '@/lib/mutation-errors';
 
 const mono = { fontFamily: 'var(--font-mono)' } as const;
@@ -145,15 +145,19 @@ const SHOOT_EVENTS = ['shoot:slot_updated'] as const;
 
 export function ShootPlannerGrid() {
   const { period } = useMonthContext();
-  useRealtimeSync(SHOOT_EVENTS);
   const queryClient = useQueryClient();
   const gridKey = useMemo(() => ['shoot-planner', period] as const, [period]);
 
-  const { data: grid, isPending, isError, error, refetch } = useQuery({
+  const { data: grid, isPending, isError, error, refetch } = useRealtimeQuery<ShootGridData>({
     queryKey: gridKey,
     queryFn: async () =>
       (await api<{ data: ShootGridData }>(`/v1/shoot-planner?period=${period}`)).data,
     staleTime: 30_000,
+    events: SHOOT_EVENTS,
+    // Invalidate-only, unchanged from ADR-022: Trigger 1 recomputes
+    // coming_shoot_date on the PIPELINE when a slot moves, so the grid goes stale
+    // in a way the slot's own fields do not describe (ADR-012).
+    applyEvent: () => INVALIDATE,
   });
 
   const { data: months } = useQuery({

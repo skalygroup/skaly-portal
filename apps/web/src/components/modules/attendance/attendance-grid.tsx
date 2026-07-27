@@ -18,7 +18,7 @@ import type { AttendanceGridData, AttendanceLog, MonthItem } from './types';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
-import { useRealtimeSync } from '@/lib/hooks/use-realtime-sync';
+import { INVALIDATE, useRealtimeQuery } from '@/lib/hooks/use-realtime-query';
 
 
 /** One table row: a date plus that date's log per staff column. */
@@ -35,7 +35,7 @@ const columnHelper = createColumnHelper<GridRow>();
  * grid Sprints 4–7 copy. Columns = staff (alphabetical = staffList order),
  * rows = dates. TanStack Table v8, not virtualised (≤31 rows).
  */
-const ATTENDANCE_EVENTS = ['attendance:holiday_added', 'attendance:holiday_removed'] as const;
+const ATTENDANCE_EVENTS = ['attendance:holiday_added', 'attendance:holiday_removed'];
 
 export function AttendanceGrid() {
   const { period } = useMonthContext();
@@ -45,7 +45,6 @@ export function AttendanceGrid() {
   // that date and reverts their attendance logs (the H-01 cascade) — no single-row
   // payload can express that, so patching would leave every other column still
   // showing a working day. This is the matrix's clearest "refetch is correct" row.
-  useRealtimeSync(ATTENDANCE_EVENTS);
 
   const gridKey = useMemo(() => ['attendance', period] as const, [period]);
 
@@ -55,11 +54,18 @@ export function AttendanceGrid() {
     isError,
     error,
     refetch,
-  } = useQuery({
+  } = useRealtimeQuery<AttendanceGridData>({
     queryKey: gridKey,
     queryFn: async () =>
       (await api<{ data: AttendanceGridData }>(`/v1/attendance?period=${period}`)).data,
     staleTime: 30_000,
+    events: ATTENDANCE_EVENTS,
+    // Both of this grid's events are invalidate-only and always were (ADR-022):
+    // H-01 means ONE holiday flips every staff column for that date and reverts
+    // their logs, which no single-row payload can express. Returning the sentinel
+    // keeps that decision in the reducer instead of a separate list that could
+    // drift away from it.
+    applyEvent: () => INVALIDATE,
   });
 
   const { data: months } = useQuery({

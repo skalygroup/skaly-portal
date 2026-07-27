@@ -39,7 +39,7 @@ export interface RealtimeQueryOptions<TData> {
   queryKey: QueryKey;
   queryFn: () => Promise<TData>;
   /** Socket events this surface listens to. */
-  events: string[];
+  events: readonly string[];
   /**
    * Pure reducer: `(snapshot, event) => snapshot`. Used for BOTH live patching and
    * buffer replay, which is what makes the two paths incapable of disagreeing.
@@ -128,6 +128,33 @@ export function useRealtimeQuery<TData>(opts: RealtimeQueryOptions<TData>) {
     // ADR-022 exists to prevent (50 users, one edit, 50 refetches).
     refetchOnWindowFocus: true,
   });
+
+  /**
+   * RECONNECT resync — the same mechanism as mount, not a second code path.
+   *
+   * While disconnected the socket has no replay, so the cache is stale by an unknown
+   * amount. `enabled` alone will not refetch if the data is still inside `staleTime`,
+   * so re-subscription has to mark it stale explicitly.
+   *
+   * The ORDER is what makes this safe, and it is the whole difference from the
+   * invalidate-on-connect this replaces: `subscribed` only goes true on the room ack,
+   * so by the time this fires we are already in the room, and anything arriving during
+   * the refetch is buffered and replayed rather than overwritten.
+   */
+  // "Have we EVER been subscribed" — deliberately not "were we subscribed last
+  // render". Clearing this on disconnect would make every reconnect look like a
+  // first subscribe, and the resync would never fire at all.
+  const subscribedBefore = useRef(false);
+  useEffect(() => {
+    if (!subscribed) return;
+    if (subscribedBefore.current) {
+      void queryClient.invalidateQueries({ queryKey: keyRef.current });
+    }
+    // The FIRST subscribe needs no invalidate — the initial fetch is gated on it
+    // and runs on its own.
+    subscribedBefore.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscribed]);
 
   useEffect(() => {
     const socket = getSocket(namespace);
