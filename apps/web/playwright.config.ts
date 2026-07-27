@@ -86,6 +86,9 @@ export default defineConfig({
    * got explained away as flakiness.
    */
   workers: 1,
+  // Refuses to start against an API with an unraised rate limit or a down
+  // dependency — see tests/global-setup.ts (audit A3).
+  globalSetup: require.resolve('./tests/global-setup'),
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: 'list',

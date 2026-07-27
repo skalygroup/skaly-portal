@@ -9,10 +9,14 @@ import type { FastifyInstance } from 'fastify';
 /**
  * M-06: @fastify/rate-limit must advertise the client's budget on responses so
  * callers can self-throttle. We boot the REAL app (same buildApp() the server
- * uses) and hit an unauthenticated endpoint — the rate-limit onRequest hook
- * runs before the handler, so the x-ratelimit-* headers are present regardless
- * of the handler's own status code (health may be 200 or 503 depending on
- * infra; either way the headers must be there).
+ * uses) and hit an unauthenticated endpoint — the rate-limit hook runs before the
+ * handler, so the x-ratelimit-* headers are present regardless of the handler's
+ * own status code (health may be 200 or 503 depending on infra; either way the
+ * headers must be there).
+ *
+ * The limiter now runs at `preHandler`, not `onRequest` (ADR-024) — it has to see
+ * `request.user` to key per user. The headers are unaffected; WHICH BUCKET they
+ * describe is covered by rate-limit-keying.test.ts.
  */
 describe('Rate-limit headers (M-06)', () => {
   let app: FastifyInstance;
