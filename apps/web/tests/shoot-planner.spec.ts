@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
 import { login } from './helpers/auth';
+import { periodDates } from './helpers/period-dates';
 
 /**
  * E2E smoke: Shoot Planner (Sprint 5 STEP 8) — lifecycle, freelancer isolation
@@ -44,7 +45,9 @@ function currentIstPeriod(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit' }).format(new Date());
 }
 const PERIOD = currentIstPeriod();
-const DATE = `${PERIOD}-15`;
+// A6: derived from the period, never pinned to day 15 — a fixed mid-month date
+// is valid for two weeks and then silently is not (see helpers/period-dates.ts).
+const DATE = periodDates(PERIOD).mid;
 
 async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   const client = new Client({ connectionString: process.env.DATABASE_URL });

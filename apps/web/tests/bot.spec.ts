@@ -5,6 +5,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
 import { login, typeInto } from './helpers/auth';
+import { periodDates } from './helpers/period-dates';
 
 /**
  * E2E smoke: the AI bot (Sprint 8 STEP 9.1). Runs against the LIVE Anthropic
@@ -326,7 +327,8 @@ test.describe('bot — live smoke', () => {
 test.describe('bot — the two-turn mutation cycle', () => {
   test.describe.configure({ timeout: BOT_TIMEOUT });
 
-  const TASK_DATE = `${PERIOD}-15`;
+  // A6: derived, not pinned — see helpers/period-dates.ts.
+  const TASK_DATE = periodDates(PERIOD).mid;
 
   /** A description unique per test, so two runs can never see each other's row. */
   const uniqueDescription = (what: string): string => `${MARK} ${what} ${Date.now()}`;
