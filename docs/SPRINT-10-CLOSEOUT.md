@@ -119,22 +119,41 @@ pulled someone's private bot conversation from nothing but a message id.
 
 ---
 
-## 5. ⚠️ OPEN PRODUCT BUG — HOLIDAY DATES ARE PERMANENTLY CONSUMED
+## 5. ✅ PRODUCT BUG FIXED — HOLIDAY DATES WERE PERMANENTLY CONSUMED
 
-**Not fixed. Found by the E2E suite, and out of Sprint 10's scope.**
+**Found by the E2E suite. Deferred as out-of-scope, then taken when it escalated.**
 
-`holidays` has `UNIQUE (period, date)` with **no partial index on `removed_at`**.
-Removing a holiday soft-deletes it (correctly — the app role has no DELETE grant), so
-the date stays reserved forever. An admin who removes a holiday by mistake can **never
-re-add one on that day**, and the API answers a raw **500**, not a friendly error.
+`holidays` had `UNIQUE (period, date)`, which covered soft-removed rows. Removing a
+holiday soft-deletes it (correctly — the app role has no DELETE grant), so the date
+stayed reserved forever: an admin who removed a holiday by mistake could **never re-add
+one on that day**, and the API answered a raw **500**.
 
-It burned **nine dates in a handful of test runs**, which is what makes it visible: it
-also makes any suite that creates holidays non-repeatable.
+It was recorded as a Sprint 3 concern, not taken. What changed the call: it stopped
+being only an E2E annoyance and **broke the unit gate**. `AttendanceService`'s backfill
+test seeds its own holiday with `ON CONFLICT … DO NOTHING`; an earlier E2E run had
+already soft-removed a row on that date, so the seed silently did nothing and the test
+failed asserting a holiday it thought it had created. A bug that can make a correct
+test fail with a misleading message is no longer deferrable.
 
-**Fix:** replace the constraint with a partial unique index —
-`UNIQUE (period, date) WHERE removed_at IS NULL` — and map the duplicate to a 409 with a
-usable message. That is a migration in Sprint 3's area, hence recorded rather than
-taken.
+**Fix — `030_holidays_active_unique.ts`:** drop the constraint, add
+`CREATE UNIQUE INDEX holidays_date_unique ON holidays(period, date) WHERE active`. The
+guarantee that matters (at most one *active* holiday per date) is kept; removed rows
+stay for audit and stop colliding.
+
+Two things the fix dragged with it, both real:
+
+- **The 500 was a second bug.** Nothing translated the unique violation, so even a
+  legitimate duplicate answered 500. `HolidayService.create` now catches `23505` and
+  throws `ALREADY_PROCESSED` (409). Caught rather than pre-read — a SELECT-then-INSERT
+  check is racy, and the index is the only thing that actually decides.
+- **A partial index changes `ON CONFLICT`.** Postgres needs the predicate named, or it
+  reports *"no unique or exclusion constraint matching the ON CONFLICT specification"*.
+  Both sites (`AttendanceService.test.ts`, `database/seeds/002_dev_data.ts`) now carry
+  `.where('active', '=', true)`. This is the kind of ripple that would otherwise
+  surface as a broken `pnpm db:seed` on someone else's machine.
+
+Proven by breaking: restoring the old constraint fails the re-add test with
+*"2000-05-01 is already a holiday"* — which also confirms the 409 path.
 
 ---
 
@@ -226,27 +245,62 @@ TESTS + NFRs
   [x] API 61 files green; web 20 files / 198 tests green
   [x] typecheck + lint clean
   [x] Every new test fails without its fix (prove-by-breaking used throughout)
-  [ ] NFR §1.3 measured — see §8
-  [ ] Full Playwright suite, chromium + webkit — see §8
+  [x] NFR §1.3 measured — see §8 (one number is AT the line, not under it)
+  [~] Full Playwright suite, chromium + webkit — 149 passed / 2 failed / 7 skipped
+      Neither failure is a Sprint 10 regression; both are recorded below rather
+      than waved through.
 ```
+
+### The two E2E failures, honestly
+
+**Both are timeouts on the two slowest files in the suite** (`signup-requests` 40.2m,
+`bot.spec` 9.5m wall-clock), and neither is an assertion about Sprint 10 behaviour.
+
+1. **`bot.spec` — "a locked period refuses at turn 2".** A LIVE-model test that exceeded
+   its 90s budget. It passed in the preceding full run and passes in isolation. The
+   locked-period path throws before any Sprint 10 code (`transactionWithEmits` rejects
+   and discards its queue), so this is Anthropic latency under a loaded machine.
+
+2. **`signup-requests` (webkit) — "reject … never leaks it".** Passed in isolation
+   (21s) on the same build that failed it in the suite.
+
+⚠️ **A related, genuinely order-dependent failure was found while investigating.** The
+neighbouring *approve* test fails **in isolation** with
+`Navigation to /settings/signup-requests?status=pending is interrupted by another
+navigation to /` — a post-login client-side redirect racing the test's `goto` — while
+**passing inside the full suite**. `login()` now waits for the URL to settle (neither
+`waitForURL` nor `waitForLoadState` covers a redirect that fires after load), which did
+not resolve it. It is a Sprint 2 spec, untouched by this sprint, and it is left as a
+**known isolation-only failure** rather than chased at the close. Worth an owner: a spec
+that only passes in one execution order is a latent CI failure.
 
 ---
 
 ## 8. NFR MEASUREMENT (§1.3)
 
-Filled in from the run recorded at close-out. See the commit for raw numbers.
+Measured, not asserted. Numbers from the close-out run on a local dev stack (Next dev
+server, unbundled) — production will be faster, so treat these as a ceiling.
 
-| NFR | Target | Observed |
-|---|---|---|
-| WS delivery | < 500ms | chat delivery asserted < 2s in CI; the spec logs the measured value |
-| Presence propagation | < 2s | transition-only broadcast; asserted at the socket layer |
-| Reconnect | < 30s | banner clears inside 30s (socket.io backoff cap) |
-| Chat FCP, 100+ messages | < 1.5s | not measured — see below |
+| NFR | Target | Observed | Verdict |
+|---|---|---|---|
+| WS delivery | < 500ms | **502ms** | ⚠️ at the line — see below |
+| Presence propagation | < 2s | transition broadcast, no polling | ✅ by construction |
+| Reconnect | < 30s | banner clears inside the 30s assertion | ✅ |
+| Chat FCP, 100+ messages | < 1.5s | **not measured** | ⚠️ recorded as a gap |
+
+**The 502ms is an end-to-end figure, not the socket hop.** It is measured from *before*
+`fill()` in the sending browser to the message being visible in the receiving one, so it
+contains: typing the value, the POST, the service transaction (message + mentions +
+fan-out), COMMIT, the broadcast, and React rendering in the observer. The socket leg is a
+small fraction of it. Against a dev server with no bundling this sitting within a few ms
+of the target is a good result rather than a marginal one — but it is honest to record
+that the *measured* number is 502ms and not claim the target was met.
 
 **Chat FCP is not measured.** The existing NFR perf specs (`content-calendar.spec.ts`
 §NFR 1.1) are chromium-only and were written for a virtualised grid; chat is not
-virtualised and 100+ messages were not seeded. Recorded as unmeasured rather than
-asserted from a run that did not happen.
+virtualised, and 100+ messages were never seeded. Recorded as unmeasured rather than
+asserted from a run that did not happen. Sprint 13's performance pass should seed a
+realistic history and measure it properly.
 
 ---
 
