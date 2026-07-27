@@ -57,25 +57,6 @@ export async function login(page: Page, email: string, password: string): Promis
   await page.getByRole('button', { name: /Sign in/i }).click();
   await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 15_000 });
   await clearMfaChallenge(page);
-
-  // Wait for the URL to SETTLE before returning.
-  //
-  // waitForURL resolves the moment the path is no longer /login, but the app is still
-  // moving: a client-side redirect to the landing page fires after that, and after
-  // 'load' too — so neither waiting on the URL predicate nor on a load state is enough.
-  // A caller that immediately goto()s somewhere else gets "Navigation to … is
-  // interrupted by another navigation to http://localhost:3000/", which reads like a
-  // broken page rather than a test that started half a beat early.
-  //
-  // Polling for a URL that stops changing is the only thing that actually covers a
-  // redirect the test cannot predict the target of (/, /mfa-setup, …).
-  let previous = '';
-  for (let i = 0; i < 25; i++) {
-    const current = page.url();
-    if (current === previous) return;
-    previous = current;
-    await page.waitForTimeout(200);
-  }
 }
 
 /**
