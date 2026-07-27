@@ -178,7 +178,9 @@ export default function SignupPage() {
             </header>
 
             {/* Form */}
-            <form onSubmit={handleSubmit(onSubmit)} noValidate className="flex flex-col gap-[18px] px-8 pb-[30px] pt-[26px]">
+            {/* method="post" so a pre-hydration native submit cannot put the password
+                in the query string — see the note on the login form. */}
+            <form onSubmit={handleSubmit(onSubmit)} method="post" noValidate className="flex flex-col gap-[18px] px-8 pb-[30px] pt-[26px]">
               {alreadyExists && (
                 <FormBanner>
                   An account or request already exists for this email.{' '}

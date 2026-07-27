@@ -539,7 +539,9 @@ export default function ResetPasswordPage() {
   // ── Form (valid recovery session, AAL satisfied) ─────────────────────────
   return (
     <AuthCanvasCard eyebrow="Set a new password" title="Create a new password" footerRight="Account recovery">
-      <form onSubmit={handleSubmit(onSubmit)} noValidate className="flex flex-col gap-[18px] px-8 pb-[30px] pt-6">
+      {/* method="post" so a pre-hydration native submit cannot put the new password
+          in the query string — see the note on the login form. */}
+      <form onSubmit={handleSubmit(onSubmit)} method="post" noValidate className="flex flex-col gap-[18px] px-8 pb-[30px] pt-6">
         <p className="text-[14.5px] leading-[1.55] text-text-secondary">
           Choose a new password for your account. You&apos;ll use it the next time you sign in.
         </p>

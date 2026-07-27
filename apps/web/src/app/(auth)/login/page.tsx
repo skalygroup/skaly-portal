@@ -145,7 +145,14 @@ export default function LoginPage() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit(onSubmit)} noValidate>
+      {/* method="post" is a safety net, not a route: nothing serves POST /login.
+          A form with no method defaults to GET, so if this is submitted BEFORE React
+          hydrates — slow network, a failed chunk, JS disabled — the browser performs a
+          native submit and puts every field in the query string. That was observed:
+          `/login?email=…&password=E2eAdmin!2026-Skaly`, i.e. the password written into
+          browser history, the server access log and any outbound Referer. POST keeps
+          the credentials in a body that simply 405s. */}
+      <form onSubmit={handleSubmit(onSubmit)} method="post" noValidate>
         {/* Email */}
         <div className="mb-4">
           <label htmlFor="email" className="mb-[7px] block text-[13px] font-semibold text-text-primary">
