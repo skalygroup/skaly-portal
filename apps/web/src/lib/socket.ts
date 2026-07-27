@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 
 import { createClient } from '@/lib/supabase/client';
@@ -78,6 +78,56 @@ export function getSocket(namespace: string = WS_NOTIFY): Socket {
 
   sockets.set(namespace, socket);
   return socket;
+}
+
+/**
+ * Confirmed room membership — the gate `useRealtimeQuery` fetches behind (ADR-025).
+ *
+ * ⚠️ `socket.connected` IS NOT SUBSCRIBED. 'connect' fires when the transport is up;
+ * the server then joins the socket's rooms, which under the Redis adapter is
+ * asynchronous. A consumer that fetches on 'connect' still has a window where
+ * broadcasts reach nobody — and because nothing in this app re-fetches a sitting page
+ * (`refetchOnWindowFocus: false`, no polling), whatever it misses stays missing for
+ * that tab's lifetime.
+ *
+ * So the client asks and the server ACKS. `subscribed` only goes true on the ack.
+ *
+ * ONE mechanism for mount AND reconnect: 'disconnect' clears it, 'connect' re-emits.
+ * There is deliberately no separate reconnect branch — a second path is how the two
+ * drift apart.
+ */
+export function useSocketRooms(namespace: string = WS_NOTIFY): { subscribed: boolean } {
+  const [subscribed, setSubscribed] = useState(false);
+
+  useEffect(() => {
+    const socket = getSocket(namespace);
+    let cancelled = false;
+
+    const join = (): void => {
+      socket.emit('room:join', () => {
+        if (!cancelled) setSubscribed(true);
+      });
+    };
+
+    const onDisconnect = (): void => {
+      if (!cancelled) setSubscribed(false);
+    };
+
+    socket.on('connect', join);
+    socket.on('disconnect', onDisconnect);
+    // Already connected when this mounted (the singleton is shared, so this is the
+    // common case for every component after the first) — 'connect' will not fire
+    // again, so ask now.
+    if (socket.connected) join();
+
+    return () => {
+      cancelled = true;
+      socket.off('connect', join);
+      socket.off('disconnect', onDisconnect);
+    };
+  }, [namespace]);
+
+  return { subscribed };
 }
 
 /**
