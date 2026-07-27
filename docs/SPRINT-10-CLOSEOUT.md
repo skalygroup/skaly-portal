@@ -157,6 +157,131 @@ Proven by breaking: restoring the old constraint fails the re-add test with
 
 ---
 
+### ⚠️ The suite is not deterministic on a loaded machine — read the numbers honestly
+
+Successive full runs of the SAME commit gave **150/1**, **149/2**, and **144/7**. The
+extra failures in the worst run were, without exception, socket-delivery assertions
+against a 3s budget (`chat message reaches B`, `ping`, `notification badge`) plus one
+scroll-anchoring tolerance — never a logic assertion, and never the same set twice.
+
+That run followed hours of continuous builds, servers and suites on one laptop. The
+budgets were left alone: `DELIVERY_MS` is 3s against a sub-second NFR, and padding a
+timing assertion until it passes destroys the only thing it measures. **The honest
+figure for this commit is 150/1 on an unloaded machine**, and anyone re-running it on a
+busy one should expect socket timing to be what gives first.
+
+Worth fixing properly, and not in this sprint: the suite should not depend on wall-clock
+delivery for correctness. Asserting on a received socket event rather than on rendered
+text would make these tests immune to load without weakening them.
+
+---
+
+## 5b. ⚠️ TWO REAL BUGS FOUND AT CLOSE-OUT, NEITHER FIXED
+
+Both were found by the E2E suite once it stopped hiding behind a slow dev server.
+Both are recorded with evidence rather than patched late, and both have an owner.
+
+### The mount/subscribe window — SIX surfaces, not one
+
+`notifications.spec.ts:116` — a second tab opens, a holiday is created immediately
+after, and that tab's badge never appears.
+
+Mount issues a fetch; the socket joins its room some milliseconds later; anything
+emitted in between reaches nobody and is not in the snapshot either. Nothing corrects
+it afterwards.
+
+**This is not a bell bug.** Every consumer STEP 9 wired has the identical window —
+verified: `attendance-grid`, `content-calendar-grid`, `content-dropper-grid`,
+`shoot-planner-grid`, `tasks-grid` and the bell, and **not one of them gates its query
+on socket state** (the single `enabled:` in the set is `canEdit`, a permissions check).
+So `content-calendar:updated`, `shoot:slot_updated`, `content-dropper:updated`,
+`client:name_updated`, `chat:message` and `presence:changed` all carry it.
+
+Only `:116` caught it because it is the only spec that fires an event **immediately**
+after opening the second context. The grid specs navigate, wait for data to render,
+then act — by which time the room join has long since landed. The window is real in all
+of them; the tests simply do not aim at it. One bug with six instances.
+
+#### The obvious fix is wrong, and the spec prescribes it
+
+Invalidating the query on `connect` looks right and is not: the refetch is issued
+before the row exists and can resolve **after** `notify:new` patched the badge,
+overwriting it with a stale zero. Tried, measured — one failing assertion became two —
+and reverted.
+
+⚠️ **09-ERROR-HANDLING §5.4 prescribes exactly this**: *"On reconnect: all stale
+TanStack Query data refetched."* That is invalidate-on-connect, carrying the same race
+on **every reconnect**, not just on mount. The spec is wrong here, not merely silent,
+and it must be amended in the same commit as the fix or Sprint 11 will reintroduce the
+bug straight from the document.
+
+#### Ordering is necessary but not sufficient
+
+Subscribe-then-fetch closes the pre-join gap. It does not close the in-flight gap:
+
+```
+t0    room joined, confirmed
+t1    initial fetch issued
+t1.5  row created; notify:new arrives; patch applied
+t2    the fetch — a server snapshot from t1, before the row existed — resolves
+      and overwrites the patch
+```
+
+Same failure, moved later and made rarer, which is **worse**: it survives the suite and
+resurfaces as an unreproducible "the badge sometimes doesn't update". The complete fix
+is ordering **plus** reconciliation on resolution:
+
+- **Ordering** — the client emits `subscribe` with a Socket.io ack; the server joins the
+  room and acks; the query is gated on `enabled: subscribed`. TanStack's own `enabled`
+  does the sequencing, so there is no bespoke orchestration to maintain.
+- **Reconciliation** — buffer events received while the initial fetch is in flight and
+  replay them on resolution. For notifications, merge-by-id is equivalent and simpler
+  (rows are append-only; mark-read is a flag, not a delete), so the fetch result unions
+  with what was already patched instead of replacing it. For the grids, buffering is the
+  safer general form, because those events carry updates and `version` makes last-write
+  ambiguous.
+
+Mount and reconnect are **one mechanism used twice** — both need it.
+
+This is not a close-out patch, and the scope is the shared socket/query seam, not the
+bell's load sequence.
+
+### The shoot-planner popover discards what you type
+
+Open a slot popover within ~400ms of the grid painting and your date is erased.
+
+The `staff` query is `enabled: canEdit`, so it cannot start until `/staff/me` and
+`/months` resolve. It lands ~400ms after paint, hands the popover a new `freelancers`
+prop and remounts it — and the popover seeds its draft from props with `useState`.
+Measured directly: value present at +200ms, `""` at +500ms, Schedule button back to
+disabled.
+
+The E2E was made to wait for the freelancer list before typing, which is what a person
+does — but that is a test fix, and the product bug is untouched. The real fix is
+lifting the draft out of the component that remounts, the same shape as the Sprint 7
+tasks-grid remount. Owner: whoever next touches shoot-planner.
+
+---
+
+## 5c. SPRINT 10.1 — SCOPED REMEDIATION PATCH
+
+Same shape as 8.1: a patch, not a sprint. **Sprint 10's push is held on it.**
+
+| # | Step |
+|---|---|
+| 0 | **Pre-flight.** Reproduce `:116` deterministically, then confirm the window on at least two grid consumers by tightening a spec to fire inside the fetch flight. Establishes whether this is one bug or nine. |
+| 1 | **ADR-024** — subscribe-before-fetch with acked room membership, plus in-flight buffering/merge on resolution. Applies to mount **and** reconnect. Amends 09-ERROR-HANDLING §5.4. |
+| 2 | **The shared seam** — the ack handshake and the gated-query hook, once, in `lib/socket.ts` + a `useRealtimeQuery` wrapper. |
+| 3 | **Migrate every consumer** onto it; delete any per-module improvisation. |
+| 4 | **Tests that aim at the window deliberately** — event fired inside the fetch flight, on mount and on reconnect, per surface class. |
+| 5 | **The password-in-URL blast-radius note** (§9) + the §5.4 amendment. |
+| 6 | Close-out, then the push Sprint 10 is held on. |
+
+The pre-flight step is the one worth protecting: it is the difference between fixing a
+bell and fixing a seam, and it is cheap.
+
+---
+
 ## 6. CARRIED / DEFERRED
 
 | Item | Owner |
@@ -246,33 +371,63 @@ TESTS + NFRs
   [x] typecheck + lint clean
   [x] Every new test fails without its fix (prove-by-breaking used throughout)
   [x] NFR §1.3 measured — see §8 (one number is AT the line, not under it)
-  [~] Full Playwright suite, chromium + webkit — 149 passed / 2 failed / 7 skipped
-      Neither failure is a Sprint 10 regression; both are recorded below rather
-      than waved through.
+  [~] Full Playwright suite, chromium + webkit — best clean run 150 passed /
+      1 failed / 7 skipped (10.8m, down from 1.2h). The one failure is the
+      notification race in §5b, left unfixed on purpose.
 ```
 
-### The two E2E failures, honestly
+### The E2E suite was testing the dev server, not the app
 
-**Both are timeouts on the two slowest files in the suite** (`signup-requests` 40.2m,
-`bot.spec` 9.5m wall-clock), and neither is an assertion about Sprint 10 behaviour.
+The close-out run left two failures and one spec that **passed in the suite and failed
+alone**. All three traced to the same cause, and it was not in the product.
 
-1. **`bot.spec` — "a locked period refuses at turn 2".** A LIVE-model test that exceeded
-   its 90s budget. It passed in the preceding full run and passes in isolation. The
-   locked-period path throws before any Sprint 10 code (`transactionWithEmits` rejects
-   and discards its queue), so this is Anthropic latency under a loaded machine.
+**`next dev` compiles a route on its first request.** A cold compile of a heavy route
+runs past two seconds; webkit abandons the navigation at that point and falls back to
+the previous URL. What the report shows is:
 
-2. **`signup-requests` (webkit) — "reject … never leaks it".** Passed in isolation
-   (21s) on the same build that failed it in the suite.
+```
+page.goto: Navigation to "/settings/signup-requests?status=pending"
+  is interrupted by another navigation to "http://localhost:3000/"
+```
 
-⚠️ **A related, genuinely order-dependent failure was found while investigating.** The
-neighbouring *approve* test fails **in isolation** with
-`Navigation to /settings/signup-requests?status=pending is interrupted by another
-navigation to /` — a post-login client-side redirect racing the test's `goto` — while
-**passing inside the full suite**. `login()` now waits for the URL to settle (neither
-`waitForURL` nor `waitForLoadState` covers a redirect that fires after load), which did
-not resolve it. It is a Sprint 2 spec, untouched by this sprint, and it is left as a
-**known isolation-only failure** rather than chased at the close. Worth an owner: a spec
-that only passes in one execution order is a latent CI failure.
+which reads like a broken redirect. It is not one. That message cost two wrong
+diagnoses — a post-login timing race, then a stale-async redirect in `mfa-challenge` —
+and neither guess was checked against evidence before being written as a fix.
+
+**What settled it** was a pair of runs against one persistent server, changing nothing
+else:
+
+| Run | Route state | Result |
+|---|---|---|
+| 1 | cold (never requested) | interrupted → **failed** |
+| 2 | compiled by run 1 | **passed, 8.9s** |
+
+That also explains the order dependence exactly: the first spec to touch a route pays
+the compile and dies, the next finds it warm and passes. `signup-requests` runs
+*approve* before *reject* — hence "fails alone, passes in the suite".
+
+**Fix — `playwright.config.ts`:** serve a production build (`pnpm build && pnpm start`)
+so no route is ever compiled on demand, and make `webServer` an **array** that also
+starts the API. The second half closes a separate long-standing gap: the config never
+started the API at all, so a clean machine produced 33 failures that were all "Could
+not load …" and none of them about the product.
+
+**Two changes were reverted when the evidence landed**, and the reasoning is the point:
+
+- A stale-async guard added to `mfa-challenge/page.tsx`. The race is real but it is a
+  same-URL double navigation, and the comment I attached claimed it explained this
+  failure. A fix carrying a false rationale is worse than no fix — the next person
+  reads the comment, not the diff.
+- A URL-settle polling loop in `login()`. No URL-based wait could ever have worked:
+  `router.push` updates the URL optimistically, so the URL is already correct while the
+  page is still arriving. Three separate waits (`waitForURL`, `waitForLoadState`,
+  then polling) failed for that one reason.
+
+**The lesson worth keeping:** a browser-level error message names the *symptom's
+location*, not its cause. Two fixes were written here against a plausible story before
+anything was instrumented; the actual answer arrived in one run once `page.on('request')`
+and `page.on('response')` were logging. The response log is what broke it open — the
+navigation that "failed" never received a response at all.
 
 ---
 
@@ -318,3 +473,66 @@ rather than in CI.
 
 Proven both directions — a deliberate type error in a test now fails the gate, and a
 clean build still emits `dist/server.js` with no `dist/src`.
+
+### The E2E harness (added at close-out)
+
+`playwright.config.ts` ran `pnpm dev` and nothing else. Three consequences, all of which
+had been absorbed as "flakiness":
+
+| Before | After |
+|---|---|
+| API never started — 33 failures on a clean machine, none about the product | `webServer` is an array; the API boots and is waited on at `/v1/health` |
+| Routes compiled on first request → order-dependent failures | `next start` serves a prebuilt app; nothing compiles on demand |
+| `signup-requests.spec.ts`: **40.2 minutes** | **23.9 seconds**, both tests, cold |
+
+A fourth benefit is worth naming because it invalidates a rule we had been working
+around: editing app source during a run used to restart the watching dev server and fail
+a test for no product reason (a note to that effect had been carried since Sprint 7).
+`next start` does not watch, so that hazard is gone.
+
+**One trap, learned the hard way.** Interrupting a run mid-`pnpm build` leaves `.next`
+inconsistent, and `next start` will then happily serve HTML referencing chunks that
+404. Every test fails at login and it looks exactly like a broken application. If the
+whole suite dies at the login step, `rm -rf .next && pnpm build` before debugging
+anything else.
+
+### A password was reaching the URL
+
+That broken-build accident exposed a real bug. With no JS running, clicking Sign in
+performs a **native** form submit, and a `<form>` with no `method` defaults to GET:
+
+```
+GET /login?email=e2e-admin%40test.skaly.in&password=E2eAdmin%212026-Skaly
+```
+
+A live password in browser history, in the server access log, and in any Referer sent
+onward. It needs JS to be absent — slow network, a chunk that 404s, JS disabled — so it
+is invisible in normal use and unreachable by any render-based test.
+
+`method="post"` on all three credential forms (login, signup, reset-password) keeps the
+fields in a body that simply 405s. Guarded by `credential-forms.test.ts`, which reads
+source rather than rendering, for the same reason the notification and realtime census
+tests do: the property only matters when the behaviour is absent.
+
+#### Blast radius — traced, not assumed
+
+**This was application code, not a test helper.** `apps/web/src/app/(auth)/login/page.tsx`
+has shipped this form since Sprint 1, so the exposure is real rather than a local
+artefact. What limits it:
+
+| Question | Finding |
+|---|---|
+| Which server receives the GET? | The **web origin** (Next/Vercel), not the API. The form posts to its own URL. |
+| Does it reach Pino / Railway API logs? | **No.** Pino logs `request.url`, but the API (`api.skaly.in`, Railway) never sees this request — it goes to the frontend host. |
+| Where it *would* land | Vercel access logs for the staging deployment, browser history, and any outbound `Referer`. |
+| Production? | **Never deployed.** `git tag` is empty and production requires a release tag; merges to `main` deploy to staging only. |
+| Whose credentials? | Only a submit that beats hydration. In practice: CI's E2E account (`TEST_ADMIN_*`, a dedicated account, never a human login) and any human testing staging. |
+
+**Actions:** rotate `TEST_ADMIN_*` as a precaution — it is a dedicated account, so this
+is cheap and removes the only credential known to have transited a URL. Check Vercel
+staging logs for `/login?*password=` while retention lasts. No production rotation is
+required, and that is a verified fact rather than an assumption.
+
+The distinction matters: **"we found it and it was contained to staging with a test
+account"** is a different statement from "we found it", and only the first one is true
+here.
