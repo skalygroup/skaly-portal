@@ -31,11 +31,26 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/lib/api', () => ({ api: vi.fn() }));
 
-// Capture the socket subscriptions so tests can drive events directly.
+/**
+ * Capture the socket subscriptions so tests can drive events directly.
+ *
+ * The bell now subscribes through `useRealtimeQuery` (ADR-025), which calls
+ * `getSocket().on(...)` and gates its fetch on confirmed room membership. So the
+ * mock has to supply both halves: a socket whose handlers we can fire, and a
+ * `useSocketRooms` that reports subscribed — otherwise the query never runs and
+ * every assertion here fails on an empty bell.
+ */
 vi.mock('@/lib/socket', () => ({
-  useNotifySocket: (event: string, handler: (payload: unknown) => void) => {
-    sockets.handlers.set(event, handler);
-  },
+  WS_NOTIFY: '/ws/notify',
+  useSocketRooms: () => ({ subscribed: true }),
+  getSocket: () => ({
+    connected: true,
+    on: (event: string, handler: (payload: unknown) => void) => {
+      sockets.handlers.set(event, handler);
+    },
+    off: () => {},
+    emit: () => {},
+  }),
 }));
 
 const apiMock = vi.mocked(api);

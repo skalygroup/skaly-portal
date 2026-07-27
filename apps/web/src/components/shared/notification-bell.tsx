@@ -1,7 +1,7 @@
 'use client';
 
 import { NOTIFICATION_REGISTRY } from '@skaly/shared';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import * as Icons from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NotificationDTO, NotificationListResponse, NotificationTypeSpec } from '@skaly/shared';
 
 import { api } from '@/lib/api';
-import { useNotifySocket } from '@/lib/socket';
+import { useRealtimeQuery } from '@/lib/hooks/use-realtime-query';
 
 /**
  * Notification bell + panel (UIUX §16, APPFLOW bell → panel → deep link).
@@ -108,6 +108,58 @@ function groupByDay(items: NotificationDTO[]): { today: NotificationDTO[]; earli
   return { today, earlier };
 }
 
+/**
+ * The bell's whole realtime policy, as a PURE function (ADR-025).
+ *
+ * Lifted verbatim from the two `socket.on` handlers that used to live inside the
+ * component — the behaviour is unchanged; what changed is that it no longer touches
+ * the query cache, which is what lets the same function be replayed over a snapshot
+ * after the fact. A reducer that called `queryClient` could only ever run live.
+ *
+ * ⚠️ Still no refetch on `notify:new` (ADR-022's patch principle). The payload is
+ * deliberately the complete row, so a bell that refetched per notification would be
+ * the org-wide fan-out problem in miniature: 50 users, one task assignment, 50 GETs.
+ */
+export function applyNotificationEvent(
+  prev: NotificationListResponse,
+  event: { name: string; payload: unknown },
+): NotificationListResponse {
+  if (event.name === 'notify:new') {
+    const raw = event.payload as NotifyNewPayload;
+    // The socket can redeliver on reconnect, and a replayed buffer can contain an
+    // event the snapshot already includes — both would double the badge and render
+    // twice with the same key. Idempotent by id.
+    if (prev.data.some((n) => n.id === raw.id)) return prev;
+    return {
+      data: [fromSocket(raw), ...prev.data],
+      meta: {
+        ...prev.meta,
+        unreadCount: prev.meta.unreadCount + 1,
+        totalReturned: prev.meta.totalReturned + 1,
+      },
+    };
+  }
+
+  if (event.name === 'notify:read') {
+    const { ids } = event.payload as { ids: string[] };
+    const marked = new Set(ids);
+    let cleared = 0;
+    const next = prev.data.map((n) => {
+      if (marked.has(n.id) && !n.isRead) {
+        cleared += 1;
+        return { ...n, isRead: true };
+      }
+      return n;
+    });
+    return {
+      data: next,
+      meta: { ...prev.meta, unreadCount: Math.max(0, prev.meta.unreadCount - cleared) },
+    };
+  }
+
+  return prev;
+}
+
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const router = useRouter();
@@ -115,9 +167,21 @@ export function NotificationBell() {
   const panelRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  const { data } = useQuery({
+  /**
+   * ADR-025: the fetch waits for confirmed room membership, and anything that
+   * arrives while it is in flight is replayed onto the result.
+   *
+   * This is the surface that proved the defect — a second tab opened moments
+   * before a notification never showed a badge, and nothing corrected it for the
+   * lifetime of that tab. `notify:new` and `notify:read` are now expressed as ONE
+   * pure reducer, used both for live patching and for replay, so the two paths
+   * cannot disagree.
+   */
+  const { data } = useRealtimeQuery<NotificationListResponse>({
     queryKey: QUERY_KEY,
     queryFn: () => api<NotificationListResponse>('/v1/notifications'),
+    events: ['notify:new', 'notify:read'],
+    applyEvent: applyNotificationEvent,
   });
 
   // Memoised because `?? []` is a NEW array every render, which would re-create
@@ -125,51 +189,23 @@ export function NotificationBell() {
   const items = useMemo(() => data?.data ?? [], [data]);
   const unread = data?.meta.unreadCount ?? 0;
 
-  // ── notify:new → PREPEND from the payload, never refetch ────────────────────
-  const onNew = useCallback(
-    (raw: NotifyNewPayload) => {
-      queryClient.setQueryData<NotificationListResponse>(QUERY_KEY, (prev) => {
-        if (!prev) return prev;
-        // The socket can redeliver on reconnect; a duplicate row would double the
-        // badge and render twice with the same key.
-        if (prev.data.some((n) => n.id === raw.id)) return prev;
-        return {
-          data: [fromSocket(raw), ...prev.data],
-          meta: {
-            ...prev.meta,
-            unreadCount: prev.meta.unreadCount + 1,
-            totalReturned: prev.meta.totalReturned + 1,
-          },
-        };
-      });
-    },
-    [queryClient],
-  );
-  useNotifySocket<NotifyNewPayload>('notify:new', onNew);
-
-  // ── notify:read → patch the exact rows, so a second tab stays in step ───────
+  /**
+   * The two `socket.on` subscriptions that used to live here are GONE — the hook
+   * above owns them now, driving `applyNotificationEvent`. Leaving one behind
+   * would double-apply every patch, which is the failure ADR-022 rule (b) warns
+   * about and the reason STEP 5 deletes rather than duplicates.
+   *
+   * `markRead` still needs the read logic locally for its optimistic update, so it
+   * calls the same pure reducer through the cache.
+   */
   const onRead = useCallback(
     ({ ids }: { ids: string[] }) => {
-      const marked = new Set(ids);
-      queryClient.setQueryData<NotificationListResponse>(QUERY_KEY, (prev) => {
-        if (!prev) return prev;
-        let cleared = 0;
-        const next = prev.data.map((n) => {
-          if (marked.has(n.id) && !n.isRead) {
-            cleared += 1;
-            return { ...n, isRead: true };
-          }
-          return n;
-        });
-        return {
-          data: next,
-          meta: { ...prev.meta, unreadCount: Math.max(0, prev.meta.unreadCount - cleared) },
-        };
-      });
+      queryClient.setQueryData<NotificationListResponse>(QUERY_KEY, (prev) =>
+        prev ? applyNotificationEvent(prev, { name: 'notify:read', payload: { ids } }) : prev,
+      );
     },
     [queryClient],
   );
-  useNotifySocket<{ ids: string[] }>('notify:read', onRead);
 
   // Close on outside click and on Escape (UIUX §16).
   useEffect(() => {

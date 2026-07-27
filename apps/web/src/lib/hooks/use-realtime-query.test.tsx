@@ -1,9 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { createElement, type ReactNode } from 'react';
+import { createElement, useEffect, useState, type ReactNode } from 'react';
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 
 import { useRealtimeQuery, INVALIDATE } from './use-realtime-query';
+
+import type * as SocketModule from '@/lib/socket';
+
 
 /**
  * ADR-025 — the two gaps, proven separately.
@@ -18,7 +21,7 @@ import { useRealtimeQuery, INVALIDATE } from './use-realtime-query';
 type Handler = (payload: unknown) => void;
 
 const handlers = new Map<string, Set<Handler>>();
-let connected = true;
+
 let ackJoin: (() => void) | null = null;
 
 const fakeSocket = {
@@ -42,21 +45,23 @@ function fire(event: string, payload: unknown): void {
   for (const fn of handlers.get(event) ?? []) fn(payload);
 }
 
+/** Mirrors the real hook's contract; the ack is held so the test controls ordering. */
+function useFakeSocketRooms(): { subscribed: boolean } {
+  const [subscribed, setSubscribed] = useState(false);
+  useEffect(() => {
+    fakeSocket.emit('room:join', () => setSubscribed(true));
+  }, []);
+  return { subscribed };
+}
+
 vi.mock('@/lib/socket', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/socket')>();
+  const actual = await importOriginal<typeof SocketModule>();
   return {
     ...actual,
     getSocket: () => fakeSocket,
     // The real hook is exercised end-to-end by the E2E specs; here we drive the
     // ack directly so the fetch/join ordering is under the test's control.
-    useSocketRooms: () => {
-      const { useEffect, useState } = require('react') as typeof import('react');
-      const [subscribed, setSubscribed] = useState(false);
-      useEffect(() => {
-        fakeSocket.emit('room:join', () => setSubscribed(true));
-      }, []);
-      return { subscribed };
-    },
+    useSocketRooms: useFakeSocketRooms,
   };
 });
 
@@ -81,7 +86,7 @@ const applyEvent = (data: Row[], e: { name: string; payload: unknown }) => {
 
 beforeEach(() => {
   handlers.clear();
-  connected = true;
+
   ackJoin = null;
 });
 

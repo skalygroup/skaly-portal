@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 
-import type { AuthUser } from '../../src/lib/auth-verify.js';
+import type * as AuthVerify from '../../src/lib/auth-verify.js';
 import type { FastifyInstance } from 'fastify';
+
+type AuthUser = AuthVerify.AuthUser;
 
 /**
  * ADR-024 — the rate limiter keys per USER, not per IP (audit A1, deploy blocker).
@@ -38,7 +40,7 @@ function userFor(token: string): AuthUser {
 }
 
 vi.mock('../../src/lib/auth-verify.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/lib/auth-verify.js')>();
+  const actual = await importOriginal<typeof AuthVerify>();
   return {
     ...actual,
     verifySupabaseToken: vi.fn(async (token: string) => {
