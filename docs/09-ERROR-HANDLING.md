@@ -59,6 +59,7 @@ All API error responses follow a single consistent shape:
 | `SHOOT_RESET_CONFIRMATION_REQUIRED` | 400 | Reset endpoint called without `{ confirm: true }` |
 | `CLIENT_SHOOT_SLOTS_REQUIRED` | 400 | Client creation missing `shoot_slots_per_month` |
 | `RESOURCE_NOT_FOUND` | 404 | Resource does not exist or has been soft-deleted |
+| `RESOURCE_EXPIRED` | 410 | The row exists but its stored object is gone — a report past R2's 30-day lifecycle rule. Distinct from 404 so the UI can offer `[Regenerate]` instead of "not found" (Sprint 11, `07-API-CONTRACT.md` §Reports) |
 
 ### File Upload
 

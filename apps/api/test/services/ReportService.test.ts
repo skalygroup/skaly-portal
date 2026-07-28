@@ -346,9 +346,22 @@ describe('GET /v1/reports/:id — links are regenerated, never stored', () => {
       .where('id', '=', reportId)
       .execute();
 
+    // 410, NOT 404 — the distinction is the whole point. The row exists and the
+    // panel can still read its status; only R2's object is gone. A 404 reads as
+    // "no such report", and the panel then cannot offer the [Regenerate] CTA the
+    // API contract promises for exactly this case.
     await expect(svc.get(reportId, admin, db)).rejects.toMatchObject({
-      code: 'RESOURCE_NOT_FOUND',
+      code: 'RESOURCE_EXPIRED',
+      statusCode: 410,
       message: expect.stringContaining('30 days'),
+    });
+  });
+
+  test('an unknown id is still a 404 — the two must not collapse into one code', async () => {
+    const { svc } = serviceWith(() => {});
+    await expect(svc.get(randomUUID(), admin, db)).rejects.toMatchObject({
+      code: 'RESOURCE_NOT_FOUND',
+      statusCode: 404,
     });
   });
 

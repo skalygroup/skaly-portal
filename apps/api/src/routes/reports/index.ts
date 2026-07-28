@@ -26,11 +26,12 @@ const ReportItemSchema = z.object({
  *   GET  /reports/:id      — status; a FRESH presigned link once ready.
  *   GET  /reports          — the panel's recent list.
  *
- * ⚠️ 07-API-CONTRACT §Reports still documents the SYNCHRONOUS contract: a 200
- * carrying `downloadUrl` straight from the generate call. ADR-027 supersedes it —
- * that shape requires the render to finish inside the request, which is the exact
- * thing that takes the instance down at month end. The async contract is the ADR's
- * whole subject; the 202 is its signature.
+ * 07-API-CONTRACT §Reports documented the SYNCHRONOUS contract — a 201 carrying
+ * `downloadUrl` straight from the generate call — until Sprint 11 STEP 7 patched
+ * it to this shape. ADR-027 supersedes it: that shape requires the render to
+ * finish inside the request, which is the exact thing that takes the instance down
+ * at month end. The async contract is the ADR's whole subject; the 202 is its
+ * signature.
  *
  * The contract's separate `GET /reports/:id/download` is folded into `GET
  * /reports/:id`, which now has to exist anyway for status. It returned a fresh

@@ -47,6 +47,10 @@ export const ERROR_CODES = {
   SHOOT_RESET_CONFIRMATION_REQUIRED: 400,
   CLIENT_SHOOT_SLOTS_REQUIRED: 400,
   RESOURCE_NOT_FOUND: 404,
+  // 410, not 404: the row is still there and still readable — only R2's 30-day
+  // lifecycle rule took the object. A 404 tells the panel the id is bogus, so it
+  // cannot offer [Regenerate], which is the one action that resolves this.
+  RESOURCE_EXPIRED: 410,
 
   // ── File Upload ────────────────────────────────────────────────────
   FILE_TOO_LARGE: 400,

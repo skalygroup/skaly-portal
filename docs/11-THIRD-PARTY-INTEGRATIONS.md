@@ -15,7 +15,7 @@
 | Upstash Redis | Sessions, cache, presence state | MVP | 🟠 High |
 | Railway | Hosting — API server, PostgreSQL, cron | MVP | 🔴 Critical |
 | Vercel | Frontend hosting, CDN | MVP | 🔴 Critical |
-| Google Fonts | Big Shoulders Display + DM Sans + DM Mono | MVP | 🟡 Medium |
+| Google Fonts | Big Shoulders (ex *Big Shoulders Display*) + DM Sans + DM Mono | MVP | 🟡 Medium |
 | Expo Notifications | Mobile push (abstraction over FCM/APNs) | Phase 2 | 🟡 Medium |
 | FCM (Firebase) | Android push notifications | Phase 2 | 🟡 Medium |
 | APNs (Apple) | iOS push notifications | Phase 2 | 🟡 Medium |
@@ -233,13 +233,23 @@ redis.on('error', (err) => {
 
 **Three fonts required — all loaded at app startup via `next/font/google`.**
 
-```typescript
-// app/layout.tsx
-import { Big_Shoulders_Display, DM_Sans, DM_Mono } from 'next/font/google';
+> **The family was renamed.** Google folded *Big Shoulders Display* into **Big Shoulders**,
+> so `next/font/google` exports `Big_Shoulders`, not `Big_Shoulders_Display`. The same rename
+> is why the static TTF in `apps/api/src/assets/fonts/` is `BigShoulders-Bold.ttf` rather than
+> `BigShouldersDisplay-Bold.ttf`. A build that succeeds only proves the identifier resolved —
+> check the rendered face, not the exit code.
 
-const bigShoulders = Big_Shoulders_Display({
+```typescript
+// apps/web/src/app/layout.tsx  (src/, not app/ at the package root)
+import { Big_Shoulders, DM_Sans, DM_Mono } from 'next/font/google';
+
+const bigShoulders = Big_Shoulders({
   subsets: ['latin'], display: 'swap',
   weight: ['400','600','700'], variable: '--font-big-shoulders',
+  // next/font has no fallback size-adjust metrics for this family and logs
+  // "Failed to find font override values…". It is a display heading, so opting
+  // out costs no measurable CLS.
+  adjustFontFallback: false,
 });
 const dmSans = DM_Sans({
   subsets: ['latin'], display: 'swap',

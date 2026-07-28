@@ -1,7 +1,9 @@
 # ADR-027 — Report generation is asynchronous AND off the event loop
 
 **Status:** Accepted • Pre-Sprint 11
-**Cross-refs:** `13-NFRS.md` §1.2 · `10-INFRA-DEPLOYMENT.md` §4 (`healthcheckTimeout = 30`) ·
+**Cross-refs:** `07-API-CONTRACT.md` §Reports (**superseded** — patched to the 202 contract in
+Sprint 11 STEP 7) · `09-ERROR-HANDLING.md` §2 (`RESOURCE_EXPIRED`) ·
+`13-NFRS.md` §1.2 · `10-INFRA-DEPLOYMENT.md` §4 (`healthcheckTimeout = 30`) ·
 `11-THIRD-PARTY-INTEGRATIONS.md` §4.3 (`REPORT_EXPIRY_SECONDS = 86400`) ·
 `05-BACKEND-SCHEMA.md` (`reports`, migration `017`) · ADR-020 (`report_ready`)
 

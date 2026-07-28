@@ -295,7 +295,7 @@ export class ReportService {
     const ageDays = (Date.now() - (row.completed_at?.getTime() ?? 0)) / 86_400_000;
     if (ageDays > REPORT_RETENTION_DAYS) {
       throw new AppError(
-        'RESOURCE_NOT_FOUND',
+        'RESOURCE_EXPIRED',
         'This report is older than 30 days and its file has been removed. Generate it again.',
       );
     }
