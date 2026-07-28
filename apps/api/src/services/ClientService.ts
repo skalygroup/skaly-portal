@@ -51,13 +51,22 @@ export class ClientService {
 
   /**
    * List clients, name-ascending. Active-only unless `includeInactive` (the
-   * route enforces that only admins may pass it). Soft-deleted rows excluded.
+   * route enforces that only admins may pass it).
+   *
+   * `includeInactive` deliberately drops the soft-delete filter too. `deactivate`
+   * stamps `deleted_at` AND `active = false` together, so a filtered
+   * `includeInactive` returned exactly the same rows as `includeInactive: false` —
+   * the flag was dead, and the H-02 exclusion was doing all the work. That made
+   * `reactivate_client` unreachable by name: `get_client_summary` is the only
+   * sanctioned way for the model to obtain a client id (ADR-019), and no mode of
+   * it could see a deactivated client.
+   *
+   * Admin-gated at the route, and `active: false` on the DTO is what marks the
+   * row as retired for both the panel and the model.
    */
   async list(opts: { includeInactive: boolean }, trx: Executor): Promise<ClientListItem[]> {
-    let query = softDeletable(trx.selectFrom('clients').selectAll());
-    if (!opts.includeInactive) {
-      query = query.where('active', '=', true);
-    }
+    const base = trx.selectFrom('clients').selectAll();
+    const query = opts.includeInactive ? base : softDeletable(base).where('active', '=', true);
     const rows = await query.orderBy('name', 'asc').execute();
     return rows.map(clientToDTO);
   }
@@ -175,6 +184,73 @@ export class ClientService {
       });
 
       return { deactivated: true };
+    });
+  }
+
+  /**
+   * Reactivate a soft-deleted client (admin only — ADR-026 §2). The undo for
+   * `deactivate`, which was one-way until Sprint 11.
+   *
+   * Reuses `backfillClientPeriodRows` — the SAME call `create` makes — so a
+   * returning client is scaffolded exactly like a new one: shoot slots, pipeline
+   * row, calendar cells for the current period. Copying that logic is how the two
+   * paths drift into generating different row sets for the same client.
+   *
+   * Order matters inside the transaction: the backfill reads back the client and
+   * no-ops on `deleted_at IS NOT NULL`, `!active`, or `is_internal`, so the row
+   * must be revived FIRST. Internal clients still get nothing, same as on create.
+   *
+   * The current-month lock guard is `create`'s, for `create`'s reason (ADR-017):
+   * the scaffolding is a write into that period, and a client revived without it
+   * is invisible to Trigger 2 with no error to signal it.
+   */
+  async reactivate(id: string, currentUser: CurrentUser, db: Kysely<DB>): Promise<ClientListItem> {
+    if (currentUser.role !== 'admin') {
+      throw new AppError('PERMISSION_DENIED', 'Only admins can reactivate clients.');
+    }
+
+    const month = await getCurrentPeriod(db);
+    await assertPeriodNotLocked(
+      month.period,
+      db,
+      `Can't reactivate a client into a locked month — unlock ${month.label} first, or wait for the new month to open.`,
+    );
+
+    return transactionWithEmits(db, async (trx) => {
+      // Deliberately NOT softDeletable: the row we are looking for is the
+      // tombstoned one.
+      const before = await trx
+        .selectFrom('clients')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirst();
+      if (!before) {
+        throw new AppError('RESOURCE_NOT_FOUND', `clients row ${id} does not exist.`);
+      }
+      if (before.deleted_at === null && before.active) {
+        throw new AppError('ALREADY_PROCESSED', `${before.name} is already active.`);
+      }
+
+      const revived = await trx
+        .updateTable('clients')
+        .set({ deleted_at: null, active: true })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+      await backfillClientPeriodRows(id, month.period, trx);
+
+      await this.audit.log({
+        actorId: currentUser.staffId,
+        action: 'UPDATE',
+        entity: 'clients',
+        entityId: id,
+        before: { active: before.active, deletedAt: before.deleted_at?.toISOString() ?? null },
+        after: { active: true, deletedAt: null, periodBackfilled: month.period },
+        trx,
+      });
+
+      return clientToDTO(revived);
     });
   }
 

@@ -62,9 +62,10 @@ export const BOT_MUTATION_TOOL_NAMES = [
   'remove_holiday',
   'add_client',
   'deactivate_client',
+  'reactivate_client',
 ] as const;
 
-/** All 22. The resolver treats reads and writes identically — one gate, one
+/** All 23. The resolver treats reads and writes identically — one gate, one
  *  default map, no second code path for the dangerous half. */
 export const BOT_TOOL_NAMES = [...BOT_QUERY_TOOL_NAMES, ...BOT_MUTATION_TOOL_NAMES] as const;
 

@@ -32,7 +32,7 @@ import type { Role } from '../schemas/auth';
 export type RolePermissionDefaults = Record<Role, boolean>;
 
 export const ROLE_DEFAULTS: Record<string, RolePermissionDefaults> = {
-  // ─── §5 Bot tool permission matrix (all 22 tools) ─────────────────────────
+  // ─── §5 Bot tool permission matrix (all 23 tools) ─────────────────────────
   // Query tools
   'bot.tool.get_project_status':  { admin: true, manager: true,  team_member: true,  freelancer: false },
   'bot.tool.list_tasks':          { admin: true, manager: true,  team_member: true,  freelancer: false }, // team_member 🔐 own
@@ -57,6 +57,7 @@ export const ROLE_DEFAULTS: Record<string, RolePermissionDefaults> = {
   'bot.tool.update_calendar_cell':{ admin: true, manager: true,  team_member: false, freelancer: false },
   'bot.tool.add_client':          { admin: true, manager: true,  team_member: false, freelancer: false },
   'bot.tool.deactivate_client':   { admin: true, manager: false, team_member: false, freelancer: false },
+  'bot.tool.reactivate_client':   { admin: true, manager: false, team_member: false, freelancer: false }, // ADR-026 §6: same gate as its destructive twin
 
   // ─── §3 / §4 Module access (module.{module}.read / .write) ────────────────
   'module.home.read':                    { admin: true, manager: true,  team_member: true,  freelancer: true  }, // freelancer: own widgets

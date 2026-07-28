@@ -1,7 +1,7 @@
 import {
   NOTIFICATION_REGISTRY,
   NOTIFICATION_TYPES,
-  SPRINT_10_DEFERRED_TYPES,
+  DEFERRED_NOTIFICATION_TYPES,
   isNotificationType,
 } from '@skaly/shared';
 import { Kysely, PostgresDialect, sql } from 'kysely';
@@ -122,24 +122,21 @@ describe('every registry entry is complete', () => {
 });
 
 describe('the deferred six are asserted by name, not merely commented', () => {
-  test('⭐ exactly 7 types have no producer as of Sprint 10', () => {
-    // When Sprint 11 wires report_ready this FAILS until the expectation is updated.
-    // That failure is the intended workflow — it is how the deferral stays honest.
+  test('⭐ exactly 5 types have no producer as of Sprint 11', () => {
+    // Bumping SHIPPED_THROUGH_SPRINT makes this FAIL until every producer that
+    // sprint owes exists in src. That failure is the intended workflow — it is how
+    // the deferral stays honest.
     //
-    // SEVEN, not the six the sprint plan predicted. account_reactivated was counted
-    // as a shipped-sprint gap like holiday_added and client_updated, but unlike those
-    // it has no write path to hook into: StaffService is read-only and there is no
-    // staff deactivate OR reactivate anywhere. Its producer needs Settings → Staff,
-    // so it is a genuine deferral to Sprint 11 rather than a gap Sprint 10 could
-    // close. Inventing an emitter to make this number 6 is exactly what ADR-020
-    // forbids.
-    expect(SPRINT_10_DEFERRED_TYPES).toHaveLength(7);
-    expect(SPRINT_10_DEFERRED_TYPES).toEqual(
+    // Sprint 10 left SEVEN, not the six its plan predicted: account_reactivated was
+    // counted as a shipped-sprint gap like holiday_added and client_updated, but
+    // unlike those it had no write path to hook into — StaffService was read-only
+    // and there was no staff deactivate OR reactivate anywhere. Sprint 11 built
+    // both (ADR-026 reinstate, ADR-027 reports), so seven becomes five.
+    expect(DEFERRED_NOTIFICATION_TYPES).toHaveLength(5);
+    expect(DEFERRED_NOTIFICATION_TYPES).toEqual(
       [
-        'account_reactivated',
         'month_ready',
         'new_comment',
-        'report_ready',
         'rollover_failed',
         'rollover_success',
         'rollover_view_refresh_failed',
@@ -149,26 +146,24 @@ describe('the deferred six are asserted by name, not merely commented', () => {
 
   test('each deferred type names the sprint that owns its producer', () => {
     const owners: Record<string, number> = {
-      report_ready: 11,
-      account_reactivated: 11,
       new_comment: 12,
       month_ready: 12,
       rollover_success: 12,
       rollover_failed: 12,
       rollover_view_refresh_failed: 12,
     };
-    for (const type of SPRINT_10_DEFERRED_TYPES) {
+    for (const type of DEFERRED_NOTIFICATION_TYPES) {
       expect(NOTIFICATION_REGISTRY[type].producerSprint, type).toBe(owners[type]);
     }
   });
 
-  test('the other 11 are claimed by a sprint at or before 10', () => {
+  test('the other 13 are claimed by a sprint at or before 11', () => {
     const withProducers = NOTIFICATION_TYPES.filter(
-      (t) => !SPRINT_10_DEFERRED_TYPES.includes(t),
+      (t) => !DEFERRED_NOTIFICATION_TYPES.includes(t),
     );
-    expect(withProducers).toHaveLength(11);
+    expect(withProducers).toHaveLength(13);
     for (const t of withProducers) {
-      expect(NOTIFICATION_REGISTRY[t].producerSprint, t).toBeLessThanOrEqual(10);
+      expect(NOTIFICATION_REGISTRY[t].producerSprint, t).toBeLessThanOrEqual(11);
     }
   });
 });

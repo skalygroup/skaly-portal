@@ -256,11 +256,18 @@ export interface PgStatStatementsInfo {
 
 export interface Reports {
   client_id: string | null;
-  file_key: string;
+  completed_at: Timestamp | null;
+  error_message: string | null;
+  file_key: string | null;
+  filters: Json | null;
+  /**
+   * When the report was REQUESTED. Completion is completed_at (ADR-027).
+   */
   generated_at: Generated<Timestamp>;
   generated_by: string;
   id: Generated<string>;
   period: string;
+  status: Generated<string>;
   type: string;
 }
 

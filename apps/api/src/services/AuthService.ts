@@ -7,6 +7,8 @@ import { AttendanceService } from './AttendanceService.js';
 import { AuditService } from './AuditService.js';
 import { NotificationService } from './NotificationService.js';
 import { transactionWithEmits } from '../lib/emit-after-commit.js';
+import { AppError } from '../lib/errors.js';
+import { softDelete } from '../lib/queries.js';
 
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { DB } from '@skaly/shared';
@@ -512,15 +514,45 @@ export class AuthService {
         throw new AuthError('ALREADY_REVIEWED', 409, 'This request has already been reviewed.');
       }
 
-      // b. H-04 backstop: a staff row may have appeared (any state) since the
-      // request was filed. If so, mark this request rejected with an internal
-      // note (committed by returning, not throwing) and signal the caller.
+      // b. A staff row may have appeared since the request was filed. ONE lookup,
+      // three outcomes (ADR-026 §4) — and which one turns entirely on whether that
+      // row is alive:
+      //
+      //   none         → proceed, this is an ordinary approval
+      //   LIVE row     → H-04 backstop: reject with an internal note, 409. Correct.
+      //   DELETED row  → the returning employee. Surface "reinstate?" and leave the
+      //                  request PENDING. This is audit A4: the old code did not
+      //                  distinguish the two and rejected both with "Account
+      //                  already exists at approval time" — a sentence that is
+      //                  false for a deleted row, and which made every offboarded
+      //                  employee permanently unhireable through the product.
+      //
+      // Since migration 031 a live row and one or more deleted rows may share an
+      // email, so the ordering matters: a live row outranks any tombstone, and
+      // among tombstones the most recent one is the person we last employed.
       const existing = await trx
         .selectFrom('staff')
-        .select('id')
+        .select(['id', 'deleted_at'])
         .where('email', '=', row.email)
+        .orderBy(sql`deleted_at IS NOT NULL`)
+        .orderBy('deleted_at', 'desc')
         .limit(1)
         .executeTakeFirst();
+
+      if (existing?.deleted_at) {
+        // Throwing rolls the transaction back, which is the point: nothing is
+        // written, the request stays pending, and the admin gets a button.
+        throw new AppError(
+          'ALREADY_PROCESSED',
+          'This person previously worked here. Reinstate their account instead of creating a new one.',
+          {
+            previousStaffId: existing.id,
+            deactivatedAt: existing.deleted_at.toISOString(),
+            suggestion: 'reinstate',
+          },
+        );
+      }
+
       if (existing) {
         await trx
           .updateTable('signup_requests')
@@ -1012,6 +1044,152 @@ export class AuthService {
       after: { mfa_enrolled: false, event: 'mfa_reset' },
       trx: this.db,
     });
+  }
+
+  /**
+   * Admin deactivates a staff member (Auth-Matrix §4). Soft-delete + active =
+   * false, then revoke their Supabase sessions so they are LOGGED OUT, not merely
+   * blocked on their next request.
+   *
+   * Two layers, deliberately. The enforcement layer is ours: `auth.plugin`
+   * re-reads the staff row and answers `ACCOUNT_DEACTIVATED` (auth.plugin.ts:90),
+   * so eviction of `staff_lookup:{uid}` below is what makes deactivation
+   * immediate. The Supabase `signOut` is the courtesy layer — it ends the
+   * session rather than leaving a logged-in-looking tab that 401s on every
+   * action. It is best-effort and logged on failure: THIRD-PARTY §2.2 documents
+   * `signOut(userId)`, but supabase-js v2 types the argument as a JWT, so this
+   * call may be a no-op on some SDK builds. Our own layer is unaffected either
+   * way, which is why the failure is a warning rather than a rollback.
+   */
+  async deactivateStaff(targetStaffId: string, adminId: string): Promise<{ deactivated: true }> {
+    if (targetStaffId === adminId) {
+      throw new AuthError('PERMISSION_DENIED', 403, 'You cannot deactivate your own account.');
+    }
+
+    const target = await this.db
+      .selectFrom('staff')
+      .select(['id', 'name', 'email', 'active', 'supabase_uid'])
+      .where('id', '=', targetStaffId)
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+    if (!target) {
+      throw new AuthError('NOT_FOUND', 404, 'Staff member not found.');
+    }
+
+    await transactionWithEmits(this.db, async (trx) => {
+      await softDelete('staff', targetStaffId, adminId, trx);
+      await trx
+        .updateTable('staff')
+        .set({ active: false })
+        .where('id', '=', targetStaffId)
+        .execute();
+      await this.audit.log({
+        actorId: adminId,
+        entity: 'staff',
+        entityId: targetStaffId,
+        action: 'DELETE',
+        before: { name: target.name, email: target.email, active: target.active },
+        trx,
+      });
+    });
+
+    if (target.supabase_uid) {
+      await this.invalidateCache(target.supabase_uid);
+      try {
+        await (
+          this.supabaseAdmin.auth.admin as unknown as {
+            signOut: (jwt: string) => Promise<{ error: unknown }>;
+          }
+        ).signOut(target.supabase_uid);
+      } catch (err) {
+        this.logger.warn({ err, targetStaffId }, 'deactivateStaff: supabase signOut failed');
+      }
+    }
+
+    return { deactivated: true };
+  }
+
+  /**
+   * Admin reinstates a soft-deleted staff member — `PUT /v1/staff/:id/reactivate`,
+   * already specified in Auth-Matrix §4 and never built (ADR-026 §3).
+   *
+   * The ORIGINAL row is revived, never a duplicate. The history and the audit
+   * trail are the entire reason the row was soft-deleted rather than hard-deleted;
+   * a returning employee who comes back as a new id loses both.
+   *
+   * MFA state is left EXACTLY as it was (ADR-026 / Auth-Matrix §10). If they were
+   * enrolled, they stay enrolled: their authenticator very likely still has the
+   * secret, and silently clearing it would drop a returning admin straight into
+   * the /mfa-setup flow with no way back if they no longer hold the device. An
+   * admin who needs it cleared has `PUT /v1/staff/:id/mfa/reset` — an explicit,
+   * audited action — which is the right shape for a security downgrade.
+   */
+  async reactivateStaff(
+    targetStaffId: string,
+    adminId: string,
+  ): Promise<{ staffId: string; reactivated: true }> {
+    const target = await this.db
+      .selectFrom('staff')
+      .select(['id', 'name', 'email', 'active', 'deleted_at', 'supabase_uid'])
+      .where('id', '=', targetStaffId)
+      .executeTakeFirst();
+    if (!target) {
+      throw new AuthError('NOT_FOUND', 404, 'Staff member not found.');
+    }
+    if (target.deleted_at === null && target.active) {
+      throw new AuthError('ALREADY_PROCESSED', 409, `${target.name} is already active.`);
+    }
+
+    // ADR-026 §5. Since migration 031 the unique index is partial, so a live row
+    // and this tombstone can legitimately share an email — and reviving into that
+    // collision would raise a raw Postgres unique violation as a 500. Check first
+    // and say what actually happened.
+    const liveHolder = await this.db
+      .selectFrom('staff')
+      .select(['id', 'name'])
+      .where('email', '=', target.email)
+      .where('id', '!=', targetStaffId)
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+    if (liveHolder) {
+      throw new AuthError(
+        'ALREADY_PROCESSED',
+        409,
+        `${target.email} is already in use by an active account (${liveHolder.name}). Change that account's email, or deactivate it, before reinstating this one.`,
+      );
+    }
+
+    await transactionWithEmits(this.db, async (trx) => {
+      await trx
+        .updateTable('staff')
+        .set({ deleted_at: null, active: true })
+        .where('id', '=', targetStaffId)
+        .execute();
+
+      // The enum value that has existed for exactly this since Sprint 10 (ADR-020).
+      await this.notifications.create({
+        recipientId: targetStaffId,
+        type: 'account_reactivated',
+        title: 'Your account has been reactivated',
+        trx,
+      });
+
+      await this.audit.log({
+        actorId: adminId,
+        entity: 'staff',
+        entityId: targetStaffId,
+        action: 'UPDATE',
+        before: { active: target.active, deletedAt: target.deleted_at?.toISOString() ?? null },
+        after: { active: true, deletedAt: null, event: 'reinstated' },
+        trx,
+      });
+    });
+
+    if (target.supabase_uid) {
+      await this.invalidateCache(target.supabase_uid);
+    }
+
+    return { staffId: targetStaffId, reactivated: true };
   }
 
   /**

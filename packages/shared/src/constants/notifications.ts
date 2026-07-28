@@ -257,15 +257,26 @@ export type NotificationType = keyof typeof NOTIFICATION_REGISTRY;
 export const NOTIFICATION_TYPES = Object.keys(NOTIFICATION_REGISTRY) as NotificationType[];
 
 /**
- * Types with no producer as of Sprint 10, with the sprint that owns each.
+ * The last sprint whose producers are built. Bump it when a sprint ships its
+ * notification producers, and the census test tells you which ones you still owe.
+ */
+export const SHIPPED_THROUGH_SPRINT = 11;
+
+/**
+ * Types with no producer yet, with the sprint that owns each.
  *
  * Derived, not hand-maintained — a new entry with a future `producerSprint` joins this
- * list automatically. The coverage test asserts its length, so when Sprint 11 wires
- * `report_ready` the assertion fails until the expectation is updated. That failure is
- * the intended workflow, not a regression.
+ * list automatically, and an entry whose sprint has shipped leaves it. The coverage test
+ * asserts its length, so bumping SHIPPED_THROUGH_SPRINT above fails until every producer
+ * that sprint owes actually exists in src. That failure is the intended workflow, not a
+ * regression.
+ *
+ * Was `SPRINT_10_DEFERRED_TYPES`, a name that had to be edited every sprint. Sprint 11
+ * lands two of them: `account_reactivated` (ADR-026 staff reinstate) and `report_ready`
+ * (ADR-027), taking the list 7 → 5.
  */
-export const SPRINT_10_DEFERRED_TYPES = NOTIFICATION_TYPES.filter(
-  (t) => NOTIFICATION_REGISTRY[t].producerSprint > 10,
+export const DEFERRED_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
+  (t) => NOTIFICATION_REGISTRY[t].producerSprint > SHIPPED_THROUGH_SPRINT,
 ).sort();
 
 export const isNotificationType = (value: string): value is NotificationType =>

@@ -102,7 +102,7 @@ export interface BotTool {
   /**
    * Which capability family this tool belongs to (Sprint 9 STEP 6).
    *
-   * Denials are named to the model one phrase PER FAMILY, not per tool. With 22
+   * Denials are named to the model one phrase PER FAMILY, not per tool. With 23
    * tools a team_member is denied ~13, and listing thirteen near-identical phrases
    * both bloats the prompt and makes the model pattern-match too eagerly onto the
    * refusal — over-refusing things it can actually do. Six family phrases say the

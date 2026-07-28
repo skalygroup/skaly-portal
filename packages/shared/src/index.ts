@@ -17,7 +17,8 @@ export type { AttachmentMime } from './constants/attachments';
 export {
   NOTIFICATION_REGISTRY,
   NOTIFICATION_TYPES,
-  SPRINT_10_DEFERRED_TYPES,
+  DEFERRED_NOTIFICATION_TYPES,
+  SHIPPED_THROUGH_SPRINT,
   isNotificationType,
 } from './constants/notifications';
 export type { NotificationType, NotificationTypeSpec, NotificationSeverity } from './constants/notifications';

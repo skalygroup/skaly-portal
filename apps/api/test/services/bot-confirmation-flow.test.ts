@@ -503,10 +503,10 @@ describe('turn 1 — the gate', () => {
  * E2E suite cannot reach: `.env.e2e` has admin, team_member and freelancer, so
  * nothing anywhere drove a manager through a mutation until these.
  *
- * Exactly two tools differ (ROLE_DEFAULTS): `get_audit_log` and
- * `deactivate_client`, both admin-only. Everything else a manager holds, they
- * hold identically — so the pair below is the whole boundary: one mutation that
- * must work, and the one that must not.
+ * Exactly three tools differ (ROLE_DEFAULTS): `get_audit_log`,
+ * `deactivate_client` and — since ADR-026 — `reactivate_client`. Everything else
+ * a manager holds, they hold identically, so the tests below are the whole
+ * boundary: one mutation that must work, and the ones that must not.
  */
 describe('manager — the role the E2E fixtures cannot reach', () => {
   test('completes a two-turn mutation, audited to the MANAGER', async () => {
@@ -549,32 +549,37 @@ describe('manager — the role the E2E fixtures cannot reach', () => {
     expect(row.staff_id).toBe(MANAGER);
   });
 
-  test('deactivate_client is withheld from a manager, and refused if named anyway', async () => {
-    // Admin-only (ROLE_DEFAULTS). It is filtered out of the tool list the model
-    // sees, so a model that names it is either confused or being steered — this
-    // drives the defence-in-depth backstop in runTool, which no manager test
-    // reached before.
-    const spy = mockAnthropic({ clientId: '11111111-1111-4111-8111-111111111111' }, 'deactivate_client');
-    const sink: Emitted[] = [];
-    const s = svc(spy, sink);
-    const session = await s.loadSession(MANAGER, db);
-    await s.handleMessage({ session, staffId: MANAGER, role: 'manager', userText: 'deactivate that client', db, userMessageId: await seedUserTurn(MANAGER) });
+  // Admin-only (ROLE_DEFAULTS). Each is filtered out of the tool list the model
+  // sees, so a model that names one is either confused or being steered — this
+  // drives the defence-in-depth backstop in runTool, which no manager test
+  // reached before. Both directions of the client lifecycle are gated the same
+  // way, which is the point of ADR-026 §6: an undo the bot can reach without
+  // consent is no safer than the destroy it undoes.
+  test.each(['deactivate_client', 'reactivate_client'])(
+    '%s is withheld from a manager, and refused if named anyway',
+    async (toolName) => {
+      const spy = mockAnthropic({ clientId: '11111111-1111-4111-8111-111111111111' }, toolName);
+      const sink: Emitted[] = [];
+      const s = svc(spy, sink);
+      const session = await s.loadSession(MANAGER, db);
+      await s.handleMessage({ session, staffId: MANAGER, role: 'manager', userText: 'change that client', db, userMessageId: await seedUserTurn(MANAGER) });
 
-    // Withheld: the tool never reached the model in the first place.
-    const offered = (spy.calls[0]!.tools ?? []).map((t) => t.name);
-    expect(offered).not.toContain('deactivate_client');
-    expect(offered).toContain('add_client'); // …while the manager's own client tool did
+      // Withheld: the tool never reached the model in the first place.
+      const offered = (spy.calls[0]!.tools ?? []).map((t) => t.name);
+      expect(offered).not.toContain(toolName);
+      expect(offered).toContain('add_client'); // …while the manager's own client tool did
 
-    // Refused: no pending record, so no [Confirm] button can ever exist for it.
-    expect(await s.peekPending(MANAGER)).toBeNull();
-    const terminal = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload;
-    expect(terminal.card).toBeUndefined();
+      // Refused: no pending record, so no [Confirm] button can ever exist for it.
+      expect(await s.peekPending(MANAGER)).toBeNull();
+      const terminal = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload;
+      expect(terminal.card).toBeUndefined();
 
-    // And the model was handed our refusal copy, not a stack or a code.
-    const fedBack = JSON.stringify(spy.calls[1]!.messages);
-    expect(fedBack).toContain("I don't have permission to do that on your behalf");
-    expect(fedBack).not.toMatch(/PERMISSION_DENIED|\b4\d\d\b/);
-  });
+      // And the model was handed our refusal copy, not a stack or a code.
+      const fedBack = JSON.stringify(spy.calls[1]!.messages);
+      expect(fedBack).toContain("I don't have permission to do that on your behalf");
+      expect(fedBack).not.toMatch(/PERMISSION_DENIED|\b4\d\d\b/);
+    },
+  );
 });
 
 describe('turn 2 — execution', () => {
@@ -837,6 +842,68 @@ describe('the card shows values a human can consent to (ADR-014 §4)', () => {
       // Not a single raw uuid anywhere on the card.
       for (const c of changes) expect(c.to).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
     } finally {
+      await db.deleteFrom('clients').where('id', '=', client.id).execute();
+    }
+  });
+
+  test('⭐ reactivate_client confirms, then reaches ClientService.reactivate (ADR-026 §6)', async () => {
+    const client = await db
+      .insertInto('clients')
+      .values({ name: 'Undo Co', shoot_slots_per_month: 1, is_internal: true, active: false, deleted_at: sql`now()` })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    try {
+      // Turn 1: a card, and nothing written. The card must name the client, not
+      // its uuid, and say what reactivating actually does.
+      const spy = mockAnthropic({ clientId: client.id }, 'reactivate_client');
+      const sink: Emitted[] = [];
+      const s = svc(spy, sink);
+      const session = await s.loadSession(ADMIN, db);
+      await s.handleMessage({ session, staffId: ADMIN, role: 'admin', userText: 'bring undo co back', db, userMessageId: await seedUserTurn(ADMIN) });
+
+      const card = sink.filter((e) => e.event === 'bot:message').at(-1)!.payload.card as {
+        type: string;
+        confirmationId: string;
+        summary: { target: string; changes: Array<{ field: string; from: string; to: string }> };
+      };
+      expect(card.type).toBe('confirmation');
+      expect(card.summary.target).toBe('Undo Co');
+      expect(card.summary.changes.find((c) => c.field === 'Active')!.to).toBe('Yes');
+      expect(card.summary.changes.find((c) => c.field === 'This month’s rows')!.to).toContain(
+        'internal',
+      );
+
+      const stillDead = await db
+        .selectFrom('clients')
+        .select('deleted_at')
+        .where('id', '=', client.id)
+        .executeTakeFirstOrThrow();
+      expect(stillDead.deleted_at, 'turn 1 stages, it never writes').not.toBeNull();
+
+      // Turn 2: the same service the REST route calls.
+      const s2 = svc(undefined, []);
+      const next = await s2.loadSession(ADMIN, db);
+      await s2.handleMessage({
+        session: next,
+        staffId: ADMIN,
+        role: 'admin',
+        userText: 'yes',
+        decision: 'confirm',
+        confirmationId: card.confirmationId,
+        db,
+        userMessageId: await seedUserTurn(ADMIN),
+      });
+
+      const revived = await db
+        .selectFrom('clients')
+        .select(['active', 'deleted_at'])
+        .where('id', '=', client.id)
+        .executeTakeFirstOrThrow();
+      expect(revived.active).toBe(true);
+      expect(revived.deleted_at).toBeNull();
+    } finally {
+      await db.deleteFrom('audit_log').where('record_id', '=', client.id).execute();
       await db.deleteFrom('clients').where('id', '=', client.id).execute();
     }
   });

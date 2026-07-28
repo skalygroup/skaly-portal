@@ -169,6 +169,53 @@ export default async function staffRoutes(app: FastifyInstance) {
     },
   );
 
+  // ── Admin: deactivate a staff member ────────────────────────────────
+  // Soft-delete + active = false + Supabase session revocation, so they are
+  // signed out rather than merely blocked on their next request.
+  r.put(
+    '/staff/:id/deactivate',
+    {
+      preHandler: [app.verifyJwt, app.requireRole('admin')],
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        response: { 200: z.object({ data: z.object({ deactivated: z.literal(true) }) }) },
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      try {
+        return { data: await authService.deactivateStaff(request.params.id, request.user.id) };
+      } catch (err) {
+        return sendAuthError(err, reply);
+      }
+    },
+  );
+
+  // ── Admin: reinstate a soft-deleted staff member (ADR-026, fixes A4) ─
+  // Already specified in Auth-Matrix §4 since Sprint 1; built in Sprint 11.
+  r.put(
+    '/staff/:id/reactivate',
+    {
+      preHandler: [app.verifyJwt, app.requireRole('admin')],
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        response: {
+          200: z.object({
+            data: z.object({ staffId: z.string(), reactivated: z.literal(true) }),
+          }),
+        },
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      try {
+        return { data: await authService.reactivateStaff(request.params.id, request.user.id) };
+      } catch (err) {
+        return sendAuthError(err, reply);
+      }
+    },
+  );
+
   // ── Admin: set a per-user permission override (AUTH-MATRIX §4/§6) ────
   // Upserts user_permissions, audits, and busts perms:{staffId} so the change
   // takes effect on the next resolve. The resolver's floor is ROLE_DEFAULTS.

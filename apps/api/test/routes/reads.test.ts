@@ -138,13 +138,16 @@ describe('GET /v1/clients', () => {
     expect(JSON.parse(res.payload).error.code).toBe('PERMISSION_DENIED');
   });
 
-  test('?includeInactive=true → 200 for admin, inactive now visible', async () => {
+  test('?includeInactive=true → 200 for admin; inactive AND soft-deleted visible', async () => {
+    // ADR-026: the admin Clients panel is where a deactivated client is reinstated,
+    // so it must be able to see one. Deactivation stamps deleted_at and active=false
+    // together, so excluding tombstones here made the flag a no-op.
     asUser = authUser({ id: adminId, role: 'admin' });
     const res = await app.inject({ method: 'GET', url: '/v1/clients?includeInactive=true' });
     expect(res.statusCode).toBe(200);
     const names = JSON.parse(res.payload).data.map((c: { name: string }) => c.name);
     expect(names).toContain(`${CLIENT_MARKER}-inactive`);
-    expect(names).not.toContain(`${CLIENT_MARKER}-deleted`);
+    expect(names).toContain(`${CLIENT_MARKER}-deleted`);
   });
 });
 
