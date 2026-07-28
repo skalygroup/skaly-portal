@@ -34,7 +34,7 @@
     "@socket.io/redis-adapter": "^8",
     "@supabase/supabase-js": "^2",
     "@types/pg": "^8",
-    "dotenv": "^16.6.1",
+    "dotenv": "^17.4.2",
     "fastify": "^5",
     "fastify-plugin": "^5",
     "fastify-type-provider-zod": "^4",
