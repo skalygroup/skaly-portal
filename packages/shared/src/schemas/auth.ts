@@ -131,6 +131,16 @@ export const MfaVerifySchema = z.object({
   code: z.string().length(6).regex(/^\d+$/),
 });
 
+/**
+ * Body of POST /v1/auth/mfa/recovery. Deliberately loose on shape — the code is
+ * 10 hex characters but arrives retyped from a printed sheet, so spacing and
+ * case are normalised server-side rather than rejected here. A tight regex would
+ * turn "typed it with a space" into a failed attempt against the lockout budget.
+ */
+export const MfaRecoveryRedeemSchema = z.object({
+  code: z.string().trim().min(1).max(32),
+});
+
 // ─── Response schemas ────────────────────────────────────────────────────
 
 /** Returned by POST /v1/auth/mfa/enroll so the frontend can render the QR. */
@@ -139,6 +149,29 @@ export const MfaEnrollResponseSchema = z.object({
   qrCodeDataUrl: z.string(),
   secret: z.string(),
   recoveryCodes: z.array(z.string()).length(10),
+});
+
+/**
+ * Returned by POST /v1/auth/mfa/recovery. `remainingCodes` drives the nag at
+ * N ≤ 2; the caller is now unenrolled and headed for /mfa-setup.
+ */
+export const MfaRecoveryRedeemResponseSchema = z.object({
+  remainingCodes: z.number().int().min(0),
+});
+
+/**
+ * Returned by POST /v1/auth/mfa/recovery/regenerate. The ONLY time a code is
+ * ever readable after enrolment, and only the freshly-minted set — there is no
+ * endpoint that shows an existing one, because codes readable from a live
+ * session are not a second factor.
+ */
+export const MfaRecoveryRegenerateResponseSchema = z.object({
+  recoveryCodes: z.array(z.string()).length(10),
+});
+
+/** Returned by GET /v1/auth/mfa/recovery — the count only, never the codes. */
+export const MfaRecoveryStatusResponseSchema = z.object({
+  remainingCodes: z.number().int().min(0),
 });
 
 /**
@@ -206,6 +239,10 @@ export type MfaVerifyInput = z.infer<typeof MfaVerifySchema>;
 
 export type SignupRequestAdminItem = z.infer<typeof SignupRequestAdminItemSchema>;
 export type MfaEnrollResponse = z.infer<typeof MfaEnrollResponseSchema>;
+export type MfaRecoveryRedeemInput = z.infer<typeof MfaRecoveryRedeemSchema>;
+export type MfaRecoveryRedeemResponse = z.infer<typeof MfaRecoveryRedeemResponseSchema>;
+export type MfaRecoveryRegenerateResponse = z.infer<typeof MfaRecoveryRegenerateResponseSchema>;
+export type MfaRecoveryStatusResponse = z.infer<typeof MfaRecoveryStatusResponseSchema>;
 export type SessionRefreshResponse = z.infer<typeof SessionRefreshResponseSchema>;
 export type StaffMeResponse = z.infer<typeof StaffMeResponseSchema>;
 export type SignupStatusResponse = z.infer<typeof SignupStatusResponseSchema>;

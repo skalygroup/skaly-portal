@@ -1,13 +1,17 @@
 'use client';
 
-import { AlertCircle, Loader2, Lock } from 'lucide-react';
+import { AlertCircle, KeyRound, Loader2, Lock } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import type { MfaRecoveryRedeemResponse } from '@skaly/shared/schemas/auth';
+
 import { AuthCanvasCard } from '@/components/auth/auth-canvas-card';
 import { FormBanner } from '@/components/auth/form-controls';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
+import { api, ApiError } from '@/lib/api';
+import { setRecoveryNotice } from '@/lib/recovery-notice';
 import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
 
@@ -23,9 +27,12 @@ import { cn } from '@/lib/utils';
  * A successful verify rotates the session token to aal2; the middleware then
  * passes.
  *
- * // TODO(recovery redeem): allow a one-time recovery code as an alternative to a
- * // TOTP code here (backend redeem path against mfa_recovery_codes). Enrollment +
- * // the primary TOTP challenge are the launch gate; recovery redeem is a follow-up.
+ * RECOVERY CODES (Sprint 11 STEP 8). The alternative for someone who no longer
+ * has the authenticator. It cannot step the session up — only Supabase's own
+ * verify mints `aal2`, and the API never sees a TOTP code — so a redeemed code
+ * clears the factor instead and this page routes to `/mfa-setup` to enrol a new
+ * authenticator. That is also what losing the device actually means: you need a
+ * new one. See `AuthService.redeemRecoveryCode`.
  */
 export default function MfaChallengePage() {
   const router = useRouter();
@@ -36,6 +43,11 @@ export default function MfaChallengePage() {
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  const [mode, setMode] = useState<'totp' | 'recovery'>('totp');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [redeeming, setRedeeming] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
 
   // One-shot mount effect; guard StrictMode's double-invoke.
   const startedRef = useRef(false);
@@ -77,6 +89,12 @@ export default function MfaChallengePage() {
           code: sixDigits,
         });
         if (error) {
+          // The API never sees this code, so a failure only reaches the SHARED
+          // MFA failure budget if we report it. Without this the "3 attempts"
+          // in AUTH-MATRIX §10 would quietly mean three per credential type.
+          // Best-effort: a failed report must not mask the failed code.
+          void api('/v1/auth/mfa/failure', { method: 'POST' }).catch(() => {});
+
           const locked = /too many|rate|locked|attempts/i.test(error.message);
           setVerifyError(
             locked
@@ -105,6 +123,35 @@ export default function MfaChallengePage() {
     if (value.length === 6) void verify(value);
   }
 
+  const redeem = useCallback(async () => {
+    if (redeeming || !recoveryCode.trim()) return;
+    setRedeeming(true);
+    setRecoveryError(null);
+
+    try {
+      const { remainingCodes } = await api<MfaRecoveryRedeemResponse>('/v1/auth/mfa/recovery', {
+        method: 'POST',
+        body: JSON.stringify({ code: recoveryCode }),
+      });
+      // The account is now unenrolled, so the middleware's enrolment rule takes
+      // over from its aal2 rule and /mfa-setup is where it would send us anyway.
+      setRecoveryNotice(remainingCodes);
+      router.push('/mfa-setup');
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : 'UNKNOWN';
+      setRecoveryError(
+        code === 'MFA_LOCKED'
+          ? 'Too many failed attempts. Try again in 15 minutes.'
+          : code === 'MFA_FAILED'
+            ? 'That recovery code isn’t valid, or it has already been used.'
+            : 'Something went wrong. Try again.',
+      );
+      setRecoveryCode('');
+    } finally {
+      setRedeeming(false);
+    }
+  }, [recoveryCode, redeeming, router]);
+
   return (
     <AuthCanvasCard
       eyebrow="Two-factor authentication"
@@ -117,14 +164,75 @@ export default function MfaChallengePage() {
       <div className="flex flex-col gap-[22px] px-8 pb-[30px] pt-[26px]">
         {loadError && <FormBanner variant="error">{loadError}</FormBanner>}
 
-        {!factorId && !loadError && (
+        {mode === 'totp' && !factorId && !loadError && (
           <div className="flex items-center justify-center gap-2 py-14 text-text-secondary">
             <Loader2 size={18} className="animate-spin" />
             <span className="text-sm">Loading your authenticator…</span>
           </div>
         )}
 
-        {factorId && (
+        {mode === 'recovery' && (
+          <div className="flex flex-col gap-3">
+            <p className="text-[13.5px] leading-[1.55] text-text-secondary">
+              Enter one of the recovery codes you saved when you set up two-factor
+              authentication. Each code works once, and using one will ask you to set up a new
+              authenticator app.
+            </p>
+            <input
+              type="text"
+              inputMode="text"
+              autoComplete="one-time-code"
+              autoFocus
+              spellCheck={false}
+              value={recoveryCode}
+              disabled={redeeming}
+              onChange={(e) => {
+                setRecoveryCode(e.target.value);
+                setRecoveryError(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void redeem();
+              }}
+              aria-label="Recovery code"
+              aria-invalid={!!recoveryError}
+              placeholder="e.g. 4f2a9c1e7b"
+              className={cn(
+                'h-12 rounded-[10px] border bg-[#101013] px-4 font-[family-name:var(--font-mono)] text-[15px] tracking-[0.14em] text-[#E4E4E7] outline-none transition-colors placeholder:tracking-normal placeholder:text-text-muted focus:border-accent-gold',
+                recoveryError ? 'border-status-red/60 [animation:skShake_0.4s]' : 'border-[#232329]',
+              )}
+            />
+
+            {recoveryError ? (
+              <span className="flex items-center gap-[7px] text-[13px] text-[#F87171]">
+                <AlertCircle size={15} />
+                {recoveryError}
+              </span>
+            ) : null}
+
+            <button
+              type="button"
+              disabled={redeeming || !recoveryCode.trim()}
+              onClick={() => void redeem()}
+              className="h-12 rounded-[10px] text-[15px] font-bold transition-[filter] enabled:bg-accent-gold enabled:text-bg-base enabled:hover:brightness-[1.06] disabled:cursor-not-allowed disabled:bg-bg-selected disabled:text-text-muted"
+            >
+              {redeeming ? 'Checking your code…' : 'Use recovery code'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setMode('totp');
+                setRecoveryError(null);
+                setRecoveryCode('');
+              }}
+              className="self-center text-[13.5px] text-text-secondary transition-colors hover:text-text-primary"
+            >
+              Back to the authenticator code
+            </button>
+          </div>
+        )}
+
+        {mode === 'totp' && factorId && (
           <div className="flex flex-col gap-3">
             <InputOTP
               maxLength={6}
@@ -162,6 +270,23 @@ export default function MfaChallengePage() {
               </span>
             )}
           </div>
+        )}
+
+        {/* Reachable even when the factor lookup failed — "we couldn't find an
+            authenticator on your account" is precisely when someone needs this. */}
+        {mode === 'totp' && (
+          <button
+            type="button"
+            onClick={() => {
+              setMode('recovery');
+              setVerifyError(null);
+              setCode('');
+            }}
+            className="flex items-center justify-center gap-[7px] self-center text-[13.5px] text-text-secondary transition-colors hover:text-text-primary"
+          >
+            <KeyRound size={15} />
+            Lost your authenticator? Use a recovery code
+          </button>
         )}
 
         <Link

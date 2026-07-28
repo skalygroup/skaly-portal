@@ -7,13 +7,40 @@ import { Kysely, PostgresDialect } from 'kysely';
 import pg from 'pg';
 import { describe, test, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 
+import { sessionMfaRoutes } from '../../src/routes/auth/session-mfa.js';
 import staffRoutes from '../../src/routes/staff/index.js';
 import { AuthService } from '../../src/services/AuthService.js';
 
 import type { AuthUser } from '../../src/middleware/auth.plugin.js';
 import type { DB } from '@skaly/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { FastifyError, FastifyInstance, FastifyReply } from 'fastify';
 import type { Logger } from 'pino';
+
+/**
+ * The recovery ROUTE tests below register the real `sessionMfaRoutes`, which
+ * builds its own AuthService from the module-level singletons. Those construct a
+ * live Supabase client and an R2 client from env at import time, so both are
+ * replaced here. Everything else in this file drives `service` directly and uses
+ * the local mock instead.
+ */
+vi.mock('../../src/lib/supabase.js', () => ({
+  supabaseAdmin: {
+    auth: {
+      admin: {
+        mfa: {
+          listFactors: vi.fn(async () => ({ data: { factors: [] }, error: null })),
+          deleteFactor: vi.fn(async () => ({ data: null, error: null })),
+        },
+      },
+    },
+  },
+}));
+vi.mock('../../src/lib/r2.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getR2Client: () => ({}) as never,
+  getR2Bucket: () => 'test-bucket',
+}));
 
 // Integration test: real local Postgres + Redis (docker), Supabase mocked.
 const connectionString =
@@ -324,6 +351,201 @@ describe('AuthService MFA lifecycle', () => {
   });
 });
 
+// ── Recovery-code redeem (Sprint 11 STEP 8) ──────────────────────────────
+/**
+ * The availability hole carried since Sprint 8 STEP 8.4: codes have been
+ * generated and stored with no way to spend them, while MFA is mandatory for
+ * admin and manager. The documented fallback is another admin's `mfa/reset`,
+ * which cannot help when the locked-out person IS the only admin.
+ */
+describe('AuthService.redeemRecoveryCode', () => {
+  /** Enrol, then hand back the plaintext codes the user would have printed. */
+  async function enrolled(over: Record<string, unknown> = {}) {
+    const staff = await insertStaff({ mfa_enrolled: true, ...over });
+    const { recoveryCodes } = await service.enrollMfa(staff.id, staff.supabase_uid!);
+    await db
+      .updateTable('staff')
+      .set({ mfa_enrolled: true })
+      .where('id', '=', staff.id)
+      .execute();
+    await redis.del(`mfa:fail:${staff.id}`);
+    return { staff, recoveryCodes };
+  }
+
+  const remaining = (staffId: string) =>
+    db
+      .selectFrom('mfa_recovery_codes')
+      .select('id')
+      .where('staff_id', '=', staffId)
+      .where('used_at', 'is', null)
+      .execute();
+
+  test('⭐ a valid code is spent once, clears the factor, and leaves the others usable', async () => {
+    const { staff, recoveryCodes } = await enrolled();
+    await redis.set(cacheKey(staff.supabase_uid!), JSON.stringify({ id: staff.id }), 'EX', 300);
+
+    const out = await service.redeemRecoveryCode(staff.id, staff.supabase_uid!, recoveryCodes[0]!);
+
+    expect(out.remainingCodes).toBe(9);
+
+    // The redeemed row is consumed and ONLY that row. resetMfa drops the whole
+    // set, which is right for an admin reset and wrong here — someone who
+    // abandons /mfa-setup halfway would have spent their one way back in.
+    expect(await remaining(staff.id)).toHaveLength(9);
+
+    // Unenrolled + factor gone, so the middleware routes them to /mfa-setup.
+    const row = await db
+      .selectFrom('staff')
+      .select('mfa_enrolled')
+      .where('id', '=', staff.id)
+      .executeTakeFirstOrThrow();
+    expect(row.mfa_enrolled).toBe(false);
+    expect(deleteFactor).toHaveBeenCalledWith({ id: 'factor-xyz', userId: staff.supabase_uid });
+    expect(await redis.get(cacheKey(staff.supabase_uid!))).toBeNull();
+  });
+
+  test('⭐ the same code a second time → MFA_FAILED (single use, enforced in the DB)', async () => {
+    const { staff, recoveryCodes } = await enrolled();
+    await service.redeemRecoveryCode(staff.id, staff.supabase_uid!, recoveryCodes[0]!);
+
+    await expect(
+      service.redeemRecoveryCode(staff.id, staff.supabase_uid!, recoveryCodes[0]!),
+    ).rejects.toMatchObject({ code: 'MFA_FAILED', statusCode: 403 });
+  });
+
+  test('spacing and case a user adds are theirs, not the secret’s', async () => {
+    const { staff, recoveryCodes } = await enrolled();
+    const typed = ` ${recoveryCodes[0]!.toUpperCase().slice(0, 5)}-${recoveryCodes[0]!.slice(5)} `;
+    const out = await service.redeemRecoveryCode(staff.id, staff.supabase_uid!, typed);
+    expect(out.remainingCodes).toBe(9);
+  });
+
+  test('a code belonging to SOMEONE ELSE is not a match', async () => {
+    const mine = await enrolled();
+    const theirs = await enrolled();
+
+    await expect(
+      service.redeemRecoveryCode(mine.staff.id, mine.staff.supabase_uid!, theirs.recoveryCodes[0]!),
+    ).rejects.toMatchObject({ code: 'MFA_FAILED' });
+    // ...and theirs is still unspent.
+    expect(await remaining(theirs.staff.id)).toHaveLength(10);
+  });
+
+  test('⭐ three failed codes → MFA_LOCKED, and a VALID code is refused while locked', async () => {
+    const { staff, recoveryCodes } = await enrolled();
+
+    for (let i = 0; i < 3; i++) {
+      await expect(
+        service.redeemRecoveryCode(staff.id, staff.supabase_uid!, 'ffffffffff'),
+      ).rejects.toMatchObject({ code: 'MFA_FAILED' });
+    }
+
+    // The 4th attempt is refused before the compare — a good code included, or
+    // the lockout would only slow down people who guess wrong.
+    await expect(
+      service.redeemRecoveryCode(staff.id, staff.supabase_uid!, recoveryCodes[0]!),
+    ).rejects.toMatchObject({ code: 'MFA_LOCKED', statusCode: 403 });
+    expect(await remaining(staff.id)).toHaveLength(10);
+  });
+
+  test('⭐ TOTP and recovery failures share ONE budget — 2 bad TOTP + 1 bad code = locked', async () => {
+    const { staff, recoveryCodes } = await enrolled();
+
+    // The login challenge runs client-side against Supabase, so a failed TOTP
+    // reaches the server through recordMfaFailure (POST /v1/auth/mfa/failure).
+    await service.recordMfaFailure(staff.id);
+    await service.recordMfaFailure(staff.id);
+
+    await expect(
+      service.redeemRecoveryCode(staff.id, staff.supabase_uid!, 'ffffffffff'),
+    ).rejects.toMatchObject({ code: 'MFA_FAILED' });
+
+    // Separate counters would have left 2 recovery attempts here. One budget
+    // means the gate is shut. That is the whole reason it is one key.
+    await expect(
+      service.redeemRecoveryCode(staff.id, staff.supabase_uid!, recoveryCodes[0]!),
+    ).rejects.toMatchObject({ code: 'MFA_LOCKED' });
+  });
+
+  test('a successful redeem clears the budget', async () => {
+    const { staff, recoveryCodes } = await enrolled();
+    await service.recordMfaFailure(staff.id);
+    await service.recordMfaFailure(staff.id);
+
+    await service.redeemRecoveryCode(staff.id, staff.supabase_uid!, recoveryCodes[0]!);
+
+    expect(await redis.get(`mfa:fail:${staff.id}`)).toBeNull();
+  });
+
+  test('the lockout window is 15 minutes from the FIRST failure, not rolling', async () => {
+    const { staff } = await enrolled();
+    await service.recordMfaFailure(staff.id);
+    const first = await redis.ttl(`mfa:fail:${staff.id}`);
+    await service.recordMfaFailure(staff.id);
+    const second = await redis.ttl(`mfa:fail:${staff.id}`);
+
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThanOrEqual(900);
+    // Not extended — otherwise a persistent attacker holds the lock open forever.
+    expect(second).toBeLessThanOrEqual(first);
+  });
+
+  test('⭐ the audit row names it a recovery redeem, distinctly from a TOTP login', async () => {
+    const { staff, recoveryCodes } = await enrolled();
+    await service.redeemRecoveryCode(staff.id, staff.supabase_uid!, recoveryCodes[0]!);
+
+    const row = await db
+      .selectFrom('audit_log')
+      .select(['new_value', 'changed_by_source', 'action'])
+      .where('staff_id', '=', staff.id)
+      .orderBy('created_at', 'desc')
+      .executeTakeFirstOrThrow();
+
+    expect(row.changed_by_source).toBe('user');
+    expect(row.action).toBe('UPDATE');
+    const after = row.new_value as Record<string, unknown>;
+    expect(after.event).toBe('mfa_recovery_code_redeemed');
+    expect(after.remainingCodes).toBe(9);
+    // The code itself is never written anywhere, in any form.
+    expect(JSON.stringify(row.new_value)).not.toContain(recoveryCodes[0]!);
+  });
+
+  test('remainingRecoveryCodes counts unconsumed rows only', async () => {
+    const { staff, recoveryCodes } = await enrolled();
+    expect(await service.remainingRecoveryCodes(staff.id)).toBe(10);
+    await service.redeemRecoveryCode(staff.id, staff.supabase_uid!, recoveryCodes[0]!);
+    expect(await service.remainingRecoveryCodes(staff.id)).toBe(9);
+  });
+
+  test('regenerate invalidates the old set and issues 10 fresh ones', async () => {
+    const { staff, recoveryCodes } = await enrolled();
+    const { recoveryCodes: fresh } = await service.regenerateRecoveryCodes(staff.id);
+
+    expect(fresh).toHaveLength(10);
+    expect(fresh).not.toContain(recoveryCodes[0]);
+    expect(await service.remainingRecoveryCodes(staff.id)).toBe(10);
+
+    // An old code is now worthless — the set was replaced, not appended to.
+    await expect(
+      service.redeemRecoveryCode(staff.id, staff.supabase_uid!, recoveryCodes[0]!),
+    ).rejects.toMatchObject({ code: 'MFA_FAILED' });
+    // ...and a fresh one works.
+    await expect(
+      service.redeemRecoveryCode(staff.id, staff.supabase_uid!, fresh[0]!),
+    ).resolves.toMatchObject({ remainingCodes: 9 });
+  });
+
+  test('a user with no codes at all cannot be let in by an empty candidate list', async () => {
+    const staff = await insertStaff({ mfa_enrolled: true });
+    await redis.del(`mfa:fail:${staff.id}`);
+    // Zero rows means zero comparisons — the loop must fall through to MFA_FAILED
+    // rather than "no mismatch found, therefore a match".
+    await expect(
+      service.redeemRecoveryCode(staff.id, staff.supabase_uid!, 'ffffffffff'),
+    ).rejects.toMatchObject({ code: 'MFA_FAILED' });
+  });
+});
+
 // ── GET /v1/staff/me (role + permissions baseline) ───────────────────────
 describe('GET /v1/staff/me', () => {
   // Mount the real route with a stubbed verifyJwt that injects request.user, so
@@ -387,5 +609,130 @@ describe('GET /v1/staff/me', () => {
     expect(body.permissions['chat.access']).toBe(false);
     // Freelancers still get their own shoot rows.
     expect(body.permissions['module.shoot_planner.read']).toBe(true);
+  });
+});
+
+// ── The recovery ROUTES: who may reach them, and with what assurance ─────
+describe('/v1/auth/mfa/recovery — the gate around the gate', () => {
+  let asUser: AuthUser | undefined;
+  let app: FastifyInstance;
+
+  /** An unsigned JWT carrying just the `aal` claim — the route only reads it. */
+  const bearer = (aal: string) =>
+    `Bearer x.${Buffer.from(JSON.stringify({ aal })).toString('base64url')}.y`;
+
+  beforeAll(async () => {
+    app = Fastify();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    app.setErrorHandler((error: FastifyError, _req, reply) =>
+      reply.status(500).send({ error: { code: 'INTERNAL_ERROR', message: error.message } }),
+    );
+    app.decorate('db', db);
+    app.decorate('redis', redis);
+    app.decorate('verifyJwt', async (req: { user?: AuthUser }, reply: FastifyReply) => {
+      if (!asUser) {
+        return reply.status(401).send({ error: { code: 'UNAUTHORIZED', message: 'No session.' } });
+      }
+      req.user = asUser;
+    });
+    await app.register(sessionMfaRoutes, { prefix: '/v1' });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  test('⭐ an unauthenticated caller cannot enumerate or spend codes', async () => {
+    asUser = undefined;
+    for (const [method, url] of [
+      ['GET', '/v1/auth/mfa/recovery'],
+      ['POST', '/v1/auth/mfa/recovery'],
+      ['POST', '/v1/auth/mfa/recovery/regenerate'],
+    ] as const) {
+      const res = await app.inject({ method, url, payload: { code: 'ffffffffff' } });
+      expect(res.statusCode, `${method} ${url}`).toBe(401);
+    }
+  });
+
+  test('the count endpoint returns a NUMBER and never the codes themselves', async () => {
+    const staff = await insertStaff({ mfa_enrolled: true });
+    await service.enrollMfa(staff.id, staff.supabase_uid!);
+    asUser = {
+      id: staff.id,
+      supabase_uid: staff.supabase_uid!,
+      name: 'Me',
+      email: staff.email,
+      role: 'admin',
+      active: true,
+      mfa_enrolled: true,
+      avatar_url: null,
+    };
+
+    const res = await app.inject({ method: 'GET', url: '/v1/auth/mfa/recovery' });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toEqual({ remainingCodes: 10 });
+    // The serializer strips anything not in the schema; assert on the wire bytes
+    // so a future field carrying a hash cannot slip through unnoticed.
+    expect(res.payload).not.toMatch(/code_hash|codeHash|recoveryCodes/);
+  });
+
+  test('⭐ redeem does NOT require aal2 — that is the point of it', async () => {
+    const staff = await insertStaff({ mfa_enrolled: true });
+    const { recoveryCodes } = await service.enrollMfa(staff.id, staff.supabase_uid!);
+    await redis.del(`mfa:fail:${staff.id}`);
+    asUser = {
+      id: staff.id,
+      supabase_uid: staff.supabase_uid!,
+      name: 'Me',
+      email: staff.email,
+      role: 'admin',
+      active: true,
+      mfa_enrolled: true,
+      avatar_url: null,
+    };
+
+    // aal1: password done, authenticator not. Exactly the caller this is for.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/mfa/recovery',
+      headers: { authorization: bearer('aal1') },
+      payload: { code: recoveryCodes[0] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toEqual({ remainingCodes: 9 });
+  });
+
+  test('⭐ regenerate DOES require aal2 — a stolen password must not mint codes', async () => {
+    const staff = await insertStaff({ mfa_enrolled: true });
+    await service.enrollMfa(staff.id, staff.supabase_uid!);
+    asUser = {
+      id: staff.id,
+      supabase_uid: staff.supabase_uid!,
+      name: 'Me',
+      email: staff.email,
+      role: 'admin',
+      active: true,
+      mfa_enrolled: true,
+      avatar_url: null,
+    };
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/mfa/recovery/regenerate',
+      headers: { authorization: bearer('aal1') },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(JSON.parse(denied.payload).error.code).toBe('MFA_REQUIRED');
+
+    const allowed = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/mfa/recovery/regenerate',
+      headers: { authorization: bearer('aal2') },
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(JSON.parse(allowed.payload).recoveryCodes).toHaveLength(10);
   });
 });

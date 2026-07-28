@@ -11,6 +11,7 @@ import { AuthCanvasCard } from '@/components/auth/auth-canvas-card';
 import { FormBanner } from '@/components/auth/form-controls';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 import { api, ApiError } from '@/lib/api';
+import { takeRecoveryNotice } from '@/lib/recovery-notice';
 import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
 
@@ -42,6 +43,12 @@ export default function MfaSetupPage() {
   const [phase, setPhase] = useState<'enroll' | 'recovery'>('enroll');
   const [savedAck, setSavedAck] = useState(false);
   const [copied, setCopied] = useState<'' | 'secret' | 'codes'>('');
+  /** Set when we arrived here by spending a recovery code (STEP 8). */
+  const [redeemedRemaining, setRedeemedRemaining] = useState<number | null>(null);
+
+  useEffect(() => {
+    setRedeemedRemaining(takeRecoveryNotice());
+  }, []);
 
   // Enrollment is a one-shot side effect; guard against React StrictMode's
   // double-invoke so we don't register two factors / two recovery-code sets.
@@ -265,6 +272,17 @@ export default function MfaSetupPage() {
       badge={<SecureBadge />}
     >
       <div className="flex flex-col gap-[22px] px-8 pb-[30px] pt-[26px]">
+        {redeemedRemaining !== null && (
+          <FormBanner variant={redeemedRemaining <= 2 ? 'error' : 'info'}>
+            You signed in with a recovery code.{' '}
+            <strong className="font-semibold">
+              {redeemedRemaining} {redeemedRemaining === 1 ? 'code' : 'codes'} remaining.
+            </strong>{' '}
+            Set up a new authenticator below — finishing will also issue you a fresh set of
+            recovery codes.
+          </FormBanner>
+        )}
+
         {enrollError && <FormBanner variant="error">{enrollError}</FormBanner>}
 
         {!enrollment && !enrollError && (

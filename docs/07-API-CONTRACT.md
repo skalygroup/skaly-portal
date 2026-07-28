@@ -219,12 +219,58 @@ Initiate password reset. Response is always success to prevent enumeration.
 ---
 
 ### POST /v1/auth/mfa/verify
-Verify TOTP code during login (for admin/manager roles).
-**Auth:** Partially authenticated (valid JWT, MFA not yet verified)
+Confirm TOTP **enrolment** — flips `staff.mfa_enrolled`.
+**Auth:** Authenticated (valid JWT)
 
-**Request:** `{ "code": "123456" }`
-**Response 200:** `{ "data": { "verified": true, "accessToken": "jwt..." } }`
-**Errors:** 403 `MFA_FAILED` | 403 `MFA_LOCKED` (after 3 failures)
+**Request:** `{ "factorId": "...", "code": "123456" }`
+**Response 204**
+**Errors:** 400 `MFA_VERIFY_FAILED` | 403 `MFA_LOCKED` (after 3 failures)
+
+> **The login challenge is not an API call.** `/mfa-challenge` runs Supabase's own
+> `challengeAndVerify` against the user's session, because only Supabase can mint the `aal2`
+> claim the portal's middleware gates on — the API never sees a login TOTP code. That is why
+> a failed login attempt is *reported* (below) rather than counted by the endpoint that
+> checked it.
+
+---
+
+### POST /v1/auth/mfa/failure
+Report a failed TOTP challenge so it counts against the **shared** MFA failure budget.
+**Auth:** Authenticated (valid JWT) — self-inflicted only; the worst a caller can do is lock
+themselves out for 15 minutes.
+
+**Response 204**
+
+---
+
+### POST /v1/auth/mfa/recovery
+Spend a single-use recovery code. **Sprint 11 STEP 8.**
+**Auth:** Authenticated, **aal1 is enough** — this endpoint exists precisely for the caller
+who has passed password auth and *cannot* pass the authenticator step. Requiring aal2 would
+make it reachable only by people who do not need it.
+
+**Request:** `{ "code": "4f2a9c1e7b" }` — spacing and case are normalised server-side.
+**Response 200:** `{ "remainingCodes": 9 }`
+**Errors:** 403 `MFA_FAILED` | 403 `MFA_LOCKED`
+
+On success the code is consumed (single use, enforced by the DB), the Supabase factor is
+deleted, and `staff.mfa_enrolled` becomes `false` — so the caller lands on `/mfa-setup` to
+enrol a new authenticator. **The other codes survive**, unlike an admin `mfa/reset`: someone
+who abandons enrolment halfway must not have spent their one way back in. Audited distinctly
+from a TOTP login (`event: 'mfa_recovery_code_redeemed'`, `changed_by_source: 'user'`).
+
+### GET /v1/auth/mfa/recovery
+Remaining unconsumed codes. **The count only** — no endpoint returns a code.
+**Response 200:** `{ "remainingCodes": 7 }`
+
+### POST /v1/auth/mfa/recovery/regenerate
+Invalidate every existing code and issue a fresh set, returned **once**.
+**Auth:** Authenticated **+ aal2** — unlike redeem. Issuing codes from a session that never
+cleared the authenticator step would let a stolen password mint its own recovery codes and
+invalidate the real owner's.
+
+**Response 200:** `{ "recoveryCodes": ["...", … 10 total] }`
+**Errors:** 403 `MFA_REQUIRED`
 
 ---
 
