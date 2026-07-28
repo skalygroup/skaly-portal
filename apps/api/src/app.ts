@@ -27,6 +27,7 @@ import { registerSwagger } from './lib/swagger.js';
 import authPlugin from './middleware/auth.plugin.js';
 import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import attendanceRoutes from './routes/attendance/index.js';
+import auditLogRoutes from './routes/audit-log/index.js';
 import authRoutes from './routes/auth/index.js';
 import botRoutes from './routes/bot/index.js';
 import chatRoutes from './routes/chat/index.js';
@@ -271,6 +272,7 @@ export async function buildApp(
   await app.register(contentDropperRoutes, { prefix: '/v1' });
   await app.register(contentCalendarRoutes, { prefix: '/v1' });
   await app.register(settingsRoutes, { prefix: '/v1' });
+  await app.register(auditLogRoutes, { prefix: '/v1' });
   await app.register(notificationsRoutes, { prefix: '/v1' });
   await app.register(chatRoutes, { prefix: '/v1' });
 
