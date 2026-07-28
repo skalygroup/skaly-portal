@@ -112,6 +112,55 @@ describe('every registry entry is complete', () => {
     }
   });
 
+  test('⭐ every linkBuilder produces a DURABLE in-app route, never a signed URL', () => {
+    /**
+     * A notification row lives forever; a presigned R2 link lives 24h
+     * (REPORT_EXPIRY_SECONDS). `report_ready` returned `payload.downloadUrl`
+     * from Sprint 10 until Sprint 11 and nothing caught it — the deferred-list
+     * census asserts an emitter is ABSENT, not that the registry entry beside
+     * it is correct, so any of the other 17 could have been storing the same
+     * thing. This is that fix generalised (audit M-08): one test, 18 entries.
+     *
+     * The payload is POISONED — every plausible link-ish key carries a signed,
+     * expiring URL. A builder that reaches for one fails here.
+     */
+    const poisoned: Record<string, unknown> = {
+      downloadUrl: 'https://r2.example.com/r/x.pdf?X-Amz-Signature=dead&X-Amz-Expires=86400',
+      url: 'https://r2.example.com/o/x.pdf?X-Amz-Signature=dead',
+      signedUrl: 'https://cdn.example.com/s?token=abc&expires=1791830400',
+      link: '//evil.example.com/looks-relative',
+      href: 'http://r2.example.com/plain',
+      // The real addressing keys too, so builders that DO address something
+      // return their route here instead of trivially passing via null.
+      taskId: 't1',
+      period: '2026-07',
+      messageId: 'm1',
+      requestId: 'r1',
+      reportId: 'rep1',
+    };
+
+    for (const type of NOTIFICATION_TYPES) {
+      const link = NOTIFICATION_REGISTRY[type].linkBuilder(poisoned);
+      // null is the safe outcome — the bell renders the row unlinked.
+      if (link === null) continue;
+      // A single leading slash: `//host` is protocol-relative, not in-app.
+      expect(link, `${type} must be an in-app path`).toMatch(/^\/(?!\/)/);
+      expect(link, `${type} must not carry an expiring URL`).not.toMatch(
+        /https?:|X-Amz|signature=|token=|expires=/i,
+      );
+    }
+
+    // The 17 that build their route from a template are covered above by
+    // construction. `new_comment` is the one that takes it from the payload, so
+    // prove it still works when the payload is honest.
+    expect(NOTIFICATION_REGISTRY.new_comment.linkBuilder({ url: '/tasks?highlight=t1' })).toBe(
+      '/tasks?highlight=t1',
+    );
+    expect(NOTIFICATION_REGISTRY.report_ready.linkBuilder(poisoned)).toBe(
+      '/settings/reports?reportId=rep1',
+    );
+  });
+
   test('a linkBuilder given its payload produces the deep link', () => {
     expect(NOTIFICATION_REGISTRY.task_assigned.linkBuilder({ taskId: 't1', period: '2026-07' })).toBe(
       '/tasks?period=2026-07&highlight=t1',
@@ -121,7 +170,7 @@ describe('every registry entry is complete', () => {
   });
 });
 
-describe('the deferred six are asserted by name, not merely commented', () => {
+describe('the deferred five are asserted by name, not merely commented', () => {
   test('⭐ exactly 5 types have no producer as of Sprint 11', () => {
     // Bumping SHIPPED_THROUGH_SPRINT makes this FAIL until every producer that
     // sprint owes exists in src. That failure is the intended workflow — it is how

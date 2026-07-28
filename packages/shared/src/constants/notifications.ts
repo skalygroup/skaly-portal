@@ -217,7 +217,15 @@ export const NOTIFICATION_REGISTRY = {
     template: 'Someone comments on a record you follow.',
     icon: 'MessageSquare',
     severity: 'info',
-    linkBuilder: (p) => str(p, 'url'),
+    // The ONLY builder that takes its address from the payload, so it is the only
+    // one that can be handed an absolute URL. It must not be: the row lives
+    // forever and a signed link does not (audit M-08, the report_ready defect
+    // generalised). A non-portal value yields null — an unlinked row — rather
+    // than a bell that navigates off the portal or expires overnight.
+    linkBuilder: (p) => {
+      const url = str(p, 'url');
+      return url?.startsWith('/') && !url.startsWith('//') ? url : null;
+    },
     producerSprint: 12,
   },
   month_ready: {

@@ -14,7 +14,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import { resetEmitter, setEmitter } from '../../src/lib/emit-after-commit.js';
 import { AppError } from '../../src/lib/errors.js';
 import { requireRole } from '../../src/middleware/auth.plugin.js';
+import clientsRoutes from '../../src/routes/clients/index.js';
+import holidaysRoutes from '../../src/routes/holidays/index.js';
 import monthsRoutes from '../../src/routes/months/index.js';
+import reportsRoutes from '../../src/routes/reports/index.js';
 import settingsRoutes from '../../src/routes/settings/index.js';
 import staffRoutes from '../../src/routes/staff/index.js';
 import { currentIstPeriod } from '../../src/services/BaseService.js';
@@ -133,6 +136,9 @@ beforeAll(async () => {
   await app.register(settingsRoutes, { prefix: '/v1' });
   await app.register(staffRoutes, { prefix: '/v1' });
   await app.register(monthsRoutes, { prefix: '/v1' });
+  await app.register(clientsRoutes, { prefix: '/v1' });
+  await app.register(holidaysRoutes, { prefix: '/v1' });
+  await app.register(reportsRoutes, { prefix: '/v1' });
   await app.ready();
 });
 
@@ -160,7 +166,7 @@ beforeEach(async () => {
  */
 const MATRIX: Array<{
   panel: string;
-  method: 'GET' | 'PUT' | 'POST' | 'DELETE';
+  method: 'GET' | 'PUT' | 'POST' | 'PATCH' | 'DELETE';
   url: () => string;
   body?: unknown;
   allowed: Role[];
@@ -201,6 +207,56 @@ const MATRIX: Array<{
     body: { reason: 'matrix probe' },
     allowed: ['admin'],
   },
+  // The three manager-admitting panels. Every route in each file shares ONE
+  // `requireRole(...)` object, so one probe per guard covers the file — and the
+  // probes are reads or a DELETE of a nonexistent id, never a write, so a role
+  // that IS allowed answers 404 rather than mutating this suite's fixtures.
+  // NOT `GET /v1/clients` — the bare list is a shared lookup every grid's client
+  // filter needs, so it is open to all four roles by design. Auth-Matrix §3's
+  // `/settings/clients` row is about the PANEL, and the panel is the admin view
+  // (includeInactive) plus the mutations. Probing the bare list here would assert
+  // a 403 the product does not want and cannot give.
+  {
+    panel: 'clients',
+    method: 'GET',
+    url: () => '/v1/clients?includeInactive=true',
+    allowed: ['admin'],
+  },
+  {
+    panel: 'clients',
+    method: 'PATCH',
+    url: () => `/v1/clients/${randomUUID()}`,
+    body: { name: 'matrix probe' },
+    allowed: ['admin', 'manager'],
+  },
+  {
+    panel: 'clients',
+    method: 'DELETE',
+    url: () => `/v1/clients/${randomUUID()}`,
+    allowed: ['admin'],
+  },
+  {
+    panel: 'holidays',
+    method: 'GET',
+    url: () => `/v1/holidays?period=${PERIOD}`,
+    allowed: ['admin', 'manager'],
+  },
+  {
+    panel: 'holidays',
+    method: 'DELETE',
+    url: () => `/v1/holidays/${randomUUID()}`,
+    allowed: ['admin', 'manager'],
+  },
+  // POST /reports/generate shares `staffOnly` with these, and is probed by GET
+  // instead: a route-level preHandler runs AFTER schema validation, so a probe
+  // with a throwaway body 400s for every role and asserts nothing about the gate.
+  { panel: 'reports', method: 'GET', url: () => '/v1/reports', allowed: ['admin', 'manager'] },
+  {
+    panel: 'reports',
+    method: 'GET',
+    url: () => `/v1/reports/${randomUUID()}`,
+    allowed: ['admin', 'manager'],
+  },
 ];
 
 const ROLES: Role[] = ['admin', 'manager', 'team_member', 'freelancer'];
@@ -221,16 +277,38 @@ describe('⭐ the role matrix — Auth-Matrix §4, as data', () => {
     }
   });
 
-  test('four of the seven panels are admin-only', () => {
-    // Auth-Matrix §3: permissions, signup-requests, months, audit-log. Staff,
-    // clients, holidays and reports admit a manager. Audit log and reports are
-    // asserted in their own suites (STEPS 5 and 6).
+  test('all seven panels are probed, and the manager reaches exactly four', () => {
+    // Auth-Matrix §3's settings rows, minus audit-log, which has its own suite
+    // (STEP 5) because its export is a stream rather than a JSON body.
+    expect([...new Set(MATRIX.map((m) => m.panel))].sort()).toEqual([
+      'clients',
+      'holidays',
+      'months',
+      'permissions',
+      'reports',
+      'signup-requests',
+      'staff',
+    ]);
+
+    // Manager: Staff read-only, Clients, Holidays, Reports.
+    const managerPanels = new Set(
+      MATRIX.filter((m) => m.allowed.includes('manager')).map((m) => m.panel),
+    );
+    expect([...managerPanels].sort()).toEqual(['clients', 'holidays', 'reports', 'staff']);
+
+    // `staff` and `clients` appear on BOTH sides — their list admits a manager
+    // while their mutations do not. That is the 👁 limited row, and collapsing a
+    // panel to one verdict is what loses it. The next describe holds it.
     const adminOnlyPanels = new Set(
       MATRIX.filter((m) => m.allowed.length === 1 && m.allowed[0] === 'admin').map((m) => m.panel),
     );
-    expect([...adminOnlyPanels].sort()).toEqual(['months', 'permissions', 'signup-requests', 'staff']);
-    // `staff` appears because its MUTATIONS are admin-only while the LIST is not —
-    // exactly the 👁 limited row. That distinction is the next test.
+    expect([...adminOnlyPanels].sort()).toEqual([
+      'clients',
+      'months',
+      'permissions',
+      'signup-requests',
+      'staff',
+    ]);
   });
 });
 
