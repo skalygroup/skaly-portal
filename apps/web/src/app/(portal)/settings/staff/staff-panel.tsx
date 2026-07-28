@@ -101,6 +101,20 @@ export function StaffPanel({ canWrite }: { canWrite: boolean }) {
   const current = data.filter((r) => r.active);
   const former = data.filter((r) => !r.active);
 
+  /**
+   * Render the admin-only columns iff the PAYLOAD carried those fields — not iff
+   * the caller can write.
+   *
+   * `canWrite` was an exact proxy for this, but only by coincidence: admin is
+   * currently the sole role the API sends `email`/`mfaEnrolled` to. The day a
+   * manager is granted `settings_staff.write` while the API still omits those
+   * fields — or granted read of them without write — the proxy renders headers
+   * over a column of em-dashes, which is the exact defect it was written to
+   * prevent. Field-presence has no such coupling, and `in` is the right test
+   * because the API OMITS the fields rather than nulling them.
+   */
+  const showAdminFields = data.some((r) => 'email' in r);
+
   return (
     <div>
       <PanelHeader
@@ -126,21 +140,12 @@ export function StaffPanel({ canWrite }: { canWrite: boolean }) {
         head={
           <>
             <Th>Name</Th>
-            {/* Email and MFA are admin-only columns; a manager gets no empty
-                cells, because the API sent no field to render.
-
-                ⚠️ The rule this is REALLY expressing is "render the header iff
-                the payload carried that field". `canWrite` is an exact proxy
-                only because admin is currently the sole role the API sends
-                email/mfaEnrolled to. If an override ever decouples
-                field-inclusion from write access — a manager granted
-                settings_staff.write while the API still omits email — this
-                gates the wrong way and produces the column of em-dashes it
-                exists to prevent. The durable form is `'email' in row`; switch
-                to it the moment those two stop coinciding. */}
-            {canWrite && <Th>Email</Th>}
+            {/* Columns follow the FIELDS; actions follow the PERMISSION. Two
+                different questions, deliberately answered by two different
+                things — see `showAdminFields` above. */}
+            {showAdminFields && <Th>Email</Th>}
             <Th>Role</Th>
-            {canWrite && <Th>MFA</Th>}
+            {showAdminFields && <Th>MFA</Th>}
             <Th>Status</Th>
             {canWrite && <Th className="text-right">Actions</Th>}
           </>
@@ -149,9 +154,9 @@ export function StaffPanel({ canWrite }: { canWrite: boolean }) {
         {current.map((row) => (
           <tr key={row.id} className="border-b border-border-subtle last:border-0">
             <Td className="font-medium text-text-primary">{row.name}</Td>
-            {canWrite && <Td>{row.email ?? '—'}</Td>}
+            {showAdminFields && <Td>{row.email ?? '—'}</Td>}
             <Td>{ROLE_LABELS[row.role] ?? row.role}</Td>
-            {canWrite && (
+            {showAdminFields && (
               <Td>
                 {row.mfaEnrolled ? (
                   <span className="inline-flex items-center gap-1.5 text-status-green">

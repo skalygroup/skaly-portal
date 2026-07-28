@@ -45,6 +45,18 @@ const row = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/**
+ * What a MANAGER's payload actually looks like. `listForSettings` OMITS these
+ * three fields for a manager rather than nulling them (Auth-Matrix §3, 👁
+ * limited), and modelling that matters: the fixture used to hand a manager an
+ * admin-shaped row and passed only because the column gate was `canWrite`. It
+ * would have kept passing right up to the day those two stopped coinciding.
+ */
+const managerRow = (over: Record<string, unknown> = {}) => {
+  const { email: _e, mfaEnrolled: _m, deactivatedAt: _d, ...rest } = row(over);
+  return rest;
+};
+
 function renderPanel(canWrite: boolean) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -59,7 +71,7 @@ afterEach(cleanup);
 
 describe('row actions follow the write permission, not the table', () => {
   test('⭐ a manager gets the table and NO row actions', async () => {
-    apiMock.mockResolvedValue({ data: [row()] });
+    apiMock.mockResolvedValue({ data: [managerRow()] });
     renderPanel(false);
 
     expect(await screen.findByText('Asha Rao')).toBeTruthy();
@@ -80,6 +92,33 @@ describe('row actions follow the write permission, not the table', () => {
     expect(screen.getByRole('button', { name: /invite/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /reset mfa/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /deactivate/i })).toBeTruthy();
+  });
+});
+
+describe('⭐ columns follow the FIELDS, actions follow the PERMISSION', () => {
+  test('a payload without email/mfaEnrolled renders no such columns, even with write', async () => {
+    // The decoupling case. Today no role hits this — admin is the only role the
+    // API sends those fields to — which is exactly why it needs a test: the old
+    // `canWrite` gate passed every real fixture and would still have rendered a
+    // column of em-dashes the first time write access and field-visibility
+    // stopped coinciding.
+    apiMock.mockResolvedValue({ data: [managerRow()] });
+    renderPanel(true);
+
+    expect(await screen.findByText('Asha Rao')).toBeTruthy();
+    expect(screen.queryByText('Email')).toBeNull();
+    expect(screen.queryByText('MFA')).toBeNull();
+    // ...while the row actions, which are about permission, are untouched.
+    expect(screen.getByRole('button', { name: /deactivate/i })).toBeTruthy();
+  });
+
+  test('the columns appear when the payload carries the fields', async () => {
+    apiMock.mockResolvedValue({ data: [row()] });
+    renderPanel(true);
+
+    expect(await screen.findByText('Asha Rao')).toBeTruthy();
+    expect(screen.getByText('Email')).toBeTruthy();
+    expect(screen.getByText('MFA')).toBeTruthy();
   });
 });
 
