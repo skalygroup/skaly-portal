@@ -22,9 +22,13 @@
     "moduleResolution": "NodeNext",
     "module": "NodeNext",
     "resolveJsonModule": true,
+    // The report PDF is authored as JSX (src/workers/report-document.tsx).
+    // react-jsx needs no React import at each use site; @react-pdf/renderer
+    // brings react itself, so only the types are a devDependency.
+    "jsx": "react-jsx",
     "declaration": false,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

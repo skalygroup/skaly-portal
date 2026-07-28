@@ -34,38 +34,76 @@ caught in review rather than in a health-check restart.
    No PDF, no link, in the response.
 
 2. **THE RENDER LEAVES THE MAIN THREAD** — `worker_threads`. The worker opens its **own**
-   DB connection; a `pg` pool is not shareable across threads.
+   DB connection; a `pg` pool is not shareable across threads. It sets the DATE
+   identity parser too — a second connection that skipped it would print calendar
+   dates a day out east of UTC, reintroducing the exact bug the global parser killed.
 
-3. **Four exit paths, one convergence.** Success, thrown error, `'exit'` without a
+   **The worker also UPLOADS, and returns only the key.** A rendered PDF is a
+   multi-megabyte Buffer and crossing the thread boundary structured-*clones* it, so
+   posting the bytes back would hand the main thread the very copy the worker exists
+   to avoid. What comes back is `{ ok: true, r2Key }`.
+
+   **The notification is fired on the MAIN thread, not in the worker.** §3 below
+   reads as a sequence, not a thread assignment: `report_ready` needs the Socket.io
+   server, which exists on one thread only. The worker's job ends at the R2 key.
+
+3. **Spawning it is the part that ships broken.** The worker's path is resolved with
+   the same extension as the module doing the spawning (`import.meta.url`): `.ts`
+   under `tsx` and vitest, `.js` under `node dist/server.js`. Hard-coding either one
+   works in exactly one of the three environments. A TypeScript worker additionally
+   needs a loader registered **in its own thread** — hooks are per-thread,
+   `execArgv` does not accept `--import`, and `NODE_OPTIONS` is not re-parsed by
+   workers — so the dev/test branch starts the thread on a small bootstrap that
+   registers `tsx` and then imports the real module. Production never takes it.
+
+4. **`tsc` does not copy the fonts.** The build emits only what it compiles, so
+   `dist/assets/fonts` does not exist and `Font.register` fails with ENOENT — on
+   Railway, on the first report, and nowhere else, because local dev resolves from
+   `src` and looks perfectly fine. `scripts/copy-assets.mjs` runs after `tsc` and
+   **fails the build** if any of the five faces is missing.
+
+5. **Four exit paths, one convergence.** Success, thrown error, `'exit'` without a
    message, and hard timeout all end in *mark the row, then notify*. A worker that dies
    without messaging must still mark the row `failed`, or a report sits `pending`
    forever with nothing to observe it. `'error'` and `'exit'` are handled, not just the
    success message.
 
-4. **Documented concurrency cap: 2 concurrent renders, queued beyond that.** Two because
+6. **Documented concurrency cap: 2 concurrent renders, queued beyond that.** Two because
    the Railway instance is small and a PDF render is CPU-bound: one render leaves the box
    responsive, two saturate it without queueing at the OS level, and five simultaneous
    month-end requests must not spawn five renders. Raise it only with a measurement, not
    a hunch.
 
-5. **Hard timeout past the NFR §1.2 p99 ceiling** (p99 < 20s → terminate at 30s). Past
+7. **Hard timeout past the NFR §1.2 p99 ceiling** (p99 < 20s → terminate at 30s). Past
    the ceiling the render is not slow, it is stuck, and a stuck worker holds a pool slot.
 
-6. **Completion:** upload to R2 (private) → update `status: 'ready'`, `r2_key`,
-   `completed_at` → fire **`report_ready`** carrying a presigned GET at
-   `REPORT_EXPIRY_SECONDS` (24h — chosen precisely so a notification link survives a full
-   working day). This is the first real producer for one of ADR-020's six deferred types;
-   the deferred count drops 6 → 5.
+8. **Completion:** upload to R2 (private) → update `status: 'ready'`, `r2_key`,
+   `completed_at` → fire **`report_ready`**.
 
-7. **The persisted record is what makes the link cheap.** `GET /v1/reports/:id`
+   **The notification carries the `reportId`, NOT the presigned URL** (audit M-08).
+   The link lives 24h (`REPORT_EXPIRY_SECONDS`, chosen so it survives a full working
+   day) and the notification row lives forever, so a URL baked into the payload is a
+   bell that stops working overnight while still looking clickable.
+   `NOTIFICATION_REGISTRY.report_ready.linkBuilder` returned `payload.downloadUrl`
+   from Sprint 10 until Sprint 11 and now builds
+   `/settings/reports?reportId={id}`. Nothing caught it because the type had no
+   producer — **the deferred-list census proves an emitter is absent, not that the
+   registry entry beside it is correct.**
+
+   This is the first real producer for one of ADR-020's deferred types. Sprint 11
+   lands two of them (`account_reactivated` via ADR-026 as well), so the deferred
+   count goes **7 → 5** — not the 6 → 5 the sprint guide predicted, because Sprint 10
+   closed at seven rather than six.
+
+9. **The persisted record is what makes the link cheap.** `GET /v1/reports/:id`
    regenerates a fresh presigned URL from the stored `r2_key`, so a user returning within
    24h never triggers a re-render. **Presigned links are regenerated on read, never
    stored** — a stored link is a link that expires in the database.
 
-8. **Failure is a visible row**, `status: 'failed'` + `error_message` + a notification —
+10. **Failure is a visible row**, `status: 'failed'` + `error_message` + a notification —
    never a silent nothing.
 
-9. **Fonts are vendored into the repo**, not fetched by `Font.register` at render time. A
+11. **Fonts are vendored into the repo**, not fetched by `Font.register` at render time. A
    network fetch inside a render is an unbounded stall in the middle of a timed
    operation, and it presents as "report generation is slow in a way that doesn't match
    render complexity".

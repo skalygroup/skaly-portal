@@ -197,7 +197,19 @@ export const NOTIFICATION_REGISTRY = {
     template: 'An async report finished; the link expires after 24h.',
     icon: 'FileText',
     severity: 'success',
-    linkBuilder: (p) => str(p, 'downloadUrl'),
+    // Audit M-08: a PORTAL route, never the presigned R2 URL. The presigned link
+    // lives 24h (REPORT_EXPIRY_SECONDS) and the notification row lives forever, so
+    // a link baked into the payload is a bell that stops working overnight while
+    // still looking clickable. /settings/reports fetches a fresh URL on open.
+    //
+    // This entry returned `payload.downloadUrl` from Sprint 10 until Sprint 11.
+    // Nothing caught it because the type had no producer to exercise it — the
+    // deferred-list census proves an emitter is absent, not that the registry
+    // entry beside it is right.
+    linkBuilder: (p) => {
+      const id = str(p, 'reportId');
+      return id ? `/settings/reports?reportId=${id}` : '/settings/reports';
+    },
     producerSprint: 11,
   },
   new_comment: {
