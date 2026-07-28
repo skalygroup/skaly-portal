@@ -5,12 +5,14 @@ import { formatDistanceToNow } from 'date-fns';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Calendar, FileText, Loader2, Mail, Phone } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { toast } from 'sonner';
 
 import type { SignupRequestStatus } from '@/lib/get-signup-requests';
 import type { Role, SignupRequestAdminItem } from '@skaly/shared/schemas/auth';
 
+// One Modal for all seven panels — this file's local copy was the original.
+import { Modal } from '@/components/settings/panel-chrome';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -279,45 +281,6 @@ function Detail({ icon, value }: { icon: React.ReactNode; value: string }) {
 }
 
 // ─── Modals ──────────────────────────────────────────────────────────────────
-
-function Modal({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-5"
-      onClick={onClose}
-      role="presentation"
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-2xl border border-border-subtle bg-bg-surface p-6 shadow-[0_30px_70px_-30px_rgba(0,0,0,0.85)]"
-      >
-        <h2 className="font-[family-name:var(--font-display)] text-lg font-bold text-text-primary">
-          {title}
-        </h2>
-        {children}
-      </div>
-    </div>
-  );
-}
 
 function ApproveModal({
   req,
