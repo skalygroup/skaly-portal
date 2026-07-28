@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import net from 'node:net';
 
 import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
 import { login, typeInto } from './helpers/auth';
+import { periodDates } from './helpers/period-dates';
 
 /**
  * E2E smoke: the AI bot (Sprint 8 STEP 9.1). Runs against the LIVE Anthropic
@@ -91,10 +93,42 @@ async function seedOverdueTask(c: Client, createdBy: string): Promise<string> {
   return id;
 }
 
-async function cleanup() {
-  await withDb(async (c) => {
-    await c.query(`DELETE FROM tasks WHERE description LIKE $1`, [`${MARK}%`]);
+/**
+ * `DEL` straight down the Redis wire.
+ *
+ * The bot session lives in Redis, this suite has no Redis client, and pulling in
+ * a whole one for a single teardown command is not worth it — RESP for DEL is
+ * three lines. Never throws: a teardown that fails the run is worse than a key
+ * that outlives it, and every test clears its own conversation on the way in.
+ */
+async function redisDel(keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  const url = new URL(process.env.REDIS_URL ?? 'redis://localhost:6379');
+  await new Promise<void>((resolve) => {
+    const socket = net.createConnection(
+      { host: url.hostname || 'localhost', port: Number(url.port || 6379) },
+      () => {
+        const argv = ['DEL', ...keys];
+        socket.write(
+          `*${argv.length}\r\n${argv.map((a) => `$${Buffer.byteLength(a)}\r\n${a}\r\n`).join('')}`,
+        );
+      },
+    );
+    socket.on('data', () => socket.end());
+    socket.on('error', () => resolve());
+    socket.on('close', () => resolve());
   });
+}
+
+async function cleanup() {
+  const ids = await withDb(async (c) => {
+    await c.query(`DELETE FROM tasks WHERE description LIKE $1`, [`${MARK}%`]);
+    return [await staffIdByEmail(c, ADMIN_EMAIL), await staffIdByEmail(c, MEMBER_EMAIL)];
+  });
+  // The conversation itself, not just its writes: a session left in Redis is
+  // replayed into the panel by the NEXT run, and an assertion that should wait
+  // for a turn then passes instantly against history.
+  await redisDel(ids.filter(Boolean).flatMap((id) => [`bot:session:${id}`, `bot:pending:${id}`]));
 }
 
 /** The Bearer token the browser sends — captured from a real /v1 call. */
@@ -293,7 +327,8 @@ test.describe('bot — live smoke', () => {
 test.describe('bot — the two-turn mutation cycle', () => {
   test.describe.configure({ timeout: BOT_TIMEOUT });
 
-  const TASK_DATE = `${PERIOD}-15`;
+  // A6: derived, not pinned — see helpers/period-dates.ts.
+  const TASK_DATE = periodDates(PERIOD).mid;
 
   /** A description unique per test, so two runs can never see each other's row. */
   const uniqueDescription = (what: string): string => `${MARK} ${what} ${Date.now()}`;

@@ -14,6 +14,7 @@
 import { z } from 'zod';
 
 import { defineMutationTool } from './types.js';
+import { transactionWithEmits } from '../../../lib/emit-after-commit.js';
 import { AppError } from '../../../lib/errors.js';
 import { getCurrentPeriod } from '../../../services/BaseService.js';
 import { ClientService } from '../../../services/ClientService.js';
@@ -60,9 +61,7 @@ export const addHolidayTool = defineMutationTool({
   },
   async handler(input, currentUser, db) {
     const period = input.date.slice(0, 7);
-    await db
-      .transaction()
-      .execute((trx) => holidays.create({ period, date: input.date, name: input.name, currentUser, trx }));
+    await transactionWithEmits(db, (trx) => holidays.create({ period, date: input.date, name: input.name, currentUser, trx }));
     return { text: `Added ${input.name} on ${input.date}.`, card: { type: 'mutation_result' }, link: `/attendance?period=${period}` };
   },
 });
@@ -99,7 +98,7 @@ export const removeHolidayTool = defineMutationTool({
     // rather than defaulting to the current one — `remove` returns only { removed }.
     const { period } = await holidays.get(input.holidayId, db);
     // Straight through remove — the attendance revert rides its transaction (H-01).
-    await db.transaction().execute((trx) => holidays.remove(input.holidayId, currentUser, trx));
+    await transactionWithEmits(db, (trx) => holidays.remove(input.holidayId, currentUser, trx));
     return {
       text: 'Holiday removed and the day is back to working.',
       card: { type: 'mutation_result' },

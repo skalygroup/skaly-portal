@@ -22,6 +22,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { currentIstPeriod, useMonthContext } from '@/lib/hooks/use-month-context';
+import { INVALIDATE, useRealtimeQuery } from '@/lib/hooks/use-realtime-query';
 import { handleMutationError } from '@/lib/mutation-errors';
 
 const mono = { fontFamily: 'var(--font-mono)' } as const;
@@ -46,8 +47,12 @@ interface EditApi {
  * highlight. Tasks are unversioned (ADR-008) — no version is ever sent and there
  * is no stale-conflict UI. Real-time is own-mutation refresh only (ADR-010).
  *
- * TODO(Sprint 10): subscribe to task:changed on /ws/notify → invalidateQueries(['tasks', period]).
+ * Real-time is INVALIDATE-only (ADR-022): a task's position in the grid depends on
+ * ordering, membership and the ADR-006 assignee fan-out — none of which a single-row
+ * payload describes.
  */
+const TASK_EVENTS = ['task:created', 'task:updated', 'task:assigned'] as const;
+
 export function TasksGrid() {
   const { period } = useMonthContext();
   const queryClient = useQueryClient();
@@ -55,10 +60,15 @@ export function TasksGrid() {
   // A search result lands here as ?highlight={taskId} (APPFLOW §12).
   const flashId = useHighlightFlash();
 
-  const { data: tasks, isPending, isError, error, refetch } = useQuery({
+  const { data: tasks, isPending, isError, error, refetch } = useRealtimeQuery<Task[]>({
     queryKey: gridKey,
     queryFn: async () => (await api<{ data: Task[] }>(`/v1/tasks?period=${period}`)).data,
     staleTime: 30_000,
+    events: TASK_EVENTS,
+    // Invalidate-only, unchanged from ADR-022: ordering, membership and the
+    // ADR-006 assignee fan-out mean a task's place in the grid depends on rows
+    // this payload says nothing about.
+    applyEvent: () => INVALIDATE,
   });
 
   const { data: months } = useQuery({

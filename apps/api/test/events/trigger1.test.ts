@@ -136,8 +136,8 @@ describe('Trigger 1 — coming_shoot_date recompute via the real EventBus', () =
       const r = await readComing();
       return r.date ? r : null;
     });
-    expect(row.date).toBe(D1);
-    expect(row.source).toBe('trigger');
+    expect(row!.date).toBe(D1);
+    expect(row!.source).toBe('trigger');
   });
 
   test('multi-slot: coming_shoot_date = MIN, order-independent (confirm D2 then D1 → D1)', async () => {

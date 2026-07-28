@@ -99,7 +99,9 @@ export async function seedDevData(db: Kysely<DB>) {
             added_by: ADMIN_ID,
           })),
         )
-        .onConflict((oc) => oc.columns(['period', 'date']).doNothing())
+        // Matches migration 030's partial index (uniqueness applies to ACTIVE
+        // holidays only); without the predicate Postgres rejects the ON CONFLICT.
+        .onConflict((oc) => oc.columns(['period', 'date']).where('active', '=', true).doNothing())
         .execute();
 
       // Apply them to attendance — same effect as HolidayService.create (STEP 5):

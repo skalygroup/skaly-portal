@@ -197,3 +197,35 @@ describe('locked period', () => {
     ).rejects.toMatchObject({ code: 'PERIOD_LOCKED', statusCode: 423 });
   });
 });
+
+describe('a removed date is reusable (migration 030)', () => {
+  test('re-adding a holiday on a previously REMOVED date succeeds', async () => {
+    // UNIQUE (period, date) used to cover removed rows, so soft delete burned the
+    // date forever and this POST answered a raw 500. The partial index scopes
+    // uniqueness to active rows.
+    await insertAttendance(PERIOD, workingDate, 'working');
+    const first = await db
+      .transaction()
+      .execute((trx) => svc.create({ period: PERIOD, date: workingDate, name: 'Round one', currentUser, trx }));
+    await db.transaction().execute((trx) => svc.remove(first.id, currentUser, trx));
+
+    const second = await db
+      .transaction()
+      .execute((trx) => svc.create({ period: PERIOD, date: workingDate, name: 'Round two', currentUser, trx }));
+    expect(second.id).not.toBe(first.id);
+    expect(second.active).toBe(true);
+    // And the date it reused really is the same one.
+    expect(await dayTypeOf(PERIOD, workingDate)).toBe('holiday');
+  });
+
+  test('a second ACTIVE holiday on the same date → ALREADY_PROCESSED (409), not a 500', async () => {
+    await db
+      .transaction()
+      .execute((trx) => svc.create({ period: PERIOD, date: workingDate, name: 'First', currentUser, trx }));
+    await expect(
+      db
+        .transaction()
+        .execute((trx) => svc.create({ period: PERIOD, date: workingDate, name: 'Second', currentUser, trx })),
+    ).rejects.toMatchObject({ code: 'ALREADY_PROCESSED', statusCode: 409 });
+  });
+});

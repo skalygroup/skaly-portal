@@ -24,6 +24,7 @@ import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, getCurrentPeriod, type Executor } from './BaseService.js';
 import { NotificationService } from './NotificationService.js';
 import { generateShootSlotsForClient } from './period-generation.js';
+import { emitAfterCommit, transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 import { eventBus } from '../lib/EventBus.js';
 import { softDeletable } from '../lib/queries.js';
@@ -189,7 +190,7 @@ export class ShootPlannerService {
   async update(id: string, patch: SlotPatch, currentUser: CurrentUser, db: Kysely<DB>): Promise<SlotDTO> {
     this.assertAdminOrManager(currentUser);
 
-    const { updated, clientName, effectiveDate } = await db.transaction().execute(async (trx) => {
+    const { updated, clientName, effectiveDate } = await transactionWithEmits(db, async (trx) => {
       const slot = await this.loadSlotRow(id, trx);
       await assertPeriodNotLocked(slot.period, trx);
 
@@ -275,6 +276,16 @@ export class ShootPlannerService {
       }
     }
 
+    // ADR-022: invalidate-only, and it invalidates the DROPPER as well as the planner.
+    // Trigger 1 recomputes coming_shoot_date on the pipeline when a slot moves
+    // (ADR-012), so patching the slot's own fields would leave the dropper showing
+    // stale derived data — which the ADR calls out as worse than the refetch avoided.
+    emitAfterCommit('/ws/notify', 'org:all', 'shoot:slot_updated', {
+      period: updated.period,
+      clientId: updated.client_id,
+      actorStaffId: currentUser.staffId,
+    });
+
     return this.getSlot(id, currentUser, db);
   }
 
@@ -298,7 +309,7 @@ export class ShootPlannerService {
       );
     }
 
-    const slot = await db.transaction().execute(async (trx) => {
+    const slot = await transactionWithEmits(db, async (trx) => {
       const row = await this.loadSlotRow(id, trx);
       await assertPeriodNotLocked(row.period, trx);
 
@@ -396,7 +407,7 @@ export class ShootPlannerService {
       throw new AppError('VALIDATION_ERROR', 'slotsPerMonth must be an integer between 1 and 20.');
     }
 
-    return db.transaction().execute(async (trx) => {
+    return transactionWithEmits(db, async (trx) => {
       const client = await trx
         .selectFrom('clients')
         .select(['id', 'shoot_slots_per_month', 'pieces_per_visit', 'active', 'is_internal'])

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { SignJWT, generateKeyPair, type KeyLike } from 'jose';
+import { SignJWT, generateKeyPair, type CryptoKey } from 'jose';
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 
 /**
@@ -13,7 +13,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
  */
 
 const h = vi.hoisted(() => ({
-  keyHolder: { publicKey: undefined as unknown as KeyLike },
+  keyHolder: { publicKey: undefined as unknown as CryptoKey },
   inviteUserByEmail: vi.fn(),
   updateUserById: vi.fn(),
   generateLink: vi.fn(),
@@ -59,7 +59,7 @@ const ADMIN_EMAIL = `lifecycle-admin-${Date.now()}@lifecycle.itest`;
 const ISSUER = `${env.SUPABASE_URL}/auth/v1`;
 
 let app: Awaited<ReturnType<typeof buildApp>>;
-let privateKey: KeyLike;
+let privateKey: CryptoKey;
 let adminUid: string;
 
 function signToken(sub: string): Promise<string> {

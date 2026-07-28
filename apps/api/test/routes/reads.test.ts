@@ -15,6 +15,7 @@ import { currentIstPeriod } from '../../src/services/BaseService.js';
 import type { AuthUser } from '../../src/lib/auth-verify.js';
 import type { DB } from '@skaly/shared';
 import type { FastifyError, FastifyInstance } from 'fastify';
+import type { Redis } from 'ioredis';
 
 const connectionString =
   process.env.DATABASE_URL ?? 'postgresql://skaly:localdev@localhost:5432/skaly_dev';
@@ -102,7 +103,7 @@ beforeAll(async () => {
   app.decorate('db', db);
   // AuthService (constructed in staffRoutes) captures this but reads never call
   // it; presence uses the lib/redis singleton, not app.redis.
-  app.decorate('redis', {});
+  app.decorate('redis', {} as unknown as Redis);
   app.decorate('verifyJwt', async (req: { user?: AuthUser }) => {
     req.user = asUser;
   });

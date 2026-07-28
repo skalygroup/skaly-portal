@@ -221,7 +221,11 @@ redis.on('error', (err) => {
 | `bot:session:{staffId}` | string (JSON) | 12 hours | Conversation array, 50-turn limit |
 | `perms:{staffId}` | string (JSON) | 5 minutes | Permission override array |
 | `staff_lookup:{supabaseUid}` | string (JSON) | 5 minutes | Staff row snapshot |
-| `presence:{staffId}` | string "1" | 60 seconds | Online/offline indicator |
+| `presence` | hash | none (per-field freshness) | Online roster. Field = `staffId`, value = last-seen **epoch ms**. Fresh if `now - lastSeen < 60_000`; expired fields are `HDEL`'d on read (the sweep). Written by `HSET` on connect + 30s client heartbeat, `HDEL` on clean disconnect. **ADR-023** — replaces the former `presence:{staffId}` string keys, which are retired by a one-time `SCAN`-based cleanup in the deploy notes. |
+
+> **No `KEYS`, `SCAN`, or wildcard command on a request path** (ADR-023). The single-hash design
+> exists so the roster is one `HGETALL`. The value must be a timestamp, never `"1"` — a hash
+> field has no per-field TTL, so the timestamp plus the 60s filter *is* the expiry mechanism.
 
 ---
 

@@ -2,8 +2,10 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import { Redis } from 'ioredis';
 import { Server } from 'socket.io';
 
+import { attachChat } from './chat.js';
 import { attachPresence } from './presence.js';
 import { verifySupabaseToken } from '../lib/auth-verify.js';
+import { emitAfterCommit, setEmitter } from '../lib/emit-after-commit.js';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { setupSocketTokenWatcher } from '../middleware/socketTokenWatcher.plugin.js';
@@ -43,11 +45,7 @@ export function getIo(): Server {
  * HolidayService predates this helper and keeps its own equivalent copy.
  */
 export function broadcastToOrg(event: string, payload: Record<string, unknown>): void {
-  try {
-    getIo().of('/ws/notify').to('org:all').emit(event, payload);
-  } catch (err) {
-    logger.warn({ err, event, payload }, 'org broadcast emit failed');
-  }
+  emitAfterCommit('/ws/notify', 'org:all', event, payload);
 }
 
 /**
@@ -80,12 +78,16 @@ async function handshakeAuth(socket: Socket, next: (err?: Error) => void): Promi
  * Room joins run on every authenticated connect across all namespaces (audit
  * H-05 preview; full test in Sprint 10). Personal + role + org-wide.
  */
-function joinRooms(socket: Socket): void {
+async function joinRooms(socket: Socket): Promise<string[]> {
   const staffId = socket.data.staffId as string;
   const role = socket.data.role as string;
-  void socket.join(`user:${staffId}`);
-  void socket.join(`role:${role}`);
-  void socket.join('org:all');
+  const rooms = [`user:${staffId}`, `role:${role}`, 'org:all'];
+  // AWAITED, not fire-and-forget: under @socket.io/redis-adapter `join` is
+  // genuinely asynchronous, so `void socket.join(...)` returned before the
+  // membership existed. That is the server half of ADR-025's window — a client
+  // could be "connected" while broadcasts still had nowhere to land.
+  await socket.join(rooms);
+  return rooms;
 }
 
 /**
@@ -126,14 +128,40 @@ export function registerSockets(httpServer: HttpServer): SocketSetup {
     setupSocketTokenWatcher(nsp);
 
     nsp.on('connection', (socket) => {
-      joinRooms(socket);
-      if (path === '/ws/presence') {
-        attachPresence(socket, socket.data.staffId as string);
-      }
+      const joined = joinRooms(socket);
+      void joined;
+
+      /**
+       * `room:join` — the client asks whether its rooms are live, and we ACK.
+       *
+       * The client cannot otherwise know: 'connect' fires when the transport is
+       * up, which is strictly before membership exists. A consumer that fetches
+       * on 'connect' still has a window in which broadcasts reach nobody
+       * (ADR-025). The ack is the only honest "you are subscribed" signal.
+       *
+       * Idempotent by design — joining a room you are already in is a no-op, so
+       * a reconnect (or a paranoid client) can call this freely.
+       */
+      socket.on('room:join', (ack: unknown) => {
+        void (async () => {
+          const rooms = await joinRooms(socket);
+          if (typeof ack === 'function') (ack as (r: { rooms: string[] }) => void)({ rooms });
+        })();
+      });
+
+      const staffId = socket.data.staffId as string;
+      if (path === '/ws/presence') attachPresence(socket, staffId);
+      if (path === '/ws/chat') attachChat(socket, staffId);
     });
   }
 
   ioInstance = io;
+  // Hand the emit seam a live sender. Injected rather than imported so
+  // lib/emit-after-commit.ts stays free of the sockets → services → lib → sockets
+  // cycle, and so a unit test without a socket server simply has no sender.
+  setEmitter((namespace, room, event, payload) => {
+    io.of(namespace).to(room).emit(event, payload);
+  });
   logger.info(`socket.io listening on ${SOCKET_NAMESPACES.join(',')}`);
 
   return { io, pubClient, subClient };

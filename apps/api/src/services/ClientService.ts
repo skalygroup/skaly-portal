@@ -9,7 +9,9 @@
  */
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, getCurrentPeriod } from './BaseService.js';
+import { NotificationService } from './NotificationService.js';
 import { backfillClientPeriodRows } from './period-generation.js';
+import { transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 import { softDelete, softDeletable } from '../lib/queries.js';
 import { broadcastToOrg } from '../sockets/index.js';
@@ -45,6 +47,7 @@ function clientToDTO(r: Selectable<Clients>): ClientListItem {
 
 export class ClientService {
   private readonly audit = new AuditService();
+  private readonly notifications = new NotificationService();
 
   /**
    * List clients, name-ascending. Active-only unless `includeInactive` (the
@@ -102,7 +105,7 @@ export class ClientService {
       `Can't onboard a client into a locked month — unlock ${month.label} first, or wait for the new month to open.`,
     );
 
-    return db.transaction().execute(async (trx) => {
+    return transactionWithEmits(db, async (trx) => {
       const created = await trx
         .insertInto('clients')
         .values({
@@ -151,7 +154,7 @@ export class ClientService {
       throw new AppError('PERMISSION_DENIED', 'Only admins can deactivate clients.');
     }
 
-    return db.transaction().execute(async (trx) => {
+    return transactionWithEmits(db, async (trx) => {
       const before = await softDeletable(trx.selectFrom('clients').selectAll())
         .where('id', '=', id)
         .executeTakeFirst();
@@ -182,7 +185,7 @@ export class ClientService {
    * (04-APPFLOW §7). Returns the updated client.
    */
   async rename(id: string, name: string, currentUser: CurrentUser, db: Kysely<DB>): Promise<ClientListItem> {
-    const updated = await db.transaction().execute(async (trx) => {
+    const updated = await transactionWithEmits(db, async (trx) => {
       const before = await softDeletable(trx.selectFrom('clients').selectAll())
         .where('id', '=', id)
         .executeTakeFirst();
@@ -207,12 +210,29 @@ export class ClientService {
         trx,
       });
 
+      // ADR-020: client_updated existed in the enum from Sprint 6 with no producer —
+      // this service did not import NotificationService at all. A rename changes
+      // what every grid displays, so everyone but the actor is told.
+      await this.notifications.createForStaff({
+        actorId: currentUser.staffId,
+        type: 'client_updated',
+        title: `${before.name} is now ${name}`,
+        body: 'A client was renamed',
+        data: { clientId: id, previousName: before.name, name, recordId: id },
+        recordId: id,
+        trx,
+      });
+
       return clientToDTO(updated);
     });
 
-    // After COMMIT — API-Contract §6. Forward-wiring for Sprint 10, which
-    // invalidates every clientId-keyed query so a rename propagates across modules.
-    broadcastToOrg('client:name_updated', { clientId: id, name });
+    // Queued inside the transaction above and flushed on COMMIT (API-Contract §6),
+    // so a rolled-back rename never tells fifty clients to patch a name change that
+    // did not happen.
+    // actorStaffId: the client half of sender exclusion (ADR-022 rule b). A REST
+    // write has no originating socket for the server to exclude, so this is the only
+    // guard that can stop the actor re-applying their own echo.
+    broadcastToOrg('client:name_updated', { clientId: id, name, actorStaffId: currentUser.staffId });
 
     return updated;
   }

@@ -16,6 +16,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
+import { INVALIDATE, useRealtimeQuery } from '@/lib/hooks/use-realtime-query';
 import { handleMutationError } from '@/lib/mutation-errors';
 
 const mono = { fontFamily: 'var(--font-mono)' } as const;
@@ -285,19 +286,28 @@ const columnHelper = createColumnHelper<PipelineRow>();
  * the cell components, so a focus never rebuilds columns and remounts a button
  * mid-click.
  *
- * TODO(Sprint 10): subscribe to pipeline updates on /ws/notify →
- * invalidateQueries(['content-dropper', period]).
+ * Real-time is INVALIDATE-only (ADR-022): the derived status is recomputed server-side
+ * (ADR-013) and the payload carries only {clientId, period}, so this event is
+ * invalidate-only BY DEFINITION — rule a, not a preference. It also listens for
+ * shoot:slot_updated, because Trigger 1 rewrites coming_shoot_date on this grid.
  */
+const DROPPER_EVENTS = ['content-dropper:updated', 'shoot:slot_updated'] as const;
+
 export function ContentDropperGrid() {
   const { period } = useMonthContext();
   const queryClient = useQueryClient();
   const today = useMemo(() => todayIstIso(), []);
   const gridKey = useMemo(() => ['content-dropper', period] as const, [period]);
 
-  const { data: rows, isPending, isError, error, refetch } = useQuery({
+  const { data: rows, isPending, isError, error, refetch } = useRealtimeQuery<PipelineRow[]>({
     queryKey: gridKey,
     queryFn: async () => (await api<{ data: PipelineRow[] }>(`/v1/content-dropper?period=${period}`)).data,
     staleTime: 30_000,
+    events: DROPPER_EVENTS,
+    // Invalidate-only, unchanged from ADR-022: per ADR-013 the derived status is
+    // recomputed server-side and the payload carries only {clientId, period}, so
+    // it cannot express what changed. Same for the shoot Trigger-1 recompute.
+    applyEvent: () => INVALIDATE,
   });
 
   const { data: months } = useQuery({

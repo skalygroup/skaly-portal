@@ -16,6 +16,8 @@
  */
 import { randomUUID } from 'node:crypto';
 
+import { sql } from 'kysely';
+
 import { currentIstDate, currentIstPeriod } from './BaseService.js';
 import { PermissionService } from './PermissionService.js';
 import { withActorSource } from '../lib/bot/actor-context.js';
@@ -40,6 +42,9 @@ import type { Server } from 'socket.io';
 const SESSION_TTL_SECONDS = 12 * 60 * 60; // 12h (TRD §9.4)
 const MAX_TURNS = 50; // 50-turn cap, drop oldest (TRD §9.4)
 const MAX_TOKENS = 1024;
+/** Turns returned by the archive fallback — same order of magnitude as the 50-turn
+ *  live cap, so a restored conversation looks like the one that expired. */
+const ARCHIVE_VIEW_LIMIT = 100;
 /** Janitor only — the gate is the record's own 5-minute `expiresAt` (ADR-014). */
 const PENDING_JANITOR_TTL_SECONDS = 15 * 60;
 /**
@@ -100,6 +105,11 @@ export interface HandleMessageArgs {
   staffId: string;
   role: Role;
   userText: string;
+  /** The `messages` row id of the user's turn, from the route's archiveUserMessage.
+   *  ADR-021: the bot's reply links to it via parent_id, and ownership resolves as
+   *  COALESCE(m.sender_id, parent.sender_id) — which only works because the row this
+   *  points at carries sender_id. */
+  userMessageId: string;
   db: Kysely<DB>;
   /** Turn-2 consent from the inline buttons (ADR-014 §1). When `decision` is
    *  present the gate reads it and NEVER `userText` — that string is only the
@@ -280,7 +290,7 @@ export class BotService {
 
   /** Load the Redis session, or create + persist a new one so its sessionId is
    *  stable across the 202 ack and the async stream. */
-  async loadSession(staffId: string): Promise<BotSession> {
+  async loadSession(staffId: string, db: Kysely<DB>): Promise<BotSession> {
     const raw = await this.redis.get(this.sessionKey(staffId));
     if (raw) return JSON.parse(raw) as BotSession;
     const session: BotSession = {
@@ -290,23 +300,89 @@ export class BotService {
       lastActivityAt: new Date().toISOString(),
     };
     await this.redis.set(this.sessionKey(staffId), JSON.stringify(session), 'EX', SESSION_TTL_SECONDS);
+
+    // ADR-021 §4: one bot_sessions row per conversation, created at the same moment
+    // as the Redis session. The Redis blob's sessionId IS the row's PK, so the
+    // envelope needs no second identifier — and migration 020's table stops being an
+    // orphan no sprint wrote to. Best-effort: losing the envelope must not fail the
+    // user's message, because parent_id (not this) is what carries ownership.
+    await db
+      .insertInto('bot_sessions')
+      .values({ id: session.sessionId, staff_id: staffId })
+      .execute()
+      .catch((err: unknown) => logger.error({ err, staffId }, 'bot session envelope insert failed'));
+
+    // A live session supersedes any "cleared" marker — leaving it would only matter if
+    // this session later expired, and by then the clear is long spent.
+    await this.redis.del(this.clearedKey(staffId));
+
     return session;
   }
 
+  /**
+   * "New conversation" — drop the live session AND record that it was deliberate.
+   *
+   * The marker exists because the ADR-021 archive fallback cannot otherwise tell two
+   * very different situations apart: a session that EXPIRED after 12h (where the user
+   * wants their history back) and one the user explicitly CLEARED (where they asked for
+   * a blank slate). Both leave Redis empty, so without this the Clear button appears to
+   * do nothing — the old conversation is immediately resurrected from the archive.
+   *
+   * Scoped to the session TTL on purpose: "start fresh" is an intent about the current
+   * session, and once that window has passed the live session would have expired
+   * anyway, so letting the archive become reachable again is the correct end state.
+   */
   async clearSession(staffId: string): Promise<void> {
     await this.redis.del(this.sessionKey(staffId));
+    await this.redis.set(this.clearedKey(staffId), '1', 'EX', SESSION_TTL_SECONDS);
+  }
+
+  private clearedKey(staffId: string): string {
+    return `bot:cleared:${staffId}`;
   }
 
   /** Read-only conversational view for GET — never creates a session; returns the
    *  null-session shape when none exists. */
-  async sessionView(staffId: string): Promise<BotSessionView> {
+  async sessionView(staffId: string, db: Kysely<DB>): Promise<BotSessionView> {
     const raw = await this.redis.get(this.sessionKey(staffId));
-    if (!raw) return { sessionId: null, messages: [], turnCount: 0, lastActivityAt: null };
+    // ADR-021 §5: Redis first, then the archive. Without this fallback the 12-month
+    // retention keeps rows nobody can reach — attributable but write-only, which is
+    // barely better than unattributable.
+    //
+    // …but NOT after an explicit clear. See clearSession: an expired session and a
+    // cleared one are indistinguishable from Redis alone, and resurrecting a
+    // conversation the user just dismissed is worse than losing the fallback.
+    if (!raw) {
+      const cleared = await this.redis.get(this.clearedKey(staffId));
+      if (cleared) return { sessionId: null, messages: [], turnCount: 0, lastActivityAt: null };
+      return this.archivedView(staffId, db);
+    }
     const s = JSON.parse(raw) as BotSession;
     const messages = s.messages
       .map((m) => ({ role: m.role, content: extractText(m.content) }))
       .filter((m) => m.content.length > 0);
     return { sessionId: s.sessionId, messages, turnCount: s.turnCount, lastActivityAt: s.lastActivityAt };
+  }
+
+  /**
+   * The archive rendered in the shape the live session returns, oldest-first so the
+   * client renders it identically whichever source served it. `sessionId` is null:
+   * the conversation is readable but no longer resumable, which is exactly true once
+   * the Redis envelope has expired.
+   */
+  private async archivedView(staffId: string, db: Kysely<DB>): Promise<BotSessionView> {
+    const rows = await this.getBotConversation(staffId, ARCHIVE_VIEW_LIMIT, 0, db);
+    if (rows.length === 0) return { sessionId: null, messages: [], turnCount: 0, lastActivityAt: null };
+    const ordered = [...rows].reverse();
+    return {
+      sessionId: null,
+      messages: ordered.map((r) => ({
+        role: r.sender_type === 'bot' ? ('assistant' as const) : ('user' as const),
+        content: r.content,
+      })),
+      turnCount: ordered.filter((r) => r.sender_type === 'user').length,
+      lastActivityAt: rows[0]!.created_at.toISOString(),
+    };
   }
 
   private emit(staffId: string, event: 'bot:token' | 'bot:message', payload: Record<string, unknown>): void {
@@ -329,9 +405,10 @@ export class BotService {
     content: string;
     card?: BotCard;
     toolsUsed?: string[];
+    parentId: string;
     db: Kysely<DB>;
   }): Promise<void> {
-    const { staffId, sessionId, turnCount, messages, content, card, toolsUsed = [], db } = args;
+    const { staffId, sessionId, turnCount, messages, content, card, toolsUsed = [], parentId, db } = args;
 
     // `messages` is persisted exactly as given — the caller owns the transcript
     // shape. The tool-loop path already ends with the assistant's blocks; the
@@ -340,11 +417,15 @@ export class BotService {
       logger.error({ err, staffId }, 'bot session persist failed'),
     );
 
-    this.emit(staffId, 'bot:message', { sessionId, content, card, toolsUsed });
-
-    await this.archiveBotMessage(staffId, content, db).catch((err) =>
+    // BOTH durable writes precede the emit (ADR-021 §6). The DB archive used to run
+    // after it, which left the 12-month archive — the only record that outlives the
+    // 12h Redis TTL — losing exactly the turn a disconnected client needs to recover.
+    await this.archiveBotMessage(staffId, content, db, parentId).catch((err) =>
       logger.error({ err, staffId }, 'bot message archive failed'),
     );
+    await this.touchBotSession(sessionId, db);
+
+    this.emit(staffId, 'bot:message', { sessionId, content, card, toolsUsed });
   }
 
   /**
@@ -356,7 +437,7 @@ export class BotService {
    * `resolveTurn2`, which is pure and unit-tested per branch.
    */
   private async handleTurn2(args: HandleMessageArgs, currentUser: CurrentUser): Promise<boolean> {
-    const { session, staffId, userText, db, decision, confirmationId } = args;
+    const { session, staffId, userText, userMessageId, db, decision, confirmationId } = args;
     const { sessionId } = session;
 
     const pending = await this.peekPending(staffId);
@@ -379,6 +460,7 @@ export class BotService {
         content,
         card,
         toolsUsed,
+        parentId: userMessageId,
         db,
       });
 
@@ -495,7 +577,7 @@ export class BotService {
   }
 
   async handleMessage(args: HandleMessageArgs): Promise<void> {
-    const { session, staffId, role, userText, db } = args;
+    const { session, staffId, role, userText, userMessageId, db } = args;
     const { sessionId } = session;
     let fullText = '';
 
@@ -631,6 +713,7 @@ export class BotService {
         content: fullText,
         card,
         toolsUsed,
+        parentId: userMessageId,
         db,
       });
     } catch (err) {
@@ -872,10 +955,74 @@ export class BotService {
     return row.id;
   }
 
-  private async archiveBotMessage(staffId: string, content: string, db: Kysely<DB>): Promise<void> {
+  /**
+   * Archive the bot's reply (ADR-021 §2).
+   *
+   * `sender_id` is NULL — the canonical schema comment, which the previous write
+   * violated by stamping the caller's staffId onto a row the bot authored. Ownership
+   * is not lost: `parent_id` points at the user's turn, and `getBotConversation`
+   * resolves it by join.
+   */
+  private async archiveBotMessage(
+    staffId: string,
+    content: string,
+    db: Kysely<DB>,
+    parentId: string,
+  ): Promise<void> {
     await db
       .insertInto('messages')
-      .values({ channel: 'bot', sender_id: staffId, sender_type: 'bot', content, content_type: 'text' })
+      .values({
+        channel: 'bot',
+        sender_id: null,
+        sender_type: 'bot',
+        content,
+        content_type: 'text',
+        parent_id: parentId,
+      })
       .execute();
+  }
+
+  /**
+   * The session envelope's activity bump (ADR-021 §4). One UPDATE per turn against
+   * a row keyed by the sessionId the Redis blob already carries — bot_sessions owns
+   * the session lifecycle, never ownership, so it is never read to answer "whose
+   * message is this".
+   */
+  private async touchBotSession(sessionId: string, db: Kysely<DB>): Promise<void> {
+    await db
+      .updateTable('bot_sessions')
+      .set({ last_activity_at: new Date() })
+      .where('id', '=', sessionId)
+      .execute()
+      .catch((err: unknown) => logger.error({ err, sessionId }, 'bot session touch failed'));
+  }
+
+  /**
+   * The bot conversation for one staff member, newest first — the DB fallback behind
+   * GET /v1/bot/session/current once the 12h Redis TTL has lapsed (ADR-021 §5).
+   *
+   * COALESCE is what makes this work across both write shapes: rows written after
+   * ADR-021 carry NULL sender_id and resolve through the parent, and the ~344 legacy
+   * rows that carry their own sender_id resolve directly. That is why the ADR needs
+   * no backfill.
+   */
+  async getBotConversation(
+    staffId: string,
+    limit: number,
+    offset: number,
+    db: Kysely<DB>,
+  ): Promise<{ sender_type: string; content: string; created_at: Date }[]> {
+    const rows = await db
+      .selectFrom('messages as m')
+      .leftJoin('messages as p', 'p.id', 'm.parent_id')
+      .select(['m.sender_type', 'm.content', 'm.created_at'])
+      .where('m.channel', '=', 'bot')
+      .where('m.deleted_at', 'is', null)
+      .where(sql<boolean>`COALESCE(m.sender_id, p.sender_id) = ${staffId}`)
+      .orderBy('m.created_at', 'desc')
+      .limit(limit)
+      .offset(offset)
+      .execute();
+    return rows as { sender_type: string; content: string; created_at: Date }[];
   }
 }

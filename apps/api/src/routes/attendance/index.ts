@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { transactionWithEmits } from '../../lib/emit-after-commit.js';
 import {
   AttendanceService,
   attendanceLogToDTO,
@@ -101,9 +102,7 @@ export default async function attendanceRoutes(app: FastifyInstance) {
       const { present, workLog, version } = request.body;
 
       // The write + audit must commit together (STEP 4 atomicity).
-      const updated = await app.db
-        .transaction()
-        .execute((trx) => service.update(request.params.id, { present, work_log: workLog }, currentUser, version, trx));
+      const updated = await transactionWithEmits(app.db, (trx) => service.update(request.params.id, { present, work_log: workLog }, currentUser, version, trx));
 
       const dto = attendanceLogToDTO({ ...updated, date: toDateString(updated.date) });
       return { data: dto };

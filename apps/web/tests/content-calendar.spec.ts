@@ -160,10 +160,22 @@ test.describe('Content Calendar', () => {
 
     const popover = page.getByTestId(`cell-popover-${client!.id}-${EDIT_DATE}`);
     await expect(popover).toBeVisible();
+
+    // Arm the response wait BEFORE the change that triggers it.
+    //
+    // The aria-label below is satisfied by the OPTIMISTIC write, so on its own it
+    // says nothing about the server — and the DB read at the end of this test is the
+    // whole point of the test. Reading the row while the PATCH was still in flight
+    // is what made this fail: the assertion that exists to prove persistence was
+    // racing persistence.
+    const saved = page.waitForResponse(
+      (r) => r.request().method() === 'PATCH' && /\/content-calendar\//.test(r.url()),
+    );
     await popover.getByTestId('cell-status').selectOption('Ready');
 
     // Optimistic + server replace — the chip reflects the new status.
     await expect(cell).toHaveAttribute('aria-label', /Ready/);
+    expect((await saved).status()).toBe(200);
 
     // A raw click in the corner, not `getByTestId('popover-backdrop').click()`:
     // the backdrop is re-created whenever the grid re-renders (the mutation's

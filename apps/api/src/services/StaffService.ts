@@ -5,8 +5,8 @@
  */
 import { sql } from 'kysely';
 
+import { presenceService } from './PresenceService.js';
 import { softDeletable } from '../lib/queries.js';
-import { getOnlineStaffIds } from '../sockets/presence.js';
 
 import type { Executor } from './BaseService.js';
 import type { Role } from '@skaly/shared/schemas/auth';
@@ -52,7 +52,11 @@ export class StaffService {
       .orderBy('name', 'asc')
       .execute();
 
-    const online = new Set(await getOnlineStaffIds());
+    // ADR-011/ADR-023: presence is reported AGAINST the rows this caller already
+    // fetched and is authorised for, never as a standalone roster. There is no
+    // overload that returns everyone, so a future caller cannot accidentally turn
+    // presence into a staff directory.
+    const online = await presenceService.getOnlineAmong(rows.map((r) => r.id));
     return rows.map((r) => ({
       id: r.id,
       name: r.name,

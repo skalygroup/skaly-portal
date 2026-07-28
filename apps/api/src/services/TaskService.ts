@@ -27,8 +27,9 @@ import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, type Executor } from './BaseService.js';
 import { NotificationService } from './NotificationService.js';
 import { db } from '../lib/db.js';
+import { emitAfterCommit, transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
-import { softDelete } from '../lib/queries.js';
+import { softDelete, softDeletable } from '../lib/queries.js';
 
 import type { CurrentUser } from './AttendanceService.js';
 import type { DB } from '@skaly/shared';
@@ -324,6 +325,12 @@ export class TaskService {
       trx,
     });
 
+    // ADR-022: INVALIDATE-only, so the payload is just the addressing + the actor.
+    // A task's position in the grid depends on ordering, membership and the ADR-006
+    // fan-out — none of which a single-row payload describes, so there is deliberately
+    // no attempt to make this patchable.
+    this.broadcast('task:created', input.period, currentUser.staffId);
+
     return this.getTask(taskId, currentUser, trx);
   }
 
@@ -419,7 +426,24 @@ export class TaskService {
       await this.fanOutDependencyResolved(id, currentUser, trx);
     }
 
+    // ADR-022: invalidate-only. A status change can unblock OTHER rows through the
+    // dependency graph, so even a single-field edit changes more of the grid than
+    // this task's own row.
+    this.broadcast('task:updated', task.period, currentUser.staffId);
+
     return this.getTask(id, currentUser, trx);
+  }
+
+  /**
+   * The grid-sync broadcast for this module (ADR-022 — all three rows invalidate).
+   *
+   * One helper rather than three call-site copies, so every task event carries the
+   * same shape: `period` addresses the cache key, `actorStaffId` lets the originating
+   * client ignore its own echo (rule b). Queued by the emit seam and delivered on
+   * COMMIT, so a rolled-back write never tells fifty clients to refetch.
+   */
+  private broadcast(event: 'task:created' | 'task:updated' | 'task:assigned', period: string, actorStaffId: string): void {
+    emitAfterCommit('/ws/notify', 'org:all', event, { period, actorStaffId });
   }
 
   /**
@@ -432,7 +456,7 @@ export class TaskService {
     status: string,
     executor: Kysely<DB> = db,
   ): Promise<TaskDetailDTO> {
-    return executor.transaction().execute((trx) => this.update(id, { status }, currentUser, trx));
+    return transactionWithEmits(executor, (trx) => this.update(id, { status }, currentUser, trx));
   }
 
   /** Soft-delete. admin/manager only. Assignee rows are preserved (no cascade on soft-delete). */
@@ -508,6 +532,10 @@ export class TaskService {
       });
     }
 
+    // ADR-022: membership changed, and the ADR-006 fan-out means other rows may have
+    // gained a notification too — invalidate, never patch.
+    this.broadcast('task:assigned', task.period, currentUser.staffId);
+
     return this.getTask(id, currentUser, trx);
   }
 
@@ -531,6 +559,8 @@ export class TaskService {
       before: { removed: staffId },
       trx,
     });
+
+    this.broadcast('task:assigned', task.period, currentUser.staffId);
 
     return this.getTask(id, currentUser, trx);
   }
@@ -772,6 +802,61 @@ export class TaskService {
       createdBy: row.created_by,
       createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
     };
+  }
+
+  /**
+   * The overdue sweep — `task_overdue`'s producer (ADR-020).
+   *
+   * The type has existed in the enum since Sprint 4 with nothing emitting it. Built
+   * as a SERVICE METHOD, not a cron: Sprint 12 owns scheduling, and a job whose logic
+   * is already tested is a one-liner to schedule. Written now because the gap was
+   * found now, and a producer that exists is a producer that can be tested.
+   *
+   * "Overdue" is a task past its `deadline` that is neither Done nor Cancelled.
+   * `date` is the planned working day; `deadline` is the commitment, and only the
+   * commitment can be missed.
+   *
+   * Every run notifies every assignee — the dedup guard in NotificationService is
+   * what stops that becoming a daily repeat for the same task, and it lives there
+   * rather than here so the next repeating producer inherits it for free.
+   */
+  async notifyOverdue(db: Kysely<DB>): Promise<number> {
+    return transactionWithEmits(db, async (trx) => {
+      const overdue = await softDeletable(
+        trx
+          .selectFrom('tasks')
+          .innerJoin('task_assignees', 'task_assignees.task_id', 'tasks.id')
+          .select([
+            'tasks.id as id',
+            'tasks.description as description',
+            'tasks.period as period',
+            'tasks.deadline as deadline',
+            'task_assignees.staff_id as staff_id',
+          ]),
+      )
+        .where('tasks.deadline', 'is not', null)
+        .where('tasks.deadline', '<', sql<string>`current_date`)
+        .where('tasks.status', 'not in', ['Done', 'Cancelled'])
+        .execute();
+
+      let sent = 0;
+      for (const row of overdue) {
+        const created = await this.notifications.create({
+          recipientId: row.staff_id,
+          type: 'task_overdue',
+          title: row.description,
+          body: `Was due ${String(row.deadline)}`,
+          data: { taskId: row.id, period: row.period, deadline: row.deadline, recordId: row.id },
+          // (recipient, type, task) — the dedup key. Without it this sweep re-notifies
+          // the same task to the same person on every run, forever, and the bell
+          // becomes noise the user learns to ignore.
+          recordId: row.id,
+          trx,
+        });
+        if (created) sent += 1;
+      }
+      return sent;
+    });
   }
 }
 

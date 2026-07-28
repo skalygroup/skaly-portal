@@ -23,6 +23,7 @@
 import { ROLE_DEFAULTS } from '@skaly/shared';
 
 import { AuditService } from './AuditService.js';
+import { transactionWithEmits } from '../lib/emit-after-commit.js';
 import { logger } from '../lib/logger.js';
 
 
@@ -213,7 +214,7 @@ export class PermissionService {
     db: Kysely<DB>,
   ): Promise<PermissionOverride> {
     const audit = new AuditService();
-    const updated = await db.transaction().execute(async (trx) => {
+    const updated = await transactionWithEmits(db, async (trx) => {
         const existing = await trx
           .selectFrom('user_permissions')
           .select(['id', 'value'])

@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { Client } from 'pg';
 
 import { login } from './helpers/auth';
+import { periodDates } from './helpers/period-dates';
 
 /**
  * E2E smoke: Shoot Planner (Sprint 5 STEP 8) — lifecycle, freelancer isolation
@@ -44,7 +45,9 @@ function currentIstPeriod(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit' }).format(new Date());
 }
 const PERIOD = currentIstPeriod();
-const DATE = `${PERIOD}-15`;
+// A6: derived from the period, never pinned to day 15 — a fixed mid-month date
+// is valid for two weeks and then silently is not (see helpers/period-dates.ts).
+const DATE = periodDates(PERIOD).mid;
 
 async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
@@ -154,9 +157,23 @@ test.describe('shoot planner — live smoke', () => {
     await cell.click();
     const popover = page.getByTestId('slot-popover');
     await expect(popover).toBeVisible();
+    // Pick the freelancer FIRST — it is the only step that waits for a network
+    // response, and everything typed before it is lost.
+    //
+    // The staff query is `enabled: canEdit`, so it cannot start until /staff/me and
+    // /months resolve. It lands ~400ms after the grid paints, hands the popover a new
+    // `freelancers` prop, and remounts it — and the popover seeds its draft from props
+    // with useState, so a date filled before that point is silently reset to "" and
+    // the Schedule button goes back to disabled. Measured: value present at +200ms,
+    // gone at +500ms.
+    //
+    // selectOption blocks until the options exist, so ordering it first means the
+    // remount has already happened by the time anything is typed. This is also what a
+    // person does — they wait for the form to finish loading.
+    await popover.getByTestId('slot-freelancer').selectOption(freelancerId!);
     await popover.getByTestId('slot-date').fill(DATE);
     await popover.getByRole('button', { name: 'More pieces' }).click();
-    await popover.getByTestId('slot-freelancer').selectOption(freelancerId!);
+    await expect(popover.getByTestId('slot-cta')).toBeEnabled();
     await popover.getByTestId('slot-cta').click(); // "Schedule"
     await expect(cell.getByTestId('slot-scheduled')).toBeVisible();
 

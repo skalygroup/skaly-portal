@@ -12,18 +12,18 @@
  *     DELETE grant on holidays (§11) — never DELETE FROM holidays.
  *   - Holiday logic only ever touches WORKING/HOLIDAY rows; sunday rows are left
  *     alone (a holiday on a Sunday changes nothing — reconciliation #4).
- *   - The socket broadcast fires AFTER the DB writes, fire-and-forget: a socket
- *     failure (or sockets not yet initialised) is logged, never rolled back onto
- *     the DB. (Bell notifications for holidays are Sprint 10 — not here.)
+ *   - The socket broadcast fires after COMMIT, via lib/emit-after-commit.ts —
+ *     fire-and-forget: a socket failure (or sockets not yet initialised) is logged,
+ *     never rolled back onto the DB. It used to fire after the WRITE, which meant a
+ *     caller that rolled back still told every connected client to refetch.
  */
 import { sql, type Selectable, type Transaction } from 'kysely';
 
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked } from './BaseService.js';
+import { NotificationService } from './NotificationService.js';
+import { emitAfterCommit } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
-import { logger } from '../lib/logger.js';
-import { getIo } from '../sockets/index.js';
-
 
 import type { CurrentUser } from './AttendanceService.js';
 import type { Executor } from './BaseService.js';
@@ -50,6 +50,7 @@ export interface HolidayCreateInput {
 
 export class HolidayService {
   private readonly audit = new AuditService();
+  private readonly notifications = new NotificationService();
 
   /**
    * admin/manager (AUTH-MATRIX §4, FR-ATT-09). Until Sprint 9 this lived ONLY on
@@ -89,11 +90,21 @@ export class HolidayService {
     this.assertAdminOrManager(currentUser);
     await assertPeriodNotLocked(period, trx);
 
+    // Adding a holiday on a date that already has one is a user mistake, not a
+    // server fault — but nothing translated the unique violation, so it surfaced as
+    // a raw 500. Caught rather than pre-read: a SELECT-then-INSERT check is racy,
+    // and the index is the only thing that actually decides.
     const holiday = await trx
       .insertInto('holidays')
       .values({ period, date, name, active: true, added_by: currentUser.staffId })
       .returningAll()
-      .executeTakeFirstOrThrow();
+      .executeTakeFirstOrThrow()
+      .catch((err: unknown) => {
+        if ((err as { code?: string }).code === '23505') {
+          throw new AppError('ALREADY_PROCESSED', `${date} is already a holiday.`);
+        }
+        throw err;
+      });
 
     // Only working days flip; sunday rows are intentionally left as-is.
     await trx
@@ -110,6 +121,20 @@ export class HolidayService {
       entity: 'holidays',
       entityId: holiday.id,
       after: { period, date, name, active: true },
+      trx,
+    });
+
+    // ADR-020: the socket broadcast and the notification are DIFFERENT mechanisms,
+    // and having one was not having the other. This service broadcast
+    // attendance:holiday_added from Sprint 3 while writing no notification row —
+    // the type existed in the enum with no producer until Sprint 10 closed the gap.
+    await this.notifications.createForStaff({
+      actorId: currentUser.staffId,
+      type: 'holiday_added',
+      title: `${name} — ${date}`,
+      body: 'A holiday was added to the calendar',
+      data: { period, date, name, recordId: holiday.id },
+      recordId: holiday.id,
       trx,
     });
 
@@ -192,6 +217,16 @@ export class HolidayService {
       trx,
     });
 
+    await this.notifications.createForStaff({
+      actorId: currentUser.staffId,
+      type: 'holiday_removed',
+      title: `${holiday.name} — ${holiday.date}`,
+      body: 'A holiday was removed; that day is a working day again',
+      data: { period: holiday.period, date: holiday.date, name: holiday.name, recordId: holiday.id },
+      recordId: holiday.id,
+      trx,
+    });
+
     this.broadcast('attendance:holiday_removed', { period: holiday.period, date: holiday.date });
     return { removed: true };
   }
@@ -199,13 +234,14 @@ export class HolidayService {
   /**
    * Broadcast a grid-sync event to every connected client (org:all). Fire-and-
    * forget: a socket failure never rolls back the committed holiday change.
-   * Cross-user live refresh + bell notifications are wired in Sprint 10.
+   *
+   * Routed through the emit seam, so a holiday added inside a transaction that then
+   * rolls back broadcasts nothing. That matters more here than almost anywhere:
+   * ADR-022 makes this event invalidate-only precisely because the H-01 cascade
+   * flips every staff column for the date, and a spurious one would send every
+   * connected client refetching a change that never happened.
    */
   private broadcast(event: 'attendance:holiday_added' | 'attendance:holiday_removed', payload: Record<string, string>): void {
-    try {
-      getIo().of(NOTIFY_NAMESPACE).to(ORG_ROOM).emit(event, payload);
-    } catch (err) {
-      logger.warn({ err, event, payload }, 'holiday broadcast emit failed');
-    }
+    emitAfterCommit(NOTIFY_NAMESPACE, ORG_ROOM, event, payload);
   }
 }

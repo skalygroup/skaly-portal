@@ -13,11 +13,20 @@ const EnvSchema = z.object({
     .default('http://localhost:3000,https://portal.skaly.in')
     .transform((s) => s.split(',').map((o) => o.trim()).filter(Boolean)),
 
-  // Global IP-keyed request cap per minute (API-Contract §2 sets 150). Override
-  // only for load testing: a k6 run drives every request from one IP, so the
-  // NFR §1.2 p95 gate measures the limiter instead of the endpoint unless the
-  // cap is lifted for that run.
+  // Per-USER request cap per minute (API-Contract §2 sets 150). Re-based by
+  // ADR-024: this was an IP key, which behind a proxy meant the whole
+  // organisation shared one bucket. At ~5 REST calls per page load, 150 is now
+  // ~30 page loads per minute per person. Override only for load testing or the
+  // E2E suite, where every request comes from one identity.
   RATE_LIMIT_MAX: z.coerce.number().default(150),
+
+  // How many proxy hops in front of this app (Railway = 1). NEVER `true`:
+  // that trusts the client-supplied X-Forwarded-For, and since the
+  // unauthenticated rate-limit key is the IP, a caller could rotate the header
+  // per request and walk past login's brute-force guard. A hop count trusts
+  // only the address the proxy itself appends, which a client cannot forge.
+  // See ADR-024.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(1),
 
   DATABASE_URL: z.string().url(),
   DATABASE_POOL_MIN: z.coerce.number().default(2),

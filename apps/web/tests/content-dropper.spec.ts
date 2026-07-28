@@ -120,24 +120,50 @@ test.describe('content dropper — live smoke', () => {
     const row = page.getByTestId(`pipeline-row-${p.clientId}`);
     const fill = row.getByTestId('progress-fill');
 
+    /**
+     * Mark one stage and WAIT FOR THE SERVER, not just the optimistic paint.
+     *
+     * Each PATCH carries the row's `version`, and only onSuccess writes the returned
+     * row back into the cache — so the next stage cannot be sent until this one has
+     * answered. Asserting the filled cell in between is not enough: onMutate paints it
+     * immediately, so every assertion here passes while the request is still in
+     * flight. Clicking on that basis sent a stale version, the API replied 409, the
+     * optimistic write was reverted, and the run ended with only RAW marked and no
+     * toast — reported as "the Trigger-2 toast is missing", which is the one thing
+     * that was not actually broken.
+     */
+    const clientId = p.clientId;
+    const markStage = async (stage: 'raw' | 'finals' | 'posted') => {
+      const settled = page.waitForResponse(
+        (r) => r.request().method() === 'PATCH' && /\/content-dropper\/.+\/stage/.test(r.url()),
+      );
+      await page.getByTestId(`stage-${stage}-${clientId}-mark`).click();
+      expect((await settled).status()).toBe(200);
+    };
+
     // RAW → filled + status Editing + progress ~33%.
-    await page.getByTestId(`stage-raw-${p.clientId}-mark`).click();
+    await markStage('raw');
     await expect(page.getByTestId(`stage-raw-${p.clientId}-filled`)).toBeVisible();
     await expect(row.getByText('Editing')).toBeVisible();
     await expect(fill).toHaveAttribute('style', /width:\s*33/);
 
     // Finals → advances to ~66% + status Review.
-    await page.getByTestId(`stage-finals-${p.clientId}-mark`).click();
+    await markStage('finals');
     await expect(page.getByTestId(`stage-finals-${p.clientId}-filled`)).toBeVisible();
     await expect(row.getByText('Review')).toBeVisible();
     await expect(fill).toHaveAttribute('style', /width:\s*66/);
 
     // Posted → 100% + Posted chip + the Trigger-2 toast.
-    await page.getByTestId(`stage-posted-${p.clientId}-mark`).click();
+    await markStage('posted');
+    // The toast is asserted FIRST because it is the only assertion here with an
+    // expiry: sonner dismisses it after a few seconds, while the cell, the chip and
+    // the progress bar are permanent. Asserting it last meant three slower checks ran
+    // first and the toast had already gone — a pass that depended on the app being
+    // slow, which stopped being true once the suite served a production build.
+    await expect(page.getByText(/Content Calendar updated/i)).toBeVisible();
     await expect(page.getByTestId(`stage-posted-${p.clientId}-filled`)).toBeVisible();
     await expect(row.getByText('Posted')).toBeVisible();
     await expect(fill).toHaveAttribute('style', /width:\s*100%/);
-    await expect(page.getByText(/Content Calendar updated/i)).toBeVisible();
   });
 
   test('violation: Finals with no RAW shakes with no request; server 400s the direct skip', async ({ page }) => {

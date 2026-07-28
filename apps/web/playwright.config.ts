@@ -57,7 +57,20 @@ loadE2eEnv();
 export default defineConfig({
   testDir: './tests',
   testMatch: '**/*.spec.ts',
-  timeout: 30_000,
+  /**
+   * 60s, not Playwright's default 30s — because `login()` does not fit in 30s.
+   *
+   * The helper's own barriers add up: waitForURL past /login (15s) + the TOTP
+   * window step-over (up to 3.5s) + waitForURL past /mfa-challenge (15s) = 33.5s
+   * worst case for ONE admin sign-in. Any spec that signs in twice — search.spec
+   * §CMD+K, and every two-context real-time spec Sprint 10 adds — was over budget
+   * by construction, not flaky. It presented as a 30s timeout with the email field
+   * caught half-typed, which reads like broken auth and is not.
+   *
+   * Raised here rather than per-spec: the cost lives in the shared helper, so the
+   * budget belongs next to it. 60s still fails a genuine hang promptly.
+   */
+  timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
   /**
@@ -73,6 +86,9 @@ export default defineConfig({
    * got explained away as flakiness.
    */
   workers: 1,
+  // Refuses to start against an API with an unraised rate limit or a down
+  // dependency — see tests/global-setup.ts (audit A3).
+  globalSetup: require.resolve('./tests/global-setup'),
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: 'list',
@@ -80,13 +96,61 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
     trace: 'on-first-retry',
   },
-  // Boot the web app for the suite; reuse an already-running dev server locally.
-  webServer: {
-    command: 'pnpm dev',
-    url: 'http://localhost:3000/login',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  /**
+   * Boot BOTH servers, and serve the web app from a production build.
+   *
+   * Two separate bugs lived in the old single `pnpm dev` entry:
+   *
+   * 1. It never started the API. Every spec that touches data failed with an
+   *    unhelpful "Could not load …" until someone remembered to run the API by
+   *    hand — 33 failures on a clean machine, none of them about the product.
+   *
+   * 2. `next dev` compiles a route on its FIRST request, and a cold compile of a
+   *    heavy route runs past two seconds. Webkit abandons the navigation at that
+   *    point and falls back to the previous URL, which surfaces as
+   *    "Navigation to /settings/signup-requests is interrupted by another
+   *    navigation to /" — a message that reads like a broken redirect and sent
+   *    two separate investigations after login timing and app-side races.
+   *
+   *    It also made results depend on ORDER: the first spec to touch a route paid
+   *    the compile and failed, the next one found it warm and passed. That is why
+   *    signup-requests' approve test failed alone and passed inside the suite.
+   *
+   * `next start` serves a prebuilt app, so no route is ever compiled on demand.
+   * The build is worth its minute — it also takes the whole suite off the dev
+   * server's recompile-on-save behaviour, which is what made the slowest file
+   * take 40 minutes.
+   */
+  webServer: [
+    {
+      command: 'pnpm --filter @skaly/api dev',
+      url: 'http://localhost:3001/v1/health',
+      /**
+       * Lift the global rate limit for the suite only.
+       *
+       * The API allows RATE_LIMIT_MAX (default 150) requests per minute PER IP, and
+       * the whole suite — every role, both engines, both contexts of the two-context
+       * specs — arrives from one IP. Serving a production build made the app fast
+       * enough to cross that line, and the failures that followed named the wrong
+       * thing entirely: "Could not load your profile", a login timeout, a grid stuck
+       * on its error state. Nothing indicated a 429, so it read as a broken app.
+       * Confirmed directly: 150 × 200 then 429 on the nose.
+       *
+       * Raising it here removes no coverage. The 429 contract is asserted where it
+       * belongs — `apps/api/test/routes/bot.test.ts` uses that route's own 30/window
+       * bucket, which this does not touch.
+       */
+      env: { RATE_LIMIT_MAX: '100000' },
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+    {
+      command: 'pnpm build && pnpm start',
+      url: 'http://localhost:3000/login',
+      reuseExistingServer: !process.env.CI,
+      timeout: 300_000,
+    },
+  ],
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     // Sprint 7 close-out asks for webkit too. Install once: `playwright install webkit`.

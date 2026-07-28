@@ -262,7 +262,9 @@ describe('backfillClientPeriodRows — the carried Sprint 5/6 debt', () => {
     await db.transaction().execute((trx) => backfillClientPeriodRows(CLIENT_ID, PERIOD, trx));
 
     const written = await calendar.applyPostedTrigger(CLIENT_ID, POSTED_ON, db);
-    expect(written).toEqual({ clientId: CLIENT_ID, period: PERIOD, date: POSTED_ON });
+    // ADR-022 enrichment: the trigger returns the whole cell now.
+    expect(written).toMatchObject({ clientId: CLIENT_ID, period: PERIOD, date: POSTED_ON });
+    expect(typeof written!.version).toBe('number');
 
     const cell = await db
       .selectFrom('content_calendar')

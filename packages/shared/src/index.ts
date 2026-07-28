@@ -14,6 +14,13 @@ export {
   ATTACHMENT_MIME_ALLOWLIST,
 } from './constants/attachments';
 export type { AttachmentMime } from './constants/attachments';
+export {
+  NOTIFICATION_REGISTRY,
+  NOTIFICATION_TYPES,
+  SPRINT_10_DEFERRED_TYPES,
+  isNotificationType,
+} from './constants/notifications';
+export type { NotificationType, NotificationTypeSpec, NotificationSeverity } from './constants/notifications';
 
 // Work Allocation (tasks) request schemas — shared by API validation + web forms.
 export {
@@ -88,3 +95,35 @@ export {
   CellUpdateSchema,
 } from './schemas/content-calendar';
 export type { CalendarStatus, CalendarQuery, CellUpdateBody } from './schemas/content-calendar';
+
+// Notification wire schemas (07-API-CONTRACT §Notifications).
+export {
+  NOTIFICATION_PAGE_LIMIT,
+  NotificationSchema,
+  NotificationTypeSchema,
+  NotificationListQuerySchema,
+  NotificationListResponseSchema,
+  MarkReadResponseSchema,
+  MarkAllReadResponseSchema,
+} from './schemas/notifications';
+export type {
+  NotificationDTO,
+  NotificationListResponse,
+  NotificationListQuery,
+} from './schemas/notifications';
+
+// Chat wire schemas (07-API-CONTRACT /v1/chat/*).
+export {
+  CHAT_MESSAGE_MAX,
+  CHAT_PAGE_LIMIT,
+  ChatMentionSchema,
+  ChatMessageSchema,
+  ChatSendSchema,
+  ChatListQuerySchema,
+  ChatListResponseSchema,
+  ChatThreadResponseSchema,
+  ChatSearchQuerySchema,
+  ChatDeleteResponseSchema,
+  ChatSendResponseSchema,
+} from './schemas/chat';
+export type { ChatMessageDTOWire, ChatListResponse, ChatSendBody } from './schemas/chat';

@@ -1,15 +1,30 @@
 {
+  "//": [
+    "The CHECKING config — what `pnpm typecheck` and the editor use. It sees src,",
+    "test and scripts, and emits nothing.",
+    "",
+    "It used to be `include: [\"src/**/*.ts\"]` on the config that ALSO emitted, so",
+    "`pnpm typecheck` reported success without ever reading a test file. Sprint 10",
+    "STEP 2 added a required field to HandleMessageArgs and broke 33 call sites under",
+    "test/ while the gate stayed green; they surfaced only under vitest, at runtime.",
+    "A gate that passes while broken is worse than no gate.",
+    "",
+    "The emitting config is tsconfig.build.json, deliberately separate. Widening the",
+    "include HERE while this config still emitted would break the deploy rather than",
+    "CI: TypeScript infers the common source root from the file set, so dist/server.js",
+    "would silently become dist/src/server.js and package.json's `node dist/server.js`",
+    "(Railway's start command) would fail on deploy."
+  ],
   "extends": "../../packages/config/tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2022"],
     "types": ["node"],
     "moduleResolution": "NodeNext",
     "module": "NodeNext",
-    "outDir": "dist",
-    "rootDir": "src",
     "resolveJsonModule": true,
-    "declaration": false
+    "declaration": false,
+    "noEmit": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "scripts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

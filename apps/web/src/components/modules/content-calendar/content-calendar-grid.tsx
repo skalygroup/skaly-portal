@@ -27,6 +27,7 @@ import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
+import { useRealtimeQuery } from '@/lib/hooks/use-realtime-query';
 import { handleMutationError } from '@/lib/mutation-errors';
 
 const mono = { fontFamily: 'var(--font-mono)' } as const;
@@ -189,13 +190,14 @@ const CalendarCellView = memo(function CalendarCellView({
  * absolutely-positioned virtual track, so the two can never drift out of
  * alignment the way two synchronised scrollers would.
  *
- * Real-time stays emit-only this sprint (ADR-010): the backend broadcasts
- * content-calendar:updated, but there is no socket client yet. Own-mutation
- * refresh is the TanStack Query cache replace in onSuccess.
- *
- * TODO(Sprint 10): subscribe to content-calendar:updated on /ws/notify →
- * invalidateQueries(['content-calendar', payload.period]).
+ * Real-time is LIVE (ADR-022). content-calendar:updated is the matrix's flagship
+ * PATCH: the payload is a whole cell including its new `version`, so 50 people on
+ * this grid see one edit without 50 refetches. Own-mutation refresh is still the
+ * TanStack cache replace in onSuccess — the actor's own echo is excluded, so the two
+ * never fight.
  */
+const CALENDAR_EVENTS = ['content-calendar:updated', 'client:name_updated'] as const;
+
 export function ContentCalendarGrid() {
   const { period } = useMonthContext();
   const queryClient = useQueryClient();
@@ -212,11 +214,13 @@ export function ContentCalendarGrid() {
   // columns cull identically with a ref and with a state-backed callback ref.
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const { data, isPending, isError, error, refetch } = useQuery({
-    queryKey: gridKey,
-    queryFn: async () =>
-      (await api<{ data: CalendarGridResponse }>(`/v1/content-calendar?period=${period}`)).data,
-    staleTime: 30_000,
+  // `me` is resolved BEFORE the grid query: the reducer below needs `me.id` for
+  // sender exclusion, and a reducer built from an undefined id would let the actor
+  // apply their own echo on the first render after login.
+  const { data: me } = useQuery({
+    queryKey: ['staff-me'],
+    queryFn: async () => api<StaffMeResponse>('/v1/staff/me'),
+    staleTime: 5 * 60_000,
   });
 
   const { data: months } = useQuery({
@@ -226,14 +230,61 @@ export function ContentCalendarGrid() {
   });
   const month = months?.find((m) => m.period === period);
   const locked = month?.locked ?? false;
-
-  const { data: me } = useQuery({
-    queryKey: ['staff-me'],
-    queryFn: async () => api<StaffMeResponse>('/v1/staff/me'),
-    staleTime: 5 * 60_000,
-  });
   const canEdit = (me?.role === 'admin' || me?.role === 'manager') && !locked;
   const readOnlyRole = me?.role === 'team_member';
+
+  /**
+   * ADR-025: the reducer below replaces this grid's `useRealtimeSync` call.
+   *
+   * The patch bodies are MOVED from the SYNC_MATRIX rows, not rewritten, so
+   * ADR-022's behaviour carries over unchanged — including sender exclusion, which
+   * now lives inside the reducer rather than beside it.
+   */
+  const applyEvent = useCallback(
+    (prev: CalendarGridResponse, e: { name: string; payload: unknown }) => {
+      const payload = e.payload as { actorStaffId?: string } & Record<string, unknown>;
+
+      // SENDER EXCLUSION, client half (ADR-022 rule b). The server uses
+      // socket.broadcast for socket-originated events, but a REST-originated one has
+      // no originating socket to exclude, so the actor receives their own echo.
+      // Applying it would double-apply the optimistic update the actor already made,
+      // or fight a mutation still in flight.
+      if (me?.id && payload.actorStaffId === me.id) return prev;
+
+      if (e.name === 'content-calendar:updated') {
+        const cell = payload as unknown as CalendarCell;
+        const i = prev.cells.findIndex((c) => c.id === cell.id);
+        if (i === -1) return prev;
+        const next = prev.cells.slice();
+        // ⚠️ The WHOLE cell, version included. Writing the fields and forgetting
+        // `version` leaves the cache holding the OLD one, and the receiver's next
+        // edit 409s against a value the server already moved past — which presents
+        // as a backend bug and is not one (ADR-022 rule a).
+        next[i] = { ...next[i], ...cell };
+        return { ...prev, cells: next };
+      }
+
+      if (e.name === 'client:name_updated') {
+        const { clientId, name } = payload as unknown as { clientId: string; name: string };
+        return {
+          ...prev,
+          clients: prev.clients.map((c) => (c.id === clientId ? { ...c, name } : c)),
+        };
+      }
+
+      return prev;
+    },
+    [me?.id],
+  );
+
+  const { data, isPending, isError, error, refetch } = useRealtimeQuery<CalendarGridResponse>({
+    queryKey: gridKey,
+    queryFn: async () =>
+      (await api<{ data: CalendarGridResponse }>(`/v1/content-calendar?period=${period}`)).data,
+    staleTime: 30_000,
+    events: CALENDAR_EVENTS,
+    applyEvent,
+  });
 
   const days = useMemo(() => daysInPeriod(period), [period]);
   const clients = useMemo(() => data?.clients ?? [], [data]);

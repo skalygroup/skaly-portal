@@ -197,8 +197,8 @@ describe('Trigger 2 — pipeline:posted → content_calendar via the real EventB
       const c = await readCell(cellId);
       return c.status === 'Posted' ? c : null;
     });
-    expect(cell.status).toBe('Posted');
-    expect(cell.source).toBe('pipeline_trigger');
+    expect(cell!.status).toBe('Posted');
+    expect(cell!.source).toBe('pipeline_trigger');
   });
 
   test('CORRECTION 1 (null-safety): the cell’s source starts NULL and IS written', async () => {
@@ -225,11 +225,19 @@ describe('Trigger 2 — pipeline:posted → content_calendar via the real EventB
 
     await waitFor(async () => ((await readCell(cellId)).status === 'Posted' ? true : null));
     // Using the event's `period` would have looked in 2097-03 and matched nothing.
-    expect(broadcasts.find((b) => b.event === 'content-calendar:updated')?.payload).toEqual({
-      clientId: CLIENT_ID,
-      period: CURRENT_PERIOD,
-      date: TODAY,
-    });
+    const payload = broadcasts.find((b) => b.event === 'content-calendar:updated')?.payload as
+      | Record<string, unknown>
+      | undefined;
+    expect(payload).toMatchObject({ clientId: CLIENT_ID, period: CURRENT_PERIOD, date: TODAY });
+
+    // ADR-022: this event is PATCHABLE, so the payload must be the complete new cell
+    // state — a {clientId, period, date} locator tells a client which cell changed and
+    // nothing about what it changed to, which makes it invalidate-only by definition
+    // (rule a). `version` in particular is load-bearing: patching without it leaves the
+    // receiver's cache stale and their next edit 409s spuriously.
+    expect(payload).toMatchObject({ status: 'Posted', source: 'pipeline_trigger' });
+    expect(typeof payload!.version).toBe('number');
+    expect(payload).toHaveProperty('id');
   });
 
   test('CORRECTION 3 (missing cell): the listener no-ops, creates nothing, and the pipeline write still succeeded', async () => {
@@ -295,9 +303,13 @@ describe('API-Contract §6 org broadcasts', () => {
     await dropper.updateStage(pipeline.id, 'posted', manager, pipeline.version, db);
     await settle();
 
+    // actorStaffId is required, not incidental: a REST write has no originating
+    // socket for the server to exclude, so it is the ONLY sender-exclusion guard
+    // this event gets (ADR-022 rule b).
     expect(broadcasts.find((b) => b.event === 'content-dropper:updated')?.payload).toEqual({
       clientId: CLIENT_ID,
       period: PIPELINE_PERIOD,
+      actorStaffId: manager.staffId,
     });
   });
 
@@ -307,6 +319,7 @@ describe('API-Contract §6 org broadcasts', () => {
     expect(broadcasts.find((b) => b.event === 'client:name_updated')?.payload).toEqual({
       clientId: CLIENT_ID,
       name: 'Trigger2 Client Renamed',
+      actorStaffId: manager.staffId,
     });
 
     await clients.rename(CLIENT_ID, 'Trigger2 Client', manager, db); // restore

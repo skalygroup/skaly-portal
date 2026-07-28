@@ -81,7 +81,7 @@ async function attByDate(staffId: string, period: string, date: string) {
     .select(['day_type', 'version'])
     .where('staff_id', '=', staffId)
     .where('period', '=', period)
-    .where('date', '=', date as unknown as Date)
+    .where('date', '=', date)
     .executeTakeFirst();
 }
 

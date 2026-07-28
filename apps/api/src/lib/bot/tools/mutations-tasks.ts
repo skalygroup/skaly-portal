@@ -17,6 +17,7 @@
 import { z } from 'zod';
 
 import { defineMutationTool } from './types.js';
+import { transactionWithEmits } from '../../../lib/emit-after-commit.js';
 import { AppError } from '../../../lib/errors.js';
 import { ClientService } from '../../../services/ClientService.js';
 import { TaskService } from '../../../services/TaskService.js';
@@ -77,9 +78,7 @@ export const updateTaskStatusTool = defineMutationTool({
     changes: [{ field: 'Status', from: (s) => s.status, to: (i) => i.status }],
   },
   async handler(input, currentUser, db) {
-    const result = await db
-      .transaction()
-      .execute((trx) => tasks.update(input.taskId, { status: input.status }, currentUser, trx));
+    const result = await transactionWithEmits(db, (trx) => tasks.update(input.taskId, { status: input.status }, currentUser, trx));
     return { text: `Task status is now ${result.status}.`, card: { type: 'mutation_result' }, link: taskLink(result) };
   },
 });
@@ -108,9 +107,7 @@ export const setDeadlineTool = defineMutationTool({
     changes: [{ field: 'Deadline', from: (s) => s.deadline, to: (i) => i.deadline }],
   },
   async handler(input, currentUser, db) {
-    const result = await db
-      .transaction()
-      .execute((trx) => tasks.update(input.taskId, { deadline: input.deadline }, currentUser, trx));
+    const result = await transactionWithEmits(db, (trx) => tasks.update(input.taskId, { deadline: input.deadline }, currentUser, trx));
     return { text: `Deadline set to ${input.deadline}.`, card: { type: 'mutation_result' }, link: taskLink(result) };
   },
 });
@@ -176,9 +173,7 @@ export const assignTaskTool = defineMutationTool({
     changes: [{ field: 'Assignees', from: (s) => s.current, to: (_i, s) => s.added }],
   },
   async handler(input, currentUser, db) {
-    const result = await db
-      .transaction()
-      .execute((trx) => tasks.assign(input.taskId, input.staffIds, currentUser, trx));
+    const result = await transactionWithEmits(db, (trx) => tasks.assign(input.taskId, input.staffIds, currentUser, trx));
     const names = result.assignees.map((a) => a.name).join(', ') || 'nobody';
     return { text: `Task is now assigned to ${names}.`, card: { type: 'mutation_result' }, link: taskLink(result) };
   },
@@ -243,7 +238,7 @@ export const createTaskTool = defineMutationTool({
     ],
   },
   async handler(input, currentUser, db) {
-    const result = await db.transaction().execute((trx) =>
+    const result = await transactionWithEmits(db, (trx) =>
       tasks.create(
         {
           description: input.description,

@@ -6,7 +6,7 @@ import {
   hasZodFastifySchemaValidationErrors,
 } from 'fastify-type-provider-zod';
 import { Redis } from 'ioredis';
-import { Kysely, PostgresDialect } from 'kysely';
+import { Kysely, PostgresDialect, sql } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, afterEach, describe, expect, test, vi } from 'vitest';
 
@@ -76,7 +76,28 @@ function authUser(over: Partial<AuthUser> = {}): AuthUser {
 }
 
 async function cleanup(): Promise<void> {
-  await db.deleteFrom('messages').where('sender_id', '=', STAFF_ID).execute();
+  // The conversation, not "rows carrying my id" — ADR-021 gives bot replies a NULL
+  // sender_id and a parent_id, so a sender_id-only delete strands them behind the FK.
+  //
+  // Retried, because the route fires handleMessage as fire-and-forget (deliberately —
+  // the 202 must not wait for the model). A reply can therefore land between the
+  // subquery's snapshot and the delete, leaving a child pointing at a row we just
+  // removed. The race predates ADR-021; the FK is only what made it visible. Two
+  // passes settle it: the stragglers from one request cannot outlive the next pass.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await sql`
+        DELETE FROM messages
+        WHERE sender_id = ${STAFF_ID}
+           OR parent_id IN (SELECT id FROM messages WHERE sender_id = ${STAFF_ID})
+      `.execute(db);
+      break;
+    } catch (err) {
+      if (attempt >= 3) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  await db.deleteFrom('bot_sessions').where('staff_id', '=', STAFF_ID).execute();
   await redis.del(`bot:session:${STAFF_ID}`);
 }
 

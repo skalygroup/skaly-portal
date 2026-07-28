@@ -113,6 +113,9 @@ async function cleanup(): Promise<void> {
   await db.deleteFrom('notifications').where('staff_id', 'in', [ADMIN, MEMBER, OTHER, THIRD]).execute();
   await db.deleteFrom('tasks').where('period', 'in', [PERIOD, LOCKED_PERIOD]).execute();
   await db.deleteFrom('audit_log').where('staff_id', 'in', [ADMIN, MEMBER, OTHER, THIRD]).execute();
+  // Holiday mutations now write notification rows for every active staff member
+  // (Sprint 10, ADR-020); those FK staff and block its deletion.
+  await db.deleteFrom('notifications').where('staff_id', 'in', [ADMIN, MEMBER, OTHER, THIRD]).execute();
   await db.deleteFrom('attendance_logs').where('period', 'in', [PERIOD, LOCKED_PERIOD]).execute();
   await db.deleteFrom('holidays').where('period', 'in', [PERIOD, LOCKED_PERIOD]).execute();
   await db.deleteFrom('content_calendar').where('period', 'in', [PERIOD, LOCKED_PERIOD]).execute();

@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page } from '@playwright/test';
+import { expect, type APIRequestContext, type BrowserContext, type Locator, type Page } from '@playwright/test';
 
 import { totp } from './totp';
 
@@ -122,4 +122,71 @@ export async function captureApiToken(
 /** Assert the caller is authenticated enough to have left the login page. */
 export async function expectSignedIn(page: Page): Promise<void> {
   await expect(page).not.toHaveURL(/\/login/);
+}
+
+/**
+ * The access token the signed-in browser is actually using.
+ *
+ * READ FROM THE COOKIE, not localStorage. This app uses @supabase/ssr, which stores
+ * the session in a cookie so Server Components can read it — so the localStorage
+ * lookup every Supabase example shows returns nothing here, the request goes out
+ * unauthenticated, and the API answers 401. Four Sprint 10 E2E tests silently
+ * SKIPPED on that before it was tracked down, which is worse than failing.
+ *
+ * The cookie is `sb-<project-ref>-auth-token`, holding `base64-<base64 of the session
+ * JSON>`. Supabase chunks it across `.0`, `.1`, … once it exceeds the 4KB cookie
+ * limit, so the chunks are re-joined in index order before decoding.
+ */
+export async function accessToken(context: BrowserContext): Promise<string> {
+  const cookies = await context.cookies();
+  const parts = cookies
+    .filter((c) => /^sb-.*-auth-token(\.\d+)?$/.test(c.name))
+    .sort((a, b) => {
+      const idx = (n: string) => Number(n.split('.').pop() ?? 0) || 0;
+      return idx(a.name) - idx(b.name);
+    });
+  if (parts.length === 0) return '';
+
+  const raw = parts.map((c) => c.value).join('');
+  const payload = raw.startsWith('base64-') ? raw.slice('base64-'.length) : raw;
+  try {
+    const json = Buffer.from(decodeURIComponent(payload), 'base64').toString('utf8');
+    return (JSON.parse(json) as { access_token?: string }).access_token ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Create a holiday on the first day of `period` that actually accepts one.
+ *
+ * This helper was written around a product bug — UNIQUE (period, date) covered
+ * soft-removed rows, so every run permanently burned a date and the POST answered a
+ * raw 500. Migration 030 fixed that properly (partial index on active rows), so a
+ * removed date is reusable now.
+ *
+ * The loop still earns its place: seed data and a concurrently-running engine can
+ * legitimately hold a date with an ACTIVE holiday, which is a real 409. Trying
+ * candidates keeps the suite self-healing instead of failing on a date collision
+ * that says nothing about the feature under test.
+ */
+export async function createHolidayOnFreeDate(
+  request: APIRequestContext,
+  apiBase: string,
+  token: string,
+  period: string,
+  name: string,
+): Promise<{ id: string; date: string } | null> {
+  for (const day of [20, 21, 22, 23, 24, 25, 26, 27, 28]) {
+    const date = `${period}-${String(day).padStart(2, '0')}`;
+    const res = await request.post(`${apiBase}/v1/holidays`, {
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      data: { period, date, name },
+    });
+    if (res.ok()) {
+      const body = (await res.json()) as { data?: { id?: string } };
+      if (body.data?.id) return { id: body.data.id, date };
+    }
+  }
+  return null;
 }

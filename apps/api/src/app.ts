@@ -17,6 +17,7 @@ import {
 } from 'fastify-type-provider-zod';
 
 import { registerEventListeners } from './events/listeners.js';
+import { verifySupabaseToken } from './lib/auth-verify.js';
 import { pool, db } from './lib/db.js';
 import { env } from './lib/env.js';
 import { AppError } from './lib/errors.js';
@@ -28,12 +29,14 @@ import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import attendanceRoutes from './routes/attendance/index.js';
 import authRoutes from './routes/auth/index.js';
 import botRoutes from './routes/bot/index.js';
+import chatRoutes from './routes/chat/index.js';
 import clientsRoutes from './routes/clients/index.js';
 import contentCalendarRoutes from './routes/content-calendar/index.js';
 import contentDropperRoutes from './routes/content-dropper/index.js';
 import { healthRoutes } from './routes/health.js';
 import holidaysRoutes from './routes/holidays/index.js';
 import monthsRoutes from './routes/months/index.js';
+import notificationsRoutes from './routes/notifications/index.js';
 import searchRoutes from './routes/search/index.js';
 import settingsRoutes from './routes/settings/index.js';
 import shootPlannerRoutes from './routes/shoot-planner/index.js';
@@ -58,7 +61,21 @@ import tasksRoutes from './routes/tasks/index.js';
 export async function buildApp(
   opts: FastifyServerOptions = { loggerInstance: logger },
 ): Promise<FastifyInstance> {
-  const app = Fastify(opts);
+  /**
+   * `trustProxy` is a HOP COUNT, never `true` (ADR-024).
+   *
+   * Without it, `request.ip` behind Railway's proxy is the PROXY's address, so
+   * the IP-keyed rate limiter put the entire organisation in one bucket — audit
+   * A1, the deploy blocker.
+   *
+   * `true` is the tempting fix and is a security downgrade: it trusts every
+   * entry in `X-Forwarded-For`, including the leftmost one the CLIENT supplies.
+   * Since the unauthenticated rate-limit key is the IP and login's brute-force
+   * guard is 10/15min, `true` would let an attacker rotate a header per request
+   * and bypass login rate limiting entirely. A hop count trusts only the address
+   * the proxy appends.
+   */
+  const app = Fastify({ trustProxy: env.TRUST_PROXY_HOPS, ...opts });
 
   // Zod type provider
   app.setValidatorCompiler(validatorCompiler);
@@ -154,14 +171,54 @@ export async function buildApp(
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
-  // Global IP-keyed cap per 07-API-CONTRACT.md §2 (150 req/min). Per-route
-  // buckets (login by email, invite by staffId, …) are attached on their own
-  // routes via `config.rateLimit`. addHeaders keeps M-06 satisfied: every
-  // response advertises the client's remaining budget, and 429s carry
-  // Retry-After.
+  /**
+   * Identify the caller BEFORE the rate limiter keys the request (ADR-024).
+   *
+   * ⚠️ THE ORDERING TRAP. `verifyJwt` is a route-level `preHandler` — routes opt
+   * in individually — and Fastify runs GLOBAL preHandler hooks before route-level
+   * ones. So a limiter registered at `hook: 'preHandler'` still sees
+   * `request.user === undefined` and its key silently degrades to the IP. The
+   * config would read as fixed while nothing changed, which is exactly the class
+   * of failure audit A3 exists to catch.
+   *
+   * This hook is global and registered BEFORE the limiter, so it runs first.
+   * `verifySupabaseToken` is Redis-cached, so on the hot path this is a cache
+   * read, not a second verification.
+   *
+   * Failures are deliberately silent: this hook only decides a rate-limit BUCKET.
+   * The route's own `verifyJwt` remains the authoritative gate and produces the
+   * real 401 — an unauthenticated caller simply falls through to the IP key.
+   */
+  app.addHook('preHandler', async (request) => {
+    const header = request.headers.authorization;
+    if (!header?.startsWith('Bearer ')) return;
+    try {
+      request.user = await verifySupabaseToken(header.slice('Bearer '.length).trim());
+    } catch {
+      // Not our decision to make here — verifyJwt will reject it properly.
+    }
+  });
+
+  /**
+   * Per-USER cap per 07-API-CONTRACT.md §2 (150 req/min), keyed per ADR-024.
+   *
+   * Was `@fastify/rate-limit`'s default IP key, which behind a proxy meant one
+   * bucket for the whole organisation (audit A1). AUTH-MATRIX §3 already solved
+   * this shape for `/auth/login` with an `email + IP` key and explained why —
+   * "prevents a shared office IP from blocking all staff at 9am". This
+   * generalises that design rather than inventing one.
+   *
+   * Per-route buckets (login by email, invite by staffId, …) are attached on
+   * their own routes via `config.rateLimit` and are untouched. addHeaders keeps
+   * M-06 satisfied: every response advertises the remaining budget, and 429s
+   * carry Retry-After.
+   */
   await app.register(rateLimit, {
     max: env.RATE_LIMIT_MAX,
     timeWindow: '1 minute',
+    hook: 'preHandler', // after the identify hook above, never the default onRequest
+    // `ip:` namespaces the fallback so an address can never collide with a staff id.
+    keyGenerator: (request) => request.user?.id ?? `ip:${request.ip}`,
     addHeaders: {
       'x-ratelimit-limit': true,
       'x-ratelimit-remaining': true,
@@ -214,6 +271,8 @@ export async function buildApp(
   await app.register(contentDropperRoutes, { prefix: '/v1' });
   await app.register(contentCalendarRoutes, { prefix: '/v1' });
   await app.register(settingsRoutes, { prefix: '/v1' });
+  await app.register(notificationsRoutes, { prefix: '/v1' });
+  await app.register(chatRoutes, { prefix: '/v1' });
 
   return app;
 }

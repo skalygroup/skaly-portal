@@ -28,6 +28,7 @@ import { sql, type Kysely, type Updateable } from 'kysely';
 
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, currentIstDate, optimisticUpdate, type Executor } from './BaseService.js';
+import { transactionWithEmits } from '../lib/emit-after-commit.js';
 import { AppError } from '../lib/errors.js';
 import { eventBus } from '../lib/EventBus.js';
 import { broadcastToOrg } from '../sockets/index.js';
@@ -186,7 +187,7 @@ export class ContentDropperService {
     this.assertAdminOrManager(currentUser);
     const column = STAGE_COLUMN[stage];
 
-    const { clientId, period } = await db.transaction().execute(async (trx) => {
+    const { clientId, period } = await transactionWithEmits(db, async (trx) => {
       const row = await trx
         .selectFrom('content_pipelines')
         .select(['id', 'period', 'client_id', 'raw_received_at', 'finals_ready_at', 'posted_at'])
@@ -242,7 +243,7 @@ export class ContentDropperService {
     }
 
     // API-Contract §6. Forward-wiring for Sprint 10 — no consumer yet (ADR-010).
-    broadcastToOrg('content-dropper:updated', { clientId, period });
+    broadcastToOrg('content-dropper:updated', { clientId, period, actorStaffId: currentUser.staffId });
 
     return this.getRow(id, db);
   }
@@ -257,7 +258,7 @@ export class ContentDropperService {
    * Owns its own short transaction (the event handler has none).
    */
   async recomputeComingShootDate(clientId: string, period: string, db: Kysely<DB>): Promise<void> {
-    await db.transaction().execute(async (trx) => {
+    await transactionWithEmits(db, async (trx) => {
       // nextDate = MIN(slot_date) over confirmed, still-upcoming slots; NULL if none.
       const agg = await trx
         .selectFrom('shoot_schedules')

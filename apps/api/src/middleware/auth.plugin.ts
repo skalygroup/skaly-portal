@@ -66,9 +66,15 @@ async function authPlugin(fastify: FastifyInstance) {
     const token = header.slice('Bearer '.length).trim();
 
     // b–d. Verify signature + resolve staff (shared with the socket handshake).
+    //
+    // app.ts runs a global preHandler that resolves the same token first, so the
+    // rate limiter can key per user (ADR-024). When it succeeded, reuse its
+    // result rather than verifying twice — the deactivation check below still
+    // runs, so this skips work, not a gate. When it failed it left `user` unset
+    // and we verify here, which is what produces the real 401.
     let staff: AuthUser;
     try {
-      staff = await verifySupabaseToken(token);
+      staff = request.user ?? (await verifySupabaseToken(token));
     } catch (err) {
       if (err instanceof TokenVerificationError) {
         // INVALID_TOKEN (bad signature / no sub) or NO_STAFF_ROW.
