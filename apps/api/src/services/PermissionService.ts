@@ -23,7 +23,7 @@
 import { ROLE_DEFAULTS } from '@skaly/shared';
 
 import { AuditService } from './AuditService.js';
-import { transactionWithEmits } from '../lib/emit-after-commit.js';
+import { emitAfterCommit, transactionWithEmits } from '../lib/emit-after-commit.js';
 import { logger } from '../lib/logger.js';
 
 
@@ -83,6 +83,8 @@ export function isPermissionKey(key: string): boolean {
 
 /** perms:{staffId} — the per-staff override set, JSON array of { permissionKey, value }. */
 const permsKey = (staffId: string): string => `perms:${staffId}`;
+/** Same namespace the bell uses — one socket connection per client, not two. */
+const NOTIFY_NAMESPACE = '/ws/notify';
 /** AUTH-MATRIX §6.3: 5-minute TTL. An override write busts the key so a change
  *  takes effect immediately and a stale grant can never outlive the window. */
 const PERMS_TTL_SECONDS = 5 * 60;
@@ -95,7 +97,8 @@ interface OverrideEntry {
 export interface PermissionOverride {
   staffId: string;
   permissionKey: string;
-  value: boolean;
+  /** null = inherit — no row, so ROLE_DEFAULTS applies (AUTH-MATRIX §6.1). */
+  value: boolean | null;
 }
 
 export class PermissionService {
@@ -203,51 +206,97 @@ export class PermissionService {
   }
 
   /**
-   * Admin override write: upsert user_permissions + audit in one transaction,
-   * then DEL perms:{staffId} so the next resolve re-reads. The cache-bust always
-   * accompanies the write — that is the whole point of the endpoint.
+   * THE admin override write — all three states through one seam (AUTH-MATRIX §6.1).
+   *
+   *   value === true   → ALLOW  (row with value = true)
+   *   value === false  → DENY   (row with value = false)
+   *   value === null   → INHERIT (row DELETED, so the role default applies again)
+   *
+   * Inherit has to be a delete, not a third column value: §6.1's precedence rule is
+   * "no row found → fall through to role default", so any row at all is an override.
+   * A UI that can only write true/false can never restore inheritance — once an
+   * admin sets Deny on something the role grants, the role default becomes
+   * unreachable forever.
+   *
+   * ONE seam, because the four steps are one operation: write, audit, bust
+   * `perms:{staffId}`, emit `permission_changed`. Split across call sites, the
+   * inherit path is exactly the one that would quietly lose the bust or the emit —
+   * it is the path nobody remembers to wire.
+   *
+   * The BUST is the enforcement boundary (§6.3): the key is deleted, so the user's
+   * next request re-resolves from the database. The EMIT is UX only (ADR-029) — if
+   * it is dropped the user stays visually stale until their next request, which
+   * then corrects them. Fail-safe by construction.
    */
   async setOverride(
     staffId: string,
     permissionKey: string,
-    value: boolean,
+    value: boolean | null,
     actorId: string,
     db: Kysely<DB>,
   ): Promise<PermissionOverride> {
     const audit = new AuditService();
-    const updated = await transactionWithEmits(db, async (trx) => {
-        const existing = await trx
-          .selectFrom('user_permissions')
-          .select(['id', 'value'])
-          .where('staff_id', '=', staffId)
-          .where('permission_key', '=', permissionKey)
-          .executeTakeFirst();
 
-        const row = await trx
-          .insertInto('user_permissions')
-          .values({ staff_id: staffId, permission_key: permissionKey, value, set_by: actorId })
-          .onConflict((oc) =>
-            oc.columns(['staff_id', 'permission_key']).doUpdateSet({ value, set_by: actorId }),
-          )
-          .returning(['id', 'staff_id', 'permission_key', 'value'])
-          .executeTakeFirstOrThrow();
+    await transactionWithEmits(db, async (trx) => {
+      const existing = await trx
+        .selectFrom('user_permissions')
+        .select(['id', 'value'])
+        .where('staff_id', '=', staffId)
+        .where('permission_key', '=', permissionKey)
+        .executeTakeFirst();
 
-        await audit.log({
-          actorId,
-          actorSource: 'user',
-          entity: 'user_permissions',
-          entityId: row.id,
-          action: existing ? 'UPDATE' : 'INSERT',
-          before: existing ? { value: existing.value } : null,
-          after: { value },
-          trx,
-        });
+      if (value === null) {
+        // Inherit. Deleting nothing is not an error — the state the caller asked
+        // for is the state we are already in.
+        if (existing) {
+          await trx.deleteFrom('user_permissions').where('id', '=', existing.id).execute();
+          await audit.log({
+            actorId,
+            actorSource: 'user',
+            entity: 'user_permissions',
+            entityId: existing.id,
+            action: 'DELETE',
+            before: { permissionKey, value: existing.value },
+            after: { permissionKey, value: null, resolvesTo: 'role default' },
+            trx,
+          });
+        }
+        return;
+      }
 
-        return row;
+      const row = await trx
+        .insertInto('user_permissions')
+        .values({ staff_id: staffId, permission_key: permissionKey, value, set_by: actorId })
+        .onConflict((oc) =>
+          oc.columns(['staff_id', 'permission_key']).doUpdateSet({ value, set_by: actorId }),
+        )
+        .returning(['id', 'staff_id', 'permission_key', 'value'])
+        .executeTakeFirstOrThrow();
+
+      await audit.log({
+        actorId,
+        actorSource: 'user',
+        entity: 'user_permissions',
+        entityId: row.id,
+        action: existing ? 'UPDATE' : 'INSERT',
+        before: existing ? { permissionKey, value: existing.value } : null,
+        after: { permissionKey, value },
+        trx,
       });
+    });
 
     await this.bustCache(staffId);
-    return { staffId: updated.staff_id, permissionKey: updated.permission_key, value: updated.value };
+
+    // ADR-029. Payload-free by design: the effective set is the resolver's answer,
+    // and the resolver lives here on the server (Sprint 8.1 — one resolver, not
+    // two). ADR-022's matrix calls this an INVALIDATE, so the client refetches
+    // /v1/staff/me rather than patching a set it would have to re-derive itself.
+    emitAfterCommit(NOTIFY_NAMESPACE, `user:${staffId}`, 'permission_changed', {
+      staffId,
+      permissionKey,
+    });
+
+    return { staffId, permissionKey, value };
   }
 
   /** Build the full override array from user_permissions and cache it (5-min TTL).

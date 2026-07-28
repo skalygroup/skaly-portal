@@ -396,16 +396,20 @@ describe('the dedup guard lives in the service, so every future type inherits it
   });
 });
 
-describe('account_reactivated — NOT built, and why', () => {
-  test('no staff reactivate path exists, so the producer is Sprint 11 work', async () => {
-    // ADR-020 forbids inventing an emitter to satisfy a coverage test. StaffService
-    // is read-only and there is no deactivate/reactivate anywhere, so this type's
-    // producer arrives with Settings → Staff. Asserted so the gap is recorded rather
-    // than quietly forgotten.
-    const staffService = await import('../../src/services/StaffService.js');
-    const methods = Object.getOwnPropertyNames(staffService.StaffService.prototype).filter(
-      (m) => m !== 'constructor',
-    );
-    expect(methods.sort()).toEqual(['getFullProfile', 'getPublicProfile', 'listLimited']);
+describe('account_reactivated — built in Sprint 11 (ADR-026)', () => {
+  test('the staff lifecycle pair exists, and reinstate is what fires the notification', async () => {
+    // Sprint 10 recorded this as a genuine deferral: StaffService was read-only and
+    // there was no staff deactivate OR reactivate anywhere, so ADR-020 forbade
+    // inventing an emitter to make the coverage number look better. Sprint 11 built
+    // the path, so the assertion inverts rather than being deleted.
+    //
+    // Both live on AuthService, not StaffService: deactivate needs the Supabase
+    // admin client and the staff_lookup cache eviction, both of which AuthService
+    // already holds — and splitting a lifecycle pair across two services to satisfy
+    // a name is how the undo ends up missing a step the destroy has.
+    const { AuthService } = await import('../../src/services/AuthService.js');
+    const methods = Object.getOwnPropertyNames(AuthService.prototype);
+    expect(methods).toContain('deactivateStaff');
+    expect(methods).toContain('reactivateStaff');
   });
 });

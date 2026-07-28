@@ -35,6 +35,23 @@ export interface StaffFullProfile {
   createdAt: string;
 }
 
+/**
+ * GET /v1/settings/staff — the panel row. The three admin-only fields are absent,
+ * not null, for a manager (Auth-Matrix §3: 👁 limited).
+ */
+export interface StaffSettingsItem {
+  id: string;
+  name: string;
+  role: Role;
+  avatarUrl: string | null;
+  active: boolean;
+  joinedAt: string;
+  email?: string;
+  mfaEnrolled?: boolean;
+  /** Non-null on a soft-deleted row — the "Former staff" section's key. */
+  deactivatedAt?: string | null;
+}
+
 /** GET /v1/staff/:id/profile — the public-safe subset. */
 export interface StaffPublicProfile {
   id: string;
@@ -63,6 +80,53 @@ export class StaffService {
       role: r.role as Role,
       avatarUrl: r.avatar_url,
       isOnline: online.has(r.id),
+    }));
+  }
+
+  /**
+   * The Settings → Staff panel's list (Auth-Matrix §3: admin ✅, manager 👁 limited).
+   *
+   * UIUX §15 pins the table to Name · Role · Status · Joined · Actions, which every
+   * role who can see the panel gets. What differs is what an ADMIN additionally
+   * needs in order to ACT:
+   *   - `email`        — identifies the person for invite / reinstate collisions.
+   *   - `mfaEnrolled`  — whether [Reset MFA] has anything to reset.
+   *   - former staff   — soft-deleted rows, so [Reinstate] has a surface at all.
+   *                      This is what makes A4's fix reachable (ADR-026 §4).
+   * A manager gets none of the three: PII they cannot act on, a security fact they
+   * cannot change, and rows whose only action is admin-only.
+   *
+   * Omitted rather than nulled — a null would say "this person has no email".
+   */
+  async listForSettings(
+    role: Role,
+    trx: Executor,
+  ): Promise<Array<StaffSettingsItem>> {
+    const isAdmin = role === 'admin';
+
+    const base = trx
+      .selectFrom('staff')
+      .select(['id', 'name', 'role', 'avatar_url', 'active', 'created_at', 'deleted_at', 'email', 'mfa_enrolled']);
+
+    const rows = await (isAdmin ? base : softDeletable(base))
+      .orderBy('deleted_at', 'asc')
+      .orderBy('name', 'asc')
+      .execute();
+
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      role: r.role as Role,
+      avatarUrl: r.avatar_url,
+      active: r.active,
+      joinedAt: r.created_at.toISOString(),
+      ...(isAdmin
+        ? {
+            email: r.email,
+            mfaEnrolled: r.mfa_enrolled,
+            deactivatedAt: r.deleted_at?.toISOString() ?? null,
+          }
+        : {}),
     }));
   }
 

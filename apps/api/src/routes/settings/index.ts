@@ -1,4 +1,5 @@
 import { settingsSignupRequestsRoutes } from './signup-requests.js';
+import { settingsStaffRoutes } from './staff.js';
 
 import type { FastifyInstance } from 'fastify';
 
@@ -7,4 +8,5 @@ import type { FastifyInstance } from 'fastify';
  */
 export default async function settingsRoutes(app: FastifyInstance) {
   await app.register(settingsSignupRequestsRoutes);
+  await app.register(settingsStaffRoutes);
 }

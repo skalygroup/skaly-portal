@@ -217,35 +217,69 @@ export default async function staffRoutes(app: FastifyInstance) {
   );
 
   // ── Admin: set a per-user permission override (AUTH-MATRIX §4/§6) ────
-  // Upserts user_permissions, audits, and busts perms:{staffId} so the change
-  // takes effect on the next resolve. The resolver's floor is ROLE_DEFAULTS.
+  // Upserts user_permissions, audits, busts perms:{staffId}, and emits
+  // permission_changed (ADR-029). The resolver's floor is ROLE_DEFAULTS.
+  //
+  // `:key` is validated against the §6.2 convention by isPermissionKey — never
+  // free text, so a typo'd key cannot be stored as an override that resolves to
+  // nothing and silently does nothing.
+  const PermissionParams = z.object({
+    id: z.string().uuid(),
+    key: z.string().refine(isPermissionKey, 'Unknown permission key'),
+  });
+  const PermissionResponse = {
+    200: z.object({
+      data: z.object({
+        staffId: z.string(),
+        permissionKey: z.string(),
+        value: z.boolean().nullable(),
+      }),
+    }),
+  };
+
   r.put(
     '/staff/:id/permissions/:key',
     {
       preHandler: [app.verifyJwt, app.requireRole('admin')],
       schema: {
-        params: z.object({
-          id: z.string().uuid(),
-          key: z.string().refine(isPermissionKey, 'Unknown permission key'),
-        }),
+        params: PermissionParams,
         body: z.object({ value: z.boolean() }),
-        response: {
-          200: z.object({
-            data: z.object({
-              staffId: z.string(),
-              permissionKey: z.string(),
-              value: z.boolean(),
-            }),
-          }),
-        },
+        response: PermissionResponse,
         security: [{ bearerAuth: [] }],
       },
     },
     async (request) => {
       const { id, key } = request.params;
-      const { value } = request.body;
-      const updated = await permissionService.setOverride(id, key, value, request.user.id, app.db);
+      const updated = await permissionService.setOverride(
+        id,
+        key,
+        request.body.value,
+        request.user.id,
+        app.db,
+      );
       return { data: updated };
+    },
+  );
+
+  // ── Admin: clear the override, restoring the role default ────────────
+  // The third state (AUTH-MATRIX §6.1: "no row found → fall through to role
+  // default"). Inheritance is expressible ONLY as the absence of a row, so
+  // without this verb an admin who sets Deny on something the role grants can
+  // never get back to the default — the two-state UI makes it unreachable.
+  r.delete(
+    '/staff/:id/permissions/:key',
+    {
+      preHandler: [app.verifyJwt, app.requireRole('admin')],
+      schema: {
+        params: PermissionParams,
+        response: PermissionResponse,
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request) => {
+      const { id, key } = request.params;
+      const cleared = await permissionService.setOverride(id, key, null, request.user.id, app.db);
+      return { data: cleared };
     },
   );
 }
