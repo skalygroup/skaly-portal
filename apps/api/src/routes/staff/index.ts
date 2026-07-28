@@ -56,6 +56,9 @@ const StaffPublicProfileSchema = z.object({
  *   GET /staff/:id           — full profile; admin/manager/own only
  *   GET /staff/:id/profile   — public-safe profile, all roles
  *   PUT /staff/:id/mfa/reset — admin clears a user's MFA so they re-enroll
+ *   GET    /staff/:id/permissions      — admin; the override ROWS, not the map
+ *   PUT    /staff/:id/permissions/:key — admin; allow / deny
+ *   DELETE /staff/:id/permissions/:key — admin; inherit (deletes the row)
  */
 export default async function staffRoutes(app: FastifyInstance) {
   const authService = new AuthService(
@@ -236,6 +239,59 @@ export default async function staffRoutes(app: FastifyInstance) {
       }),
     }),
   };
+
+  // ── Admin: read the OVERRIDE ROWS for one staff member ───────────────
+  // Not the effective map. The panel needs the third state, and the effective
+  // map cannot express it: `true` from an explicit Allow and `true` inherited
+  // from the role default are the same boolean, so a UI built on
+  // getEffectivePermissions would show Allow on every key an admin has never
+  // touched — and then writing a row for each one it "restores" is how an
+  // untouched account silently acquires 60 overrides.
+  //
+  // Only the row's PRESENCE distinguishes them (§6.1: no row → role default),
+  // so this returns rows, and the client resolves against ROLE_DEFAULTS — the
+  // same constant the server's floor comes from, imported from @skaly/shared
+  // rather than restated.
+  r.get(
+    '/staff/:id/permissions',
+    {
+      preHandler: [app.verifyJwt, app.requireRole('admin')],
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        response: {
+          200: z.object({
+            data: z.object({
+              staffId: z.string(),
+              // The role is what ROLE_DEFAULTS is keyed on, so the client cannot
+              // resolve Inherit without it — and re-deriving it from a second
+              // request is how the two answers drift mid-edit.
+              role: z.string(),
+              overrides: z.array(
+                z.object({ permissionKey: z.string(), value: z.boolean() }),
+              ),
+            }),
+          }),
+        },
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request) => {
+      const target = await staffService.getFullProfile(request.params.id, app.db);
+      // Thrown, not replied: the response schema declares 200 only, and the app's
+      // error handler owns the envelope for every other code (09-ERROR-HANDLING).
+      if (!target) throw new AppError('RESOURCE_NOT_FOUND', 'Staff not found.');
+      // loadCache reads user_permissions directly (and warms perms:{staffId} on
+      // the way through). Reading the table rather than the cache matters here:
+      // this is the screen an admin uses to VERIFY what they just set.
+      return {
+        data: {
+          staffId: target.id,
+          role: target.role,
+          overrides: await permissionService.loadCache(target.id, app.db),
+        },
+      };
+    },
+  );
 
   r.put(
     '/staff/:id/permissions/:key',

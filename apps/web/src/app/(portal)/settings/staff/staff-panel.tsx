@@ -127,7 +127,17 @@ export function StaffPanel({ canWrite }: { canWrite: boolean }) {
           <>
             <Th>Name</Th>
             {/* Email and MFA are admin-only columns; a manager gets no empty
-                cells, because the API sent no field to render. */}
+                cells, because the API sent no field to render.
+
+                ⚠️ The rule this is REALLY expressing is "render the header iff
+                the payload carried that field". `canWrite` is an exact proxy
+                only because admin is currently the sole role the API sends
+                email/mfaEnrolled to. If an override ever decouples
+                field-inclusion from write access — a manager granted
+                settings_staff.write while the API still omits email — this
+                gates the wrong way and produces the column of em-dashes it
+                exists to prevent. The durable form is `'email' in row`; switch
+                to it the moment those two stop coinciding. */}
             {canWrite && <Th>Email</Th>}
             <Th>Role</Th>
             {canWrite && <Th>MFA</Th>}

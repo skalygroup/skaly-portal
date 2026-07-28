@@ -1361,7 +1361,33 @@ export class AuthService {
     targetStaffId: string,
     adminId: string,
   ): Promise<{ staffId: string; reactivated: true }> {
-    const target = await this.db
+    const supabaseUid = await transactionWithEmits(this.db, (trx) =>
+      this.reviveStaffRow(targetStaffId, adminId, trx),
+    );
+
+    if (supabaseUid) await this.invalidateCache(supabaseUid);
+
+    return { staffId: targetStaffId, reactivated: true };
+  }
+
+  /**
+   * The revive itself — checks, update, notification, audit — against a caller's
+   * transaction. Returns the row's `supabase_uid` so the caller can evict the
+   * staff_lookup cache AFTER the commit (evicting inside would repopulate from a
+   * read the transaction has not published yet).
+   *
+   * Extracted because `reinstateFromSignupRequest` needs the identical work in a
+   * transaction that ALSO closes the signup request. Copying it there would put
+   * the live-email collision check (§5) in one copy and forget it in the other —
+   * and the forgotten one is the path that surfaces a Postgres unique violation
+   * as a 500.
+   */
+  private async reviveStaffRow(
+    targetStaffId: string,
+    adminId: string,
+    trx: Transaction<DB>,
+  ): Promise<string | null> {
+    const target = await trx
       .selectFrom('staff')
       .select(['id', 'name', 'email', 'active', 'deleted_at', 'supabase_uid'])
       .where('id', '=', targetStaffId)
@@ -1377,7 +1403,7 @@ export class AuthService {
     // and this tombstone can legitimately share an email — and reviving into that
     // collision would raise a raw Postgres unique violation as a 500. Check first
     // and say what actually happened.
-    const liveHolder = await this.db
+    const liveHolder = await trx
       .selectFrom('staff')
       .select(['id', 'name'])
       .where('email', '=', target.email)
@@ -1392,37 +1418,106 @@ export class AuthService {
       );
     }
 
-    await transactionWithEmits(this.db, async (trx) => {
-      await trx
-        .updateTable('staff')
-        .set({ deleted_at: null, active: true })
-        .where('id', '=', targetStaffId)
-        .execute();
+    await trx
+      .updateTable('staff')
+      .set({ deleted_at: null, active: true })
+      .where('id', '=', targetStaffId)
+      .execute();
 
-      // The enum value that has existed for exactly this since Sprint 10 (ADR-020).
-      await this.notifications.create({
-        recipientId: targetStaffId,
-        type: 'account_reactivated',
-        title: 'Your account has been reactivated',
-        trx,
-      });
-
-      await this.audit.log({
-        actorId: adminId,
-        entity: 'staff',
-        entityId: targetStaffId,
-        action: 'UPDATE',
-        before: { active: target.active, deletedAt: target.deleted_at?.toISOString() ?? null },
-        after: { active: true, deletedAt: null, event: 'reinstated' },
-        trx,
-      });
+    // The enum value that has existed for exactly this since Sprint 10 (ADR-020).
+    await this.notifications.create({
+      recipientId: targetStaffId,
+      type: 'account_reactivated',
+      title: 'Your account has been reactivated',
+      trx,
     });
 
-    if (target.supabase_uid) {
-      await this.invalidateCache(target.supabase_uid);
-    }
+    await this.audit.log({
+      actorId: adminId,
+      entity: 'staff',
+      entityId: targetStaffId,
+      action: 'UPDATE',
+      before: { active: target.active, deletedAt: target.deleted_at?.toISOString() ?? null },
+      after: { active: true, deletedAt: null, event: 'reinstated' },
+      trx,
+    });
 
-    return { staffId: targetStaffId, reactivated: true };
+    return target.supabase_uid;
+  }
+
+  /**
+   * Approve a pending signup request BY REINSTATING the applicant's old staff row
+   * — the other half of A4's fix, and the action the reinstate branch in Settings
+   * → Signup Requests calls.
+   *
+   * `approveSignupRequest` detects the tombstone and stops (ADR-026 §4); this is
+   * what the admin's answer to that question runs. It is ONE endpoint rather than
+   * "reactivate, then mark approved" from the client, because those two are one
+   * decision: if the second call fails, the person is live again and their request
+   * is still pending — and re-approving it now hits the LIVE-row branch, which
+   * rejects with "Account already exists at approval time". The exact false
+   * sentence A4 exists to delete would come straight back through a dropped
+   * fetch.
+   *
+   * The role assigned is the one on the OLD staff row. This endpoint reinstates a
+   * person; changing what they are is a separate, separately-audited act, and
+   * silently honouring `roleRequested` here would let an applicant pick their own
+   * role by asking for it.
+   */
+  async reinstateFromSignupRequest(
+    requestId: string,
+    adminId: string,
+  ): Promise<{ staffId: string; status: 'approved' }> {
+    const outcome = await transactionWithEmits(this.db, async (trx) => {
+      const row = await trx
+        .selectFrom('signup_requests')
+        .select(['id', 'email', 'name', 'status'])
+        .where('id', '=', requestId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!row) {
+        throw new AuthError('NOT_FOUND', 404, 'Signup request not found.');
+      }
+      if (row.status !== 'pending') {
+        throw new AuthError('ALREADY_REVIEWED', 409, 'This request has already been reviewed.');
+      }
+
+      // The same lookup and the same ordering approveSignupRequest uses, so the
+      // row we revive is the row it offered. A live row outranks any tombstone;
+      // among tombstones the most recent is the person we last employed.
+      const previous = await trx
+        .selectFrom('staff')
+        .select(['id', 'deleted_at'])
+        .where('email', '=', row.email)
+        .orderBy(sql`deleted_at IS NOT NULL`)
+        .orderBy('deleted_at', 'desc')
+        .limit(1)
+        .executeTakeFirst();
+
+      if (!previous?.deleted_at) {
+        // Either nobody by that email, or a LIVE one. Neither is reinstatable, and
+        // both mean the admin is acting on a screen that has gone stale.
+        throw new AuthError(
+          'ALREADY_PROCESSED',
+          409,
+          'There is no deactivated account for this email to reinstate. Reload the queue and approve it normally.',
+        );
+      }
+
+      const supabaseUid = await this.reviveStaffRow(previous.id, adminId, trx);
+
+      await trx
+        .updateTable('signup_requests')
+        .set({ status: 'approved', reviewed_at: sql`NOW()`, reviewed_by: adminId })
+        .where('id', '=', requestId)
+        .execute();
+
+      return { staffId: previous.id, supabaseUid };
+    });
+
+    if (outcome.supabaseUid) await this.invalidateCache(outcome.supabaseUid);
+
+    return { staffId: outcome.staffId, status: 'approved' };
   }
 
   /**

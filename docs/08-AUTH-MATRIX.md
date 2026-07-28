@@ -118,9 +118,12 @@ Layer 3 — Service Layer (per-operation)
 | POST /v1/auth/invite | ✅ | ❌ | ❌ | ❌ |
 | GET /v1/settings/signup-requests | ✅ | ❌ | ❌ | ❌ |
 | POST .../approve / .../reject | ✅ | ❌ | ❌ | ❌ |
+| POST .../signup-requests/:id/reinstate | ✅ | ❌ | ❌ | ❌ |
 | PUT /v1/staff/:id/deactivate | ✅ | ❌ | ❌ | ❌ |
 | PUT /v1/staff/:id/reactivate | ✅ | ❌ | ❌ | ❌ |
+| GET /v1/staff/:id/permissions | ✅ | ❌ | ❌ | ❌ |
 | PUT /v1/staff/:id/permissions/:key | ✅ | ❌ | ❌ | ❌ |
+| DELETE /v1/staff/:id/permissions/:key | ✅ | ❌ | ❌ | ❌ |
 | PUT /v1/staff/:id/mfa/reset | ✅ | ❌ | ❌ | ❌ |
 | POST/DELETE /v1/months/:period/lock | ✅ | ❌ | ❌ | ❌ |
 | GET /v1/audit-log | ✅ | ❌ | ❌ | ❌ |

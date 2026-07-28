@@ -200,6 +200,99 @@ describe('⭐ A4 — approval detects a former employee instead of rejecting the
   });
 });
 
+describe('⭐ AuthService.reinstateFromSignupRequest — the admin answers the question', () => {
+  test('revives the ORIGINAL row and closes the request, in one transaction', async () => {
+    const addr = email('branch');
+    const former = await makeStaff(addr);
+    await service.deactivateStaff(former.id, ADMIN_ID);
+    const req = await makePending(addr);
+
+    // Approval asked; this is the answer.
+    await expect(service.approveSignupRequest(req.id, 'team_member', ADMIN_ID)).rejects.toMatchObject(
+      { code: 'ALREADY_PROCESSED' },
+    );
+
+    const result = await service.reinstateFromSignupRequest(req.id, ADMIN_ID);
+
+    expect(result, 'the SAME id, never a duplicate — the history is the point').toEqual({
+      staffId: former.id,
+      status: 'approved',
+    });
+    const row = await db
+      .selectFrom('staff')
+      .select(['active', 'deleted_at'])
+      .where('id', '=', former.id)
+      .executeTakeFirstOrThrow();
+    expect(row.active).toBe(true);
+    expect(row.deleted_at).toBeNull();
+
+    const after = await db
+      .selectFrom('signup_requests')
+      .select(['status', 'reviewed_by', 'rejection_note'])
+      .where('id', '=', req.id)
+      .executeTakeFirstOrThrow();
+    expect(after.status, 'the request must not be left pending forever').toBe('approved');
+    expect(after.reviewed_by).toBe(ADMIN_ID);
+    expect(after.rejection_note).toBeNull();
+
+    // No second identity. Creating a Supabase user here would mean we had built
+    // the duplicate ADR-026 §3 forbids.
+    expect(createUser).not.toHaveBeenCalled();
+  });
+
+  test('an already-reviewed request → ALREADY_REVIEWED, and nothing is revived', async () => {
+    const addr = email('reviewed');
+    const former = await makeStaff(addr);
+    await service.deactivateStaff(former.id, ADMIN_ID);
+    const req = await makePending(addr);
+    await db
+      .updateTable('signup_requests')
+      .set({ status: 'rejected' })
+      .where('id', '=', req.id)
+      .execute();
+
+    await expect(service.reinstateFromSignupRequest(req.id, ADMIN_ID)).rejects.toMatchObject({
+      code: 'ALREADY_REVIEWED',
+    });
+    const row = await db
+      .selectFrom('staff')
+      .select('active')
+      .where('id', '=', former.id)
+      .executeTakeFirstOrThrow();
+    expect(row.active, 'the whole thing rolls back, including the revive').toBe(false);
+  });
+
+  test('nothing to reinstate → a 409 that says to reload, not a 500', async () => {
+    // A stale screen: the admin clicks Reinstate on a request whose subject was
+    // never employed here. The tombstone the offer was based on does not exist.
+    const req = await makePending(email('nothing'));
+    await expect(service.reinstateFromSignupRequest(req.id, ADMIN_ID)).rejects.toMatchObject({
+      code: 'ALREADY_PROCESSED',
+      statusCode: 409,
+    });
+  });
+
+  test('a LIVE row now holds that email → 409, and the request stays pending', async () => {
+    const addr = email('raced');
+    const former = await makeStaff(addr);
+    await service.deactivateStaff(former.id, ADMIN_ID);
+    const req = await makePending(addr);
+    // Someone was onboarded onto the address while this request sat in the queue
+    // — legal since migration 031 made the index partial.
+    await makeStaff(addr, { name: 'Someone Else' });
+
+    await expect(service.reinstateFromSignupRequest(req.id, ADMIN_ID)).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    const after = await db
+      .selectFrom('signup_requests')
+      .select('status')
+      .where('id', '=', req.id)
+      .executeTakeFirstOrThrow();
+    expect(after.status).toBe('pending');
+  });
+});
+
 describe('AuthService.reactivateStaff', () => {
   test('reinstates the ORIGINAL row, fires account_reactivated, and audits it', async () => {
     const addr = email('reinstate');

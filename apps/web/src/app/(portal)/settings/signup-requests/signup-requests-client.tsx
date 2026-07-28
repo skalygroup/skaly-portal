@@ -13,7 +13,7 @@ import type { Role, SignupRequestAdminItem } from '@skaly/shared/schemas/auth';
 
 // One Modal for all seven panels — this file's local copy was the original.
 import { Modal } from '@/components/settings/panel-chrome';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const TABS: { value: SignupRequestStatus; label: string }[] = [
@@ -282,6 +282,25 @@ function Detail({ icon, value }: { icon: React.ReactNode; value: string }) {
 
 // ─── Modals ──────────────────────────────────────────────────────────────────
 
+/**
+ * The reinstate suggestion, as the API hands it back (ADR-026 §4). It arrives as
+ * the `details` of a 409, which is a transport detail — NOT a description of what
+ * happened. Nothing failed: approval asked a question it cannot answer on its
+ * own, and the answer belongs to the admin.
+ */
+interface ReinstateSuggestion {
+  previousStaffId: string;
+  deactivatedAt: string;
+}
+
+function readReinstateSuggestion(err: unknown): ReinstateSuggestion | null {
+  if (!(err instanceof ApiError) || err.details?.suggestion !== 'reinstate') return null;
+  const { previousStaffId, deactivatedAt } = err.details;
+  return typeof previousStaffId === 'string' && typeof deactivatedAt === 'string'
+    ? { previousStaffId, deactivatedAt }
+    : null;
+}
+
 function ApproveModal({
   req,
   onClose,
@@ -292,6 +311,7 @@ function ApproveModal({
   onApproved: (name: string) => void;
 }) {
   const [role, setRole] = useState<Role>(req.roleRequested);
+  const [suggestion, setSuggestion] = useState<ReinstateSuggestion | null>(null);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -300,8 +320,32 @@ function ApproveModal({
         body: JSON.stringify({ roleAssigned: role }),
       }),
     onSuccess: () => onApproved(req.name),
-    onError: () => toast.error('Could not approve. Try again.'),
+    onError: (err) => {
+      // ⭐ A4's user-visible half. The old behaviour rejected this person with
+      // "Account already exists at approval time" — a sentence that is false for
+      // a deleted row, and which made every offboarded employee permanently
+      // unhireable through the product. Surfacing it as an error TOAST would be
+      // the same defect wearing better manners: the admin still ends the
+      // interaction with no way forward. It is a branch, so it renders as one.
+      const found = readReinstateSuggestion(err);
+      if (found) {
+        setSuggestion(found);
+        return;
+      }
+      toast.error('Could not approve. Try again.');
+    },
   });
+
+  if (suggestion) {
+    return (
+      <ReinstateBranch
+        req={req}
+        suggestion={suggestion}
+        onClose={onClose}
+        onReinstated={onApproved}
+      />
+    );
+  }
 
   return (
     <Modal title={`Approve ${req.name}`} onClose={onClose}>
@@ -344,6 +388,93 @@ function ApproveModal({
         >
           {mutation.isPending && <Loader2 size={15} className="animate-spin" />}
           Confirm approval
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * ⭐ The reinstate branch — the user-visible half of A4's fix.
+ *
+ * ── Why there is no [Create new] ─────────────────────────────────────────────
+ * ADR-026 §3 is unambiguous: reinstate the ORIGINAL row, never a duplicate. The
+ * history and the audit trail are the entire reason the row was soft-deleted
+ * rather than hard-deleted, and a returning employee who comes back as a new id
+ * loses both — their tasks, their attendance, every audit entry that names them.
+ * A [Create new] button would be a button whose only function is to violate the
+ * ruling this screen exists to implement, so the second choice here is "leave it
+ * pending", which is a real and sometimes correct answer.
+ *
+ * ── Why ONE call ─────────────────────────────────────────────────────────────
+ * Reinstating and closing the request are one decision, so they are one endpoint.
+ * Doing it as "PUT reactivate, then mark approved" from here means a dropped
+ * second fetch leaves the person live with their request still pending — and
+ * re-approving THAT hits the live-row branch, which rejects with "Account
+ * already exists at approval time". The exact false sentence A4 exists to delete
+ * would come straight back through a flaky network.
+ */
+function ReinstateBranch({
+  req,
+  suggestion,
+  onClose,
+  onReinstated,
+}: {
+  req: SignupRequestAdminItem;
+  suggestion: ReinstateSuggestion;
+  onClose: () => void;
+  onReinstated: (name: string) => void;
+}) {
+  const mutation = useMutation({
+    mutationFn: () =>
+      api(`/v1/auth/signup-requests/${req.id}/reinstate`, { method: 'POST' }),
+    onSuccess: () => onReinstated(req.name),
+    onError: (err) => {
+      const code = err instanceof ApiError ? err.code : 'UNKNOWN';
+      toast.error(
+        code === 'ALREADY_PROCESSED'
+          ? 'Someone else now holds that email address. Resolve the duplicate first.'
+          : 'Could not reinstate. Try again.',
+      );
+    },
+  });
+
+  return (
+    <Modal title={`${req.name} previously worked here`} onClose={onClose}>
+      <p className="mt-2 text-[13.5px] leading-[1.6] text-text-secondary">
+        Their account was deactivated on{' '}
+        <strong className="font-semibold text-text-primary">
+          {suggestion.deactivatedAt.slice(0, 10)}
+        </strong>
+        . Reinstating brings back{' '}
+        <strong className="font-semibold text-text-primary">the original account</strong> — same
+        record, same history, their old tasks and attendance still attached — and marks this
+        request approved. They keep the role they had; change it from Staff afterwards if it should
+        be different.
+      </p>
+      <p className="mt-3 text-[12.5px] leading-[1.6] text-text-muted">
+        There is no &ldquo;create a new account&rdquo; option here on purpose: a second record for
+        the same person would leave their history behind on the first one. If you are not ready to
+        decide, leave the request pending and it will be waiting.
+      </p>
+
+      <div className="mt-6 flex justify-end gap-2.5">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={mutation.isPending}
+          className="rounded-md border border-border-default bg-bg-elevated px-4 py-2 text-[13.5px] font-semibold text-text-secondary hover:bg-bg-hover disabled:opacity-60"
+        >
+          Leave pending
+        </button>
+        <button
+          type="button"
+          onClick={() => mutation.mutate()}
+          disabled={mutation.isPending}
+          className="inline-flex items-center gap-2 rounded-md bg-accent-gold px-4 py-2 text-[13.5px] font-semibold text-bg-base transition-[filter] hover:brightness-[1.06] disabled:opacity-60"
+        >
+          {mutation.isPending && <Loader2 size={15} className="animate-spin" />}
+          Reinstate their account
         </button>
       </div>
     </Modal>

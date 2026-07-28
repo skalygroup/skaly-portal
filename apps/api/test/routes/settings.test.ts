@@ -177,6 +177,12 @@ const MATRIX: Array<{
   { panel: 'staff', method: 'PUT', url: () => `/v1/staff/${TARGET}/mfa/reset`, allowed: ['admin'] },
   {
     panel: 'permissions',
+    method: 'GET',
+    url: () => `/v1/staff/${TARGET}/permissions`,
+    allowed: ['admin'],
+  },
+  {
+    panel: 'permissions',
     method: 'PUT',
     url: () => `/v1/staff/${TARGET}/permissions/chat.access`,
     body: { value: true },
@@ -392,6 +398,44 @@ describe('permissions — three states, one seam (AUTH-MATRIX §6.1, ADR-029)', 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.payload).data.value).toBeNull();
     expect(await overrideRow(), 'inherit is the ABSENCE of a row').toBeUndefined();
+  });
+
+  test('⭐ GET returns the override ROWS, which is what makes three states renderable', async () => {
+    asUser = authUser('admin');
+    const listUrl = `/v1/staff/${TARGET}/permissions`;
+
+    // Untouched: no rows at all. The panel must show Inherit on every key, so an
+    // empty array here is the load-bearing answer — a route that helpfully
+    // returned the effective map instead would make every key look explicitly
+    // set, and the panel would write ~60 override rows "restoring" them.
+    const before = await app.inject({ method: 'GET', url: listUrl });
+    expect(before.statusCode).toBe(200);
+    const beforeBody = JSON.parse(before.payload).data;
+    expect(beforeBody.role, 'the role is what ROLE_DEFAULTS is keyed on').toBe('team_member');
+    expect(beforeBody.overrides.some((o: { permissionKey: string }) => o.permissionKey === KEY)).toBe(
+      false,
+    );
+
+    // A DENY row must come back as a row whose value is false — not be
+    // indistinguishable from "no row", which is exactly what a boolean map does.
+    await app.inject({ method: 'PUT', url, payload: { value: false } });
+    const after = JSON.parse((await app.inject({ method: 'GET', url: listUrl })).payload).data;
+    expect(after.overrides).toContainEqual({ permissionKey: KEY, value: false });
+
+    await app.inject({ method: 'DELETE', url });
+    const cleared = JSON.parse((await app.inject({ method: 'GET', url: listUrl })).payload).data;
+    expect(
+      cleared.overrides.some((o: { permissionKey: string }) => o.permissionKey === KEY),
+      'inherit is the absence of a row, here too',
+    ).toBe(false);
+  });
+
+  test('GET on an unknown staff id → 404, not an empty override list', async () => {
+    asUser = authUser('admin');
+    // An empty list would read as "this person has no overrides" for somebody who
+    // does not exist, and the panel would render a full editable matrix for them.
+    const res = await app.inject({ method: 'GET', url: `/v1/staff/${randomUUID()}/permissions` });
+    expect(res.statusCode).toBe(404);
   });
 
   test('inherit restores the role default, verified through the resolver', async () => {

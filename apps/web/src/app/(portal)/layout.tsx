@@ -1,5 +1,6 @@
 import { ConnectionBanner } from '@/components/shared/connection-banner';
 import { NotificationBell } from '@/components/shared/notification-bell';
+import { PermissionSync } from '@/components/shared/permission-sync';
 import { SearchPalette } from '@/components/shared/search-palette';
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
@@ -35,6 +36,10 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
             belong to Sprint 11's Settings/Dashboard chrome. */}
         {/* Non-blocking, fixed to the top of the viewport (Error-Handling §5.4). */}
         <ConnectionBanner />
+        {/* ADR-029. Mounted here, not in the settings shell: a revoked module
+            has to leave the nav of whatever page the user is idling on, and
+            that is usually not Settings. Renders nothing. */}
+        <PermissionSync />
         <header className="flex h-14 items-center justify-end gap-2 px-8">
           <NotificationBell />
         </header>
