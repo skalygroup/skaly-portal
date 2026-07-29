@@ -379,7 +379,36 @@ test.describe('settings', () => {
       });
     });
 
+    /**
+     * ⚠️ THE JOIN BARRIER — and NOT a websocket frame count.
+     *
+     * This used to wait on "any frame received", which is satisfied by engine.io's
+     * `2probe`/`3probe`/`5` UPGRADE HANDSHAKE — packets that by definition precede
+     * the room join. So the grant could fire before B was in `user:{staffId}`, the
+     * push would land nowhere, and the test would still be sitting inside a
+     * barrier it had already passed. It proved "B has a websocket", never "B is
+     * subscribed" — which is the entire claim of ADR-029.
+     *
+     * Worse, the frame count cannot be repaired: measured on a warm load, the
+     * `room:join` and its ack travel over long-polling BEFORE the upgrade, so the
+     * ack is invisible to `page.on('websocket')` altogether.
+     *
+     * The bell's list is fetched behind `useRealtimeQuery`'s `enabled: subscribed`
+     * gate, and `subscribed` flips only on the join ack — so `GET /v1/notifications`
+     * GOING OUT is the ack, observed at a layer where it is actually visible.
+     */
+    let notifyFetches = 0;
+    bPage.on('response', (r) => {
+      if (r.request().method() === 'GET' && r.url().includes('/v1/notifications')) {
+        notifyFetches += 1;
+      }
+    });
+
     await login(bPage, MEMBER_EMAIL, MEMBER_PASSWORD);
+    // Login lands on `/`, whose bell also fetches — so count from HERE, or the
+    // barrier is satisfied by the previous page's join and proves nothing about
+    // the /settings tab that has to receive the push.
+    const fetchesBeforeSettings = notifyFetches;
     await bPage.goto('/settings');
     const b = { page: bPage, context: bContext, close: () => bContext.close() };
 
@@ -398,9 +427,29 @@ test.describe('settings', () => {
        *
        * That is not hypothetical: this test failed exactly once that way, as the
        * twelfth test of a loaded run, and passed in isolation — the shape that
-       * gets written off as flakiness and then hides a real regression. A frame
-       * received is proof the socket is connected AND that this counter can see
-       * it, which is the same barrier `login()` needed for its redirect.
+       * gets written off as flakiness and then hides a real regression.
+       */
+      await expect
+        .poll(() => notifyFetches, { timeout: 20_000 })
+        .toBeGreaterThan(fetchesBeforeSettings);
+
+      /**
+       * A SECOND wait, and it is FOR THE DIAGNOSTIC ONLY — not the product.
+       *
+       * engine.io opens on long-polling and upgrades to a websocket afterwards.
+       * The join above completes over POLLING, so at that instant `pushFrames`
+       * cannot see anything: a `permission_changed` delivered before the upgrade
+       * arrives as a poll response and never reaches `page.on('websocket')`.
+       *
+       * The old `anyFrames` barrier accidentally covered this — waiting for any
+       * websocket frame IS waiting for the upgrade — which is why the counter
+       * worked while the barrier was wrong. Replacing it with the correct join
+       * barrier alone made this test fail at `pushFrames`, with the push working
+       * perfectly. Two different things were being conflated in one wait, so they
+       * are now two waits with two reasons.
+       *
+       * The product does not require the upgrade: polling delivers the push just
+       * fine. Only the counter needs it.
        */
       await expect.poll(() => anyFrames, { timeout: 15_000 }).toBeGreaterThan(0);
 

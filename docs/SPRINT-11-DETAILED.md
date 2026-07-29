@@ -987,15 +987,29 @@ FRONTEND
   [ ] Destructive dialogs name the consequence
   [ ] Audit table virtualised; export streams without buffering in JS
   [ ] Reports show pending → ready via socket, no poll required; async contract stated in UI
+  [x] ⭐ month:lock_changed CONSUMED (MonthLockSync) — it had been broadcast since
+      STEP 4 with no listener, so a locked month only reached an open grid as a
+      423 after the user had typed. Invalidates BOTH ['months'] (the five grids)
+      and ['settings','months'] (the panel): same endpoint, two keys, and
+      TanStack prefix-matching does not bridge them
   [x] 07-API-CONTRACT §Reports documents the ADR-027 async contract (202 + reportId),
       not the superseded synchronous 200-plus-downloadUrl shape
   [x] report_ready's linkBuilder returns /settings/reports?reportId= — never a
       presigned URL (M-08), enforced for all 18 types by the link-durability test
 
 TESTS + NFRs
-  [ ] Full API, frontend, and Playwright suites green
+  [x] Full API, frontend, and Playwright suites green — API 837, web 280,
+      Playwright 91 passed / 2 skipped (the two chromium-gated content-calendar
+      perf checks, §1.1 FCP and §1.4 60fps; nothing accidental)
+  [x] ⭐ AGAINST A FRESH BUILD. The web webServer is `pnpm build && pnpm start`
+      with reuseExistingServer, so a `next start` left up from an earlier session
+      is reused and the BUILD STEP NEVER RUNS. Three green full-suite runs here
+      tested a build that predated the sprint's product changes. Rate limiting
+      fails loudly; this fails GREEN. Check the server's CreationDate before
+      trusting an E2E result that is meant to exercise a product change.
   [ ] A4 re-hire E2E passes end to end
-  [ ] Permission-push two-context E2E passes
+  [x] Permission-push two-context E2E passes — on the `subscribed` gate, not a
+      frame count (see below)
   [x] ⭐ Socket-consumer test sweep: every event name a frontend consumer subscribes
       to exists in the api's emit list. Only `report_ready` was wrong; the silent
       `handlers.get(x)?.()` no-op is now a throw in the bell and permission-sync
