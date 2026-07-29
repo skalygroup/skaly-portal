@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { Client } from 'pg';
 
 import { login } from './helpers/auth';
+import { withDb } from './helpers/db';
+import { resetEnrollment } from './helpers/mfa-admin';
 import { totp } from './helpers/totp';
 
 /**
@@ -30,48 +31,8 @@ const FLOW_ENABLED = Boolean(
   MFA_EMAIL && MFA_PASSWORD && SUPABASE_URL && SERVICE_KEY && process.env.DATABASE_URL,
 );
 
-async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
-  const client = new Client({ connectionString: process.env.DATABASE_URL });
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
-}
-
-const sbHeaders = { apikey: SERVICE_KEY, authorization: `Bearer ${SERVICE_KEY}` };
-
-/** The throwaway admin's Supabase uid, read from the staff row that links them. */
-async function mfaAdminUid(): Promise<string> {
-  const { rows } = await withDb((c) =>
-    c.query('SELECT supabase_uid FROM staff WHERE email = $1 AND deleted_at IS NULL', [MFA_EMAIL]),
-  );
-  const uid = rows[0]?.supabase_uid as string | undefined;
-  if (!uid) throw new Error(`No staff row with a supabase_uid for ${MFA_EMAIL}.`);
-  return uid;
-}
-
-/**
- * Put the throwaway admin back in the un-enrolled state: no TOTP factor in
- * Supabase, mfa_enrolled=false in our own table. Both halves matter — a factor
- * left behind sends the next run to /mfa-challenge instead of /mfa-setup, and a
- * stale mfa_enrolled=true does the same via the middleware.
- */
-async function resetEnrollment(): Promise<void> {
-  const uid = await mfaAdminUid();
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${uid}/factors`, {
-    headers: sbHeaders,
-  });
-  const factors = (await res.json()) as Array<{ id: string }>;
-  for (const f of Array.isArray(factors) ? factors : []) {
-    await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${uid}/factors/${f.id}`, {
-      method: 'DELETE',
-      headers: sbHeaders,
-    });
-  }
-  await withDb((c) => c.query('UPDATE staff SET mfa_enrolled = false WHERE email = $1', [MFA_EMAIL]));
-}
+// withDb / resetEnrollment moved to helpers — mfa-recovery.spec.ts needs the
+// same reset, and two copies is one place to forget the mfa_enrolled half.
 
 test.describe('mfa enrollment — live', () => {
   // Supabase enroll + challenge + verify plus a possible 30s TOTP-window wait.

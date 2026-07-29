@@ -343,6 +343,22 @@ describe('AuthService MFA lifecycle', () => {
     expect(codes).toHaveLength(0);
   });
 
+  test('⭐ reset clears the failure budget — it is the remedy for MFA_LOCKED', async () => {
+    const admin = await insertStaff({ role: 'admin' });
+    const target = await insertStaff({ mfa_enrolled: true });
+    await service.recordMfaFailure(target.id);
+    await service.recordMfaFailure(target.id);
+    await service.recordMfaFailure(target.id); // locked
+
+    await service.resetMfa(target.id, admin.id);
+
+    // Without this, an admin resetting MFA for the person who just spent all
+    // three attempts hands them a fresh authenticator they cannot use for the
+    // rest of the 15-minute window — and this button is the ONLY remedy the
+    // product offers for MFA_LOCKED, so the fix would appear not to work.
+    expect(await redis.get(`mfa:fail:${target.id}`)).toBeNull();
+  });
+
   test('reset on a missing staff id → 404 NOT_FOUND', async () => {
     await expect(service.resetMfa(randomUUID(), randomUUID())).rejects.toMatchObject({
       code: 'NOT_FOUND',

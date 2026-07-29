@@ -22,11 +22,31 @@ type AuthUser = AuthVerify.AuthUser;
  * single mock covers the whole path under test while leaving the ordering — the
  * thing being tested — completely real.
  */
+/**
+ * A LOW limit, set before `app.js` is imported so `env.RATE_LIMIT_MAX` picks it
+ * up at register time.
+ *
+ * Without it the only thing assertable is that two counters move
+ * independently — true of a broken build the moment before it 429s everyone
+ * together. The point of ADR-024 is what happens AT the ceiling, and reaching a
+ * real 429 at 150 would mean 151 injects per test.
+ */
+const LIMIT = 8;
+const PREVIOUS_LIMIT = process.env.RATE_LIMIT_MAX;
+process.env.RATE_LIMIT_MAX = String(LIMIT);
+
 const USER_A = 'aaaaaaaa-0000-4000-8000-00000000000a';
 const USER_B = 'bbbbbbbb-0000-4000-8000-00000000000b';
 
+/** `token-x` → a stable uuid for x, so a test can take a bucket nobody else uses. */
+function idFor(token: string): string {
+  if (token === 'token-a') return USER_A;
+  if (token === 'token-b') return USER_B;
+  return `cccccccc-0000-4000-8000-0000000000${token.slice(-1).charCodeAt(0).toString(16)}`;
+}
+
 function userFor(token: string): AuthUser {
-  const id = token === 'token-a' ? USER_A : USER_B;
+  const id = idFor(token);
   return {
     id,
     supabase_uid: `uid-${id}`,
@@ -44,7 +64,7 @@ vi.mock('../../src/lib/auth-verify.js', async (importOriginal) => {
   return {
     ...actual,
     verifySupabaseToken: vi.fn(async (token: string) => {
-      if (token !== 'token-a' && token !== 'token-b') {
+      if (!/^token-[a-z]$/.test(token)) {
         throw new actual.TokenVerificationError('INVALID_TOKEN', 'nope');
       }
       return userFor(token);
@@ -82,6 +102,11 @@ describe('ADR-024 — rate limiting is keyed per user', () => {
     await app?.close();
     await pool.end();
     redis.disconnect();
+    // `fileParallelism: false` means one process runs every file in turn, so a
+    // limit of 8 left in the environment would silently 429 whichever suite ran
+    // next — a failure with no connection to the file that caused it.
+    if (PREVIOUS_LIMIT === undefined) delete process.env.RATE_LIMIT_MAX;
+    else process.env.RATE_LIMIT_MAX = PREVIOUS_LIMIT;
   });
 
   test('⭐ two authenticated users have INDEPENDENT buckets', async () => {
@@ -113,6 +138,40 @@ describe('ADR-024 — rate limiting is keyed per user', () => {
 
     const anonOneAgain = await hit(app, { ip: '203.0.113.1' });
     expect(anonOneAgain).toBe(anonOne - 1);
+  });
+
+  /**
+   * ⭐ Audit A1, at the ceiling — the deploy blocker itself.
+   *
+   * Every other test here reads `x-ratelimit-remaining`, which is a report about
+   * the limiter rather than the limiter's decision. This one takes a real bucket
+   * all the way to a real 429 and then asks a DIFFERENT user, from the SAME
+   * address, whether they can still work.
+   *
+   * That is the exact shape of the incident: with one shared bucket, one busy
+   * person throttles the whole organisation, and the 429 reaches the UI as
+   * "Could not load your profile" — never as a rate-limit error. Nothing in the
+   * product says what happened, which is why this needs an assertion rather
+   * than a header.
+   */
+  test('⭐ A1: one user hammered to a real 429 does NOT 429 anybody else', async () => {
+    const status = async (token: string): Promise<number> => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/v1/health',
+        headers: { authorization: `Bearer ${token}` },
+        remoteAddress: '10.0.0.1', // ONE address for both — the whole point
+      });
+      return res.statusCode;
+    };
+
+    for (let i = 0; i < LIMIT; i += 1) {
+      expect(await status('token-c'), `request ${i + 1} of C's own budget`).toBe(200);
+    }
+    expect(await status('token-c'), "C's budget is spent").toBe(429);
+
+    // Same IP, same instant, different identity.
+    expect(await status('token-d'), 'D must not inherit C‘s exhaustion').toBe(200);
   });
 
   test('⚠️ hook-ordering guard: an authenticated call does NOT touch the IP bucket', async () => {

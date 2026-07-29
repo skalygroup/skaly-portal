@@ -78,6 +78,11 @@ test.describe('chat — two contexts', () => {
     const b = await openChat(browser, MEMBER_EMAIL, MEMBER_PASSWORD);
 
     try {
+      // Barrier FIRST, then measure. Without it the NFR number silently includes
+      // however long B's /ws/chat took to join, which is not delivery latency —
+      // and if the join outlasts DELIVERY_MS the test fails for the wrong reason.
+      await waitForChatLink(a.page, b.page);
+
       const text = `${stamp()} hello from A`;
       const started = Date.now();
       await send(a.page, text);
@@ -127,6 +132,10 @@ test.describe('chat — two contexts', () => {
     const b = await openChat(browser, MEMBER_EMAIL, MEMBER_PASSWORD);
 
     try {
+      // The first delivery below doubles as a barrier only if it is allowed to be
+      // slow — it is not, it carries DELIVERY_MS. Join first, separately.
+      await waitForChatLink(a.page, b.page);
+
       const text = `${stamp()} delete me`;
       await send(a.page, text);
       await expect(b.page.getByText(text)).toBeVisible({ timeout: DELIVERY_MS });

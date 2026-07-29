@@ -88,8 +88,23 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+/**
+ * ⚠️ THESE TESTS SUBSCRIBE TO `notify:new`, AND THE EVENT NAME IS LOAD-BEARING.
+ *
+ * They used to fire `handlers.get('report_ready')`, which passed against a panel
+ * listening for an event the server has never emitted — the handler was correct
+ * and unreachable, so a finished report spun on "Generating" until a reload, and
+ * every assertion here stayed green. Firing the name the SERVER sends
+ * (`notify:new`, carrying the row's `type`) is what makes the suite able to fail
+ * for that.
+ *
+ * `handlers.get('notify:new')` is `undefined` if the panel subscribes to
+ * anything else, and `?.()` on undefined is a silent no-op — so each test below
+ * asserts the handler EXISTS before using it. Without that, the same defect
+ * would come back as a passing test for the second time.
+ */
 describe('⭐ the async contract', () => {
-  test('a pending report becomes ready on report_ready — no poll', async () => {
+  test('a pending report becomes ready on a report_ready notification — no poll', async () => {
     reportRows = [report()];
     mockLists();
     renderPanel();
@@ -97,10 +112,13 @@ describe('⭐ the async contract', () => {
     expect(await screen.findByText('Generating')).toBeTruthy();
     const callsBefore = apiMock.mock.calls.length;
 
+    const onNotify = handlers.get('notify:new');
+    expect(onNotify, 'the panel must subscribe to notify:new — see the note above').toBeDefined();
+
     // The worker finishes. The event is the ONLY thing that happens — nothing
     // here is on a timer, so a passing test proves the socket did it.
     reportRows = [report({ status: 'ready', completedAt: '2026-07-01T04:02:00.000Z' })];
-    handlers.get('report_ready')?.({ reportId: 'rep-1', status: 'ready' });
+    onNotify!({ type: 'report_ready', payload: { reportId: 'rep-1', status: 'ready' } });
 
     expect(await screen.findByText('Ready')).toBeTruthy();
     expect(screen.queryByText('Generating')).toBeNull();
@@ -108,21 +126,37 @@ describe('⭐ the async contract', () => {
     expect(apiMock.mock.calls.length).toBe(callsBefore + 1);
   });
 
-  test('report_ready also settles a FAILED render, so nothing spins forever', async () => {
+  test('a report_ready notification also settles a FAILED render, so nothing spins forever', async () => {
     reportRows = [report()];
     mockLists();
     renderPanel();
     await screen.findByText('Generating');
 
-    // The producer emits report_ready on both outcomes; if the panel only
-    // listened for success, a failed report would spin until a manual reload.
+    // The worker notifies on both outcomes; if the panel only reacted to
+    // success, a failed report would spin until a manual reload.
     reportRows = [report({ status: 'failed', errorMessage: 'No attendance rows for that period.' })];
-    handlers.get('report_ready')?.({ reportId: 'rep-1', status: 'failed' });
+    handlers.get('notify:new')!({ type: 'report_ready', payload: { reportId: 'rep-1', status: 'failed' } });
 
     expect(await screen.findByText('Failed')).toBeTruthy();
     // The reason is shown inline. "Failed" alone is a dead end.
     expect(screen.getByText(/No attendance rows for that period/)).toBeTruthy();
     expect(screen.getByRole('button', { name: /retry/i })).toBeTruthy();
+  });
+
+  test('an unrelated notification does NOT refetch the list', async () => {
+    reportRows = [report()];
+    mockLists();
+    renderPanel();
+    await screen.findByText('Generating');
+    const callsBefore = apiMock.mock.calls.length;
+
+    // Every notification of every type reaches this handler. A missing type
+    // guard would make one task assignment refetch this list for everyone who
+    // happens to have the panel open — the fan-out ADR-022 exists to prevent.
+    handlers.get('notify:new')!({ type: 'task_assigned', payload: { taskId: 't-1' } });
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(apiMock.mock.calls.length).toBe(callsBefore);
   });
 
   test('the UI says the tab can be closed', async () => {

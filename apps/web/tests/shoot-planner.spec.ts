@@ -198,9 +198,17 @@ test.describe('shoot planner — live smoke', () => {
       const [ownSlot, otherSlot] = await pickUnsetSlots(c, 2);
       const freelancerId = await staffIdByEmail(c, FREELANCER_EMAIL);
       if (!ownSlot || !otherSlot || !freelancerId) return null;
+      // ON CONFLICT must name the index's PREDICATE, not just its column.
+      // Migration 031 replaced `staff_email_unique UNIQUE (email)` with a
+      // PARTIAL unique index (`WHERE deleted_at IS NULL`) so an offboarded
+      // person can be re-hired — audit A4. Postgres will not match a bare
+      // `ON CONFLICT (email)` to a partial index, and answers "no unique or
+      // exclusion constraint matching the ON CONFLICT specification", which
+      // reads as a missing constraint rather than an under-specified upsert.
       const { rows } = await c.query(
         `INSERT INTO staff (name, email, role) VALUES ('E2E Other Freelancer', $1, 'freelancer')
-         ON CONFLICT (email) DO UPDATE SET deleted_at = NULL, role = 'freelancer'
+         ON CONFLICT (email) WHERE deleted_at IS NULL
+           DO UPDATE SET deleted_at = NULL, role = 'freelancer'
          RETURNING id`,
         [OTHER_FREELANCER_EMAIL],
       );

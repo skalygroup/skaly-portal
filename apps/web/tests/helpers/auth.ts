@@ -158,6 +158,22 @@ export async function accessToken(context: BrowserContext): Promise<string> {
 }
 
 /**
+ * The Authorization header for a signed-in context, ready to spread.
+ *
+ * `accessToken` returns the RAW token, and `auth.plugin` requires the literal
+ * prefix (`header.startsWith('Bearer ')`) — a bare token is a 401, which in a
+ * spec surfaces as an empty list or an undefined field several lines later
+ * rather than as an auth error. Every call site was repeating the prefix by
+ * hand; one of them forgetting is a test that measures nothing and still passes
+ * its earlier assertions.
+ */
+export async function authHeaders(
+  context: BrowserContext,
+): Promise<{ authorization: string }> {
+  return { authorization: `Bearer ${await accessToken(context)}` };
+}
+
+/**
  * Create a holiday on the first day of `period` that actually accepts one.
  *
  * This helper was written around a product bug — UNIQUE (period, date) covered

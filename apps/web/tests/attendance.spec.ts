@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { Client } from 'pg';
 
 import { login } from './helpers/auth';
+import { withDb } from './helpers/db';
+import { currentIstPeriod, priorIstPeriod } from './helpers/period-dates';
 
 /**
  * E2E smoke: Staff Attendance (Sprint 3 STEP 8). Smoke depth only — the
@@ -29,25 +30,6 @@ const MEMBER_PASSWORD = process.env.TEST_MEMBER_PASSWORD ?? '';
 const FLOW_ENABLED = Boolean(
   ADMIN_PASSWORD && MEMBER_PASSWORD && process.env.DATABASE_URL,
 );
-
-/** Current IST month 'YYYY-MM' — matches the backend / useMonthContext. */
-function currentIstPeriod(): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric',
-    month: '2-digit',
-  }).format(new Date());
-}
-
-async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
-  const client = new Client({ connectionString: process.env.DATABASE_URL });
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
-}
 
 // login() comes from tests/helpers/auth — see the barrier note there. The local
 // copy here omitted it and every grid fetch went out unauthenticated.
@@ -90,25 +72,38 @@ test.describe('attendance grid (live smoke)', () => {
   });
 
   test('locked period renders read-only', async ({ page }) => {
-    // Lock a period with data (the prior IST month exists from the seed).
-    const period = await withDb(async (c) => {
-      const { rows } = await c.query(
-        "SELECT period FROM months WHERE locked = false ORDER BY period DESC OFFSET 1 LIMIT 1",
-      );
-      return rows[0]?.period as string | undefined;
+    /**
+     * Last month — DERIVED, not queried.
+     *
+     * This used to take `ORDER BY period DESC OFFSET 1`, which reads as "the
+     * previous month" and is not: other suites leave rows in `months` dated
+     * 2098, so this locked a period with no attendance behind it. Both
+     * assertions below then passed against an EMPTY grid — a grid with no cells
+     * has no toggles whether it is locked or not — so the test could not fail.
+     */
+    const period = priorIstPeriod();
+    const exists = await withDb(async (c) => {
+      const { rows } = await c.query('SELECT 1 FROM months WHERE period = $1', [period]);
+      return rows.length > 0;
     });
-    test.skip(!period, 'No prior month to lock.');
+    test.skip(!exists, `No months row for ${period}.`);
 
-    await withDb((c) => c.query('UPDATE months SET locked = true WHERE period = $1', [period!]));
+    await withDb((c) => c.query('UPDATE months SET locked = true WHERE period = $1', [period]));
     try {
       await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
       await page.goto(`/attendance?period=${period}`);
 
       await expect(page.getByText('This period is locked. Read-only.')).toBeVisible();
+      // The grid has to have DATE ROWS for "no toggles" to mean anything.
+      // Counted by rows, not by `[data-editable]`: that attribute lives on the
+      // interactive cell, which a locked period does not render at all — so
+      // using it here would fail on a perfectly populated locked month.
+      await expect(page.getByRole('grid')).toBeVisible();
+      expect(await page.getByRole('row').count()).toBeGreaterThan(1);
       // No interactive toggles in a locked grid (cells are <span>s).
       await expect(page.getByRole('button', { name: /Toggle/ })).toHaveCount(0);
     } finally {
-      await withDb((c) => c.query('UPDATE months SET locked = false WHERE period = $1', [period!]));
+      await withDb((c) => c.query('UPDATE months SET locked = false WHERE period = $1', [period]));
     }
   });
 });

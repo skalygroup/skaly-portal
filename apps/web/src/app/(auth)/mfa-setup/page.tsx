@@ -5,7 +5,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { MfaEnrollResponse } from '@skaly/shared/schemas/auth';
+import type {
+  MfaEnrollResponse,
+  MfaRecoveryRegenerateResponse,
+} from '@skaly/shared/schemas/auth';
 
 import { AuthCanvasCard } from '@/components/auth/auth-canvas-card';
 import { FormBanner } from '@/components/auth/form-controls';
@@ -117,6 +120,40 @@ export default function MfaSetupPage() {
           body: JSON.stringify({ factorId: enrollment.factorId, code: sixDigits }),
         });
 
+        /**
+         * ADR-031: NOBODY LEAVES THIS PAGE WITHOUT CODES.
+         *
+         * The 501 fallback enrolls through the user's own Supabase session, which
+         * mints nothing — so that path used to finish with `recoveryCodes: []` and
+         * a "ask an admin to reset your MFA" line. That is the sole-admin lockout
+         * STEP 8 exists to prevent, handed to the population least likely to go
+         * looking for the Profile regenerate button: someone who just enrolled.
+         *
+         * Minted HERE and not at enroll: the factor has to verify first — issuing
+         * recovery codes for an enrollment that never completed replaces a working
+         * set with one for a factor nobody holds. Regenerate needs aal2, which the
+         * mfa.verify above has just granted this session.
+         *
+         * Same generation and same display as Profile → Regenerate. This wires the
+         * existing surface into the post-verify step; it is not a second one.
+         */
+        let codes = enrollment.recoveryCodes;
+        if (codes.length === 0) {
+          try {
+            const fresh = await api<MfaRecoveryRegenerateResponse>(
+              '/v1/auth/mfa/recovery/regenerate',
+              { method: 'POST' },
+            );
+            codes = fresh.recoveryCodes;
+            setEnrollment({ ...enrollment, recoveryCodes: codes });
+          } catch {
+            // Best effort, deliberately. MFA is genuinely on at this point, and
+            // failing the whole enrollment over the codes would leave the user
+            // with a verified factor and an error screen. The recovery step below
+            // sends them to Profile instead.
+          }
+        }
+
         setPhase('recovery');
       } catch {
         setVerifyError('Something went wrong verifying that code. Try again.');
@@ -193,7 +230,11 @@ export default function MfaSetupPage() {
                   <strong className="font-semibold text-[#E4E4E7]">they won’t be shown again.</strong>
                 </>
               ) : (
-                'MFA is active. If you lose your device, ask an admin to reset your MFA.'
+                // Only reachable if the mint above failed outright. Point at the
+                // fix the user can perform themselves — "ask an admin" is the
+                // wrong first answer for the sole admin, who is exactly the
+                // person this whole path is dangerous for.
+                'Two-factor is active, but we could not issue your recovery codes. Generate them from Profile → Recovery codes before you lose your authenticator.'
               )}
             </p>
           </div>

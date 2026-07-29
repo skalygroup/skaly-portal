@@ -975,6 +975,9 @@ RECOVERY CODES (carried since Sprint 8 STEP 8.4)
   [ ] SHARES the TOTP 3-attempt lockout (mixed failures lock — TESTED)
   [ ] Regenerate invalidates the old set; codes displayed once, never logged
   [ ] Login entry point + remaining-count banner + Profile regenerate
+  [x] ⭐ Codes issued AT ENROLLMENT, gated behind "I've saved these" (ADR-031)
+      — incl. the 501 fallback path, which used to finish with zero codes
+  [ ] Live enrollment verified on staging (local Supabase 501s; unit-mocked only)
 
 FRONTEND
   [ ] Nav derived from the permission source, not a hardcoded role list
@@ -984,11 +987,24 @@ FRONTEND
   [ ] Destructive dialogs name the consequence
   [ ] Audit table virtualised; export streams without buffering in JS
   [ ] Reports show pending → ready via socket, no poll required; async contract stated in UI
+  [x] 07-API-CONTRACT §Reports documents the ADR-027 async contract (202 + reportId),
+      not the superseded synchronous 200-plus-downloadUrl shape
+  [x] report_ready's linkBuilder returns /settings/reports?reportId= — never a
+      presigned URL (M-08), enforced for all 18 types by the link-durability test
 
 TESTS + NFRs
   [ ] Full API, frontend, and Playwright suites green
   [ ] A4 re-hire E2E passes end to end
   [ ] Permission-push two-context E2E passes
+  [x] ⭐ Socket-consumer test sweep: every event name a frontend consumer subscribes
+      to exists in the api's emit list. Only `report_ready` was wrong; the silent
+      `handlers.get(x)?.()` no-op is now a throw in the bell and permission-sync
+      tests, so a wrong name fails instead of passing
+  [x] ⭐ Wait-for-join barrier on EVERY two-context spec, not just settings —
+      chat and notifications had the identical latent race. NOT a websocket-frame
+      barrier: engine.io joins over long-polling before the upgrade, so the
+      room:join ack is invisible to page.on('websocket') on a warm reload
+      (measured). The barrier is the app's own `enabled: subscribed` gate.
   [ ] Report p95 < 10s / p99 < 20s MEASURED over 10 runs
   [ ] Every new test fails without its fix
   [ ] pnpm typecheck + pnpm lint clean

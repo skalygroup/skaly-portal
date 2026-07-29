@@ -1265,6 +1265,16 @@ export class AuthService {
       await trx.deleteFrom('mfa_recovery_codes').where('staff_id', '=', targetStaffId).execute();
     });
 
+    // The failure budget goes with the credentials it counted against.
+    //
+    // Without this, an admin resetting MFA for the person who just burned all
+    // three attempts hands them a fresh authenticator they cannot use for the
+    // rest of the 15-minute window — and the only remedy the product offers for
+    // MFA_LOCKED is this exact button. Every other place the budget is spent
+    // clears it on the way out (verifyMfa, redeemRecoveryCode); this one did
+    // not, which made "Reset MFA" a fix that appears not to work.
+    await this.clearMfaFailures(targetStaffId);
+
     if (target.supabase_uid) {
       await this.invalidateCache(target.supabase_uid);
     }

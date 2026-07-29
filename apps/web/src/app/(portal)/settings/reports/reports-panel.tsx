@@ -72,12 +72,24 @@ export function ReportsPanel() {
   /**
    * ⭐ SOCKET, NOT POLL.
    *
-   * `report_ready` fires on BOTH outcomes — the producer sends it for a failed
-   * render too, with `status: 'failed'` — so this is the terminal signal for
-   * every report, and there is no state it can leave stuck spinning.
+   * ⚠️ `report_ready` IS A NOTIFICATION TYPE, NOT A SOCKET EVENT. ADR-020's
+   * `notifications_type_check` enum is where that name lives; the notify
+   * namespace emits exactly two events, `notify:new` and `notify:read`
+   * (NotificationService), and `notify:new` carries the whole row — including
+   * its `type`. Subscribing to `'report_ready'` registered a handler for an
+   * event nothing on the server has ever sent, so a finished report sat on
+   * "Generating" until the user reloaded. The panel's unit test passed anyway
+   * because it invoked the handler it had just registered: it proved the
+   * handler was right and never that the event was real.
+   *
+   * Filtering here rather than adding a second server-side emit: the fact is
+   * already on the wire, and one consumer does not justify sending it twice.
+   *
+   * The type covers BOTH outcomes — the worker notifies on a failed render too,
+   * with `status: 'failed'` — so this is the terminal signal for every report
+   * and there is no state it can leave stuck spinning.
    *
    * ADR-022's matrix calls this an INVALIDATE rather than a patch. The payload
-   * carries `{ reportId, status }` and that is enough to flip a chip, but it
    * deliberately carries NO download URL (audit M-08: the presigned link lives
    * 24h and anything holding it outlives it), so a patched row would still have
    * to fetch before it could offer a button. Refetching the list is one request
@@ -87,11 +99,17 @@ export function ReportsPanel() {
    * 15s and refetches on the next mount or window focus. The push makes it
    * instant; it is not what makes it correct.
    */
-  const onReportReady = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: QUERY_KEY });
-  }, [qc]);
+  const onNotification = useCallback(
+    (n: { type?: string }) => {
+      // Every notification of every type arrives here. Without the guard, one
+      // task assignment would refetch this list for everyone looking at it.
+      if (n?.type !== 'report_ready') return;
+      void qc.invalidateQueries({ queryKey: QUERY_KEY });
+    },
+    [qc],
+  );
 
-  useNotifySocket('report_ready', onReportReady);
+  useNotifySocket('notify:new', onNotification);
 
   const generate = useMutation({
     mutationFn: () =>

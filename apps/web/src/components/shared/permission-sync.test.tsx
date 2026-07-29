@@ -16,6 +16,19 @@ import { PermissionSync } from './permission-sync';
 const handlers = new Map<string, (payload: unknown) => void>();
 const refresh = vi.fn();
 
+/**
+ * Fire the event BY THE SERVER'S NAME, and throw if nothing is listening.
+ *
+ * `handlers.get(x)?.(...)` is a silent no-op on a miss — the shape that let the
+ * reports panel subscribe to an event the server never emits and still show
+ * green. `permission_changed` is the name PermissionService actually emits.
+ */
+function fire(payload: unknown) {
+  const handler = handlers.get('permission_changed');
+  if (!handler) throw new Error('PermissionSync never subscribed to "permission_changed"');
+  handler(payload);
+}
+
 vi.mock('@/lib/socket', () => ({
   useNotifySocket: (event: string, handler: (payload: unknown) => void) => {
     handlers.set(event, handler);
@@ -55,7 +68,7 @@ describe('permission_changed', () => {
     await waitFor(() => expect(screen.getByTestId('grid-a').textContent).toBe('loaded'));
     expect(fetchMe).toHaveBeenCalledTimes(1);
 
-    handlers.get('permission_changed')?.({ staffId: 's1', permissionKey: 'module.tasks.read' });
+    fire({ staffId: 's1', permissionKey: 'module.tasks.read' });
 
     await waitFor(() => expect(fetchMe).toHaveBeenCalledTimes(2));
     // Three mounted consumers, one additional fetch — not three.
@@ -66,7 +79,7 @@ describe('permission_changed', () => {
     renderWithConsumers();
     await waitFor(() => expect(screen.getByTestId('grid-a').textContent).toBe('loaded'));
 
-    handlers.get('permission_changed')?.({ staffId: 's1', permissionKey: 'module.tasks.read' });
+    fire({ staffId: 's1', permissionKey: 'module.tasks.read' });
 
     // Invalidating a client cache does nothing for `requirePanel` or the settings
     // nav — both resolve permissions on the server. Without this the nav a user
@@ -81,7 +94,7 @@ describe('permission_changed', () => {
     // ADR-022's matrix: the event names the key that changed but cannot express
     // what it RESOLVES to. Reacting to the payload would be a second resolver,
     // in the browser, guessing — so an empty payload must behave identically.
-    handlers.get('permission_changed')?.({});
+    fire({});
     await waitFor(() => expect(fetchMe).toHaveBeenCalledTimes(2));
     expect(refresh).toHaveBeenCalledTimes(1);
   });
