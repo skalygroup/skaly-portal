@@ -23,6 +23,7 @@ import {
   FormBanner,
 } from '@/components/auth/form-controls';
 import { api, ApiError } from '@/lib/api';
+import { currentIstDate } from '@/lib/hooks/use-month-context';
 import {
   buildSignupFormData,
   validateCvFile,
@@ -47,7 +48,6 @@ interface OauthProfile {
   googleUid: string;
 }
 
-const today = new Date().toISOString().slice(0, 10);
 
 export default function OAuthCompletePage() {
   const router = useRouter();
@@ -213,7 +213,7 @@ export default function OAuthCompletePage() {
 
         <DateField
           label="Date of birth"
-          max={today}
+          max={currentIstDate()}
           disabled={isSubmitting}
           error={errors.dateOfBirth?.message}
           {...register('dateOfBirth')}

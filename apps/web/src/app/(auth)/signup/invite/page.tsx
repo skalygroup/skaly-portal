@@ -22,13 +22,13 @@ import {
   FormBanner,
 } from '@/components/auth/form-controls';
 import { api, ApiError } from '@/lib/api';
+import { currentIstDate } from '@/lib/hooks/use-month-context';
 import { createClient } from '@/lib/supabase/client';
 
 // Token comes from the URL, not the form.
 const InviteFormSchema = SignupViaInviteSchema.omit({ token: true });
 type InviteFormInput = z.infer<typeof InviteFormSchema>;
 
-const today = new Date().toISOString().slice(0, 10);
 
 /** Full-page terminal states for an unusable token. */
 function InviteErrorPage({ title, body }: { title: string; body: string }) {
@@ -204,7 +204,7 @@ function InviteInner() {
 
         <DateField
           label="Date of birth"
-          max={today}
+          max={currentIstDate()}
           disabled={isSubmitting}
           error={errors.dateOfBirth?.message}
           {...register('dateOfBirth')}
