@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { SYSTEM_ACTOR_UUID } from '@skaly/shared';
 import { parse } from 'csv-parse/sync';
 import Fastify from 'fastify';
 import {
@@ -107,6 +108,27 @@ beforeAll(async () => {
       { id: memberId, name: 'Audit Member', email: `team_member${DOMAIN}`, role: 'team_member', active: true },
       { id: actorBId, name: 'Second Actor', email: `freelancer${DOMAIN}`, role: 'freelancer', active: true },
     ])
+    .execute();
+
+  /**
+   * The System Actor, because this suite writes audit rows AS it and
+   * `audit_log.staff_id` is a FK. Locally it is already there from `db:seed`, so
+   * the missing row only ever surfaced in CI — which runs `db:migrate` and no
+   * seeds, making the FK violation look like a broken export rather than a
+   * missing fixture. Inserted here the way every other suite that needs it does
+   * (trigger1, trigger2, ContentCalendarService, AuditService …), and left
+   * behind on cleanup: it is a product row, not this suite's to delete.
+   */
+  await db
+    .insertInto('staff')
+    .values({
+      id: SYSTEM_ACTOR_UUID,
+      name: 'System',
+      email: 'system@skaly.internal',
+      role: 'admin',
+      active: true,
+    })
+    .onConflict((oc) => oc.column('id').doNothing())
     .execute();
 
   app = Fastify();
@@ -328,7 +350,6 @@ describe('⭐ the export streams (ADR-028)', () => {
   });
 
   test('the System Actor reads as "System", not as a uuid or a blank', async () => {
-    const { SYSTEM_ACTOR_UUID } = await import('@skaly/shared');
     const recordId = randomUUID();
     await seed([
       {
