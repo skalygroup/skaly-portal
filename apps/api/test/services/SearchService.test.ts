@@ -31,6 +31,7 @@ const FREELANCER = 'e6000000-0000-4000-8000-000000000003';
 const MANAGER = 'e6000000-0000-4000-8000-000000000004';
 const CLIENT = 'e6000000-0000-4000-8000-0000000000c1';
 const CLIENT_2 = 'e6000000-0000-4000-8000-0000000000c2';
+const SHOOT = 'e6000000-0000-4000-8000-0000000000ff';
 const PERIOD = '2094-06';
 const OTHER_PERIOD = '2094-05';
 const RECORD = 'e6000000-0000-4000-8000-0000000000r1'.replace('r', 'a');
@@ -81,14 +82,24 @@ beforeAll(async () => {
     ])
     .execute();
 
+  // A real shoot row assigned to the freelancer — the freelancer branch of
+  // commentVisibility() is record-scoped, so it needs an actual slot to scope to.
+  await db
+    .insertInto('shoot_schedules')
+    .values({ id: SHOOT, period: PERIOD, client_id: CLIENT, slot_index: 1, freelancer_id: FREELANCER })
+    .onConflict((oc) => oc.column('id').doNothing())
+    .execute();
+
   // Comments: one by the member, one admin reply on the SAME record, one admin
-  // comment on a DIFFERENT record the member never touched.
+  // comment on a DIFFERENT record the member never touched, and one admin comment
+  // on the freelancer's own shoot slot.
   await db
     .insertInto('comments')
     .values([
       { module: 'shoot_planner', record_id: RECORD, period: PERIOD, staff_id: MEMBER, content: `My ${TERM} note`, record_context: 'Slot 1' },
       { module: 'shoot_planner', record_id: RECORD, period: PERIOD, staff_id: ADMIN, content: `Admin reply about ${TERM}`, record_context: 'Slot 1' },
       { module: 'content_calendar', record_id: CLIENT_2, period: PERIOD, staff_id: ADMIN, content: `Private ${TERM} memo`, record_context: 'Cell' },
+      { module: 'shoot_planner', record_id: SHOOT, period: PERIOD, staff_id: ADMIN, content: `Bring the ${TERM} lens`, record_context: 'Zibberwock / Slot 1' },
     ])
     .execute();
 });
@@ -96,6 +107,7 @@ beforeAll(async () => {
 async function cleanupRows(): Promise<void> {
   await db.deleteFrom('comments').where('period', 'in', [PERIOD, OTHER_PERIOD]).execute();
   await db.deleteFrom('tasks').where('period', 'in', [PERIOD, OTHER_PERIOD]).execute();
+  await db.deleteFrom('shoot_schedules').where('id', '=', SHOOT).execute();
 }
 
 afterAll(async () => {
@@ -152,7 +164,7 @@ describe('role scope is parity, not strictness (ADR-015 §2)', () => {
 describe('comments scoping — the real isolation surface', () => {
   test('an admin sees every matching comment', async () => {
     const r = await search.search(TERM, 'all_time', admin, db);
-    expect(r.comments).toHaveLength(3);
+    expect(r.comments).toHaveLength(4);
   });
 
   test('a team_member sees their own comment AND the admin reply on that record', async () => {
@@ -166,9 +178,22 @@ describe('comments scoping — the real isolation surface', () => {
     expect(r.comments.map((c) => c.content)).not.toContain(`Private ${TERM} memo`);
   });
 
-  test('a freelancer sees only their own comments', async () => {
+  // The freelancer scope is BY SHOOT ROW, not by author (ADR-015 §2). They author
+  // nothing here, and still must see the admin comment on their own slot —
+  // 04-APPFLOW §13 notified them about it.
+  test("a freelancer sees comments on their own shoot row, even ones they didn't write", async () => {
     const r = await search.search(TERM, 'all_time', freelancer, db);
-    expect(r.comments).toEqual([]);
+    expect(r.comments.map((c) => c.content)).toEqual([`Bring the ${TERM} lens`]);
+  });
+
+  test('a freelancer sees NOTHING on a slot they are not assigned to', async () => {
+    await db.updateTable('shoot_schedules').set({ freelancer_id: null }).where('id', '=', SHOOT).execute();
+    try {
+      const r = await search.search(TERM, 'all_time', freelancer, db);
+      expect(r.comments).toEqual([]);
+    } finally {
+      await db.updateTable('shoot_schedules').set({ freelancer_id: FREELANCER }).where('id', '=', SHOOT).execute();
+    }
   });
 });
 

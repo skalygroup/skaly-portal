@@ -900,7 +900,11 @@ pnpm exec playwright test      # ENTIRE suite green
 
 ### 13.1 — Manual walk-through
 
-1. **Role gating:** `/settings` as admin (7 panels), manager (4), team_member (no entry). Direct URL to a forbidden panel → 403.
+1. **Role gating:** `/settings` as admin (**8** panels — Staff, Clients, Permissions, Signup
+   Requests, Holidays, Months, Audit Log, Reports, plus the always-present General; the "7"
+   here predates Reports becoming a panel and `ADMIN_PANELS` in `settings.spec.ts` is the
+   count that is asserted), manager (4), team_member (no entry). Direct URL to a forbidden
+   panel → 403.
 2. **⭐ A4:** deactivate a staffer → re-apply with their email → approve → **reinstate prompt, not rejection** → reinstate → original id restored, `account_reactivated` fired. Confirm the old false message is gone.
 3. **Client lifecycle:** deactivate → gone from grids, history intact → reactivate → current-period rows regenerated. Then the same via the bot's `reactivate_client`, through the confirmation card.
 4. **Permissions:** set Allow → Deny → **Inherit** on a bot tool; verify each in the bot immediately. Inherit must show the resolved role default. Grant `chat.access` to a freelancer with their session idle → **their sidebar updates live**.
@@ -910,6 +914,21 @@ pnpm exec playwright test      # ENTIRE suite green
 8. **⭐ Reports (ADR-024):** with `while true; do curl -so /dev/null -w "%{time_total}\n" localhost:3001/v1/health; sleep 0.5; done` running, generate a report. **Health latency stays flat.** Report goes pending → notification → ready → download opens a branded PDF. Return an hour later: the link regenerates without a re-render.
 9. **⭐ Recovery codes:** log in as admin with MFA → use a recovery code → works once, not twice → remaining count correct → regenerate → old codes dead.
 10. **NFR measurement (§1.2), numbers not vibes:** report generation p95 < 10s / p99 < 20s over 10 runs; audit export of 10k rows completes without heap growth; settings panels load < 1.5s.
+
+### 13.1 — MEASURED (2026-07-30)
+
+| Bar | Measured | How |
+|---|---|---|
+| Report generation p95 < 10s / p99 < 20s | **p50 4532ms · p95 4919ms · p99 4919ms** (min 1943, max 4919), 10/10 `ready` | `scripts/measure-report-nfr.ts 10`, real `defaultSpawn` worker thread + real R2 upload, at 40 clients / 930 calendar cells. With n=10 both percentiles ARE the slowest run — a ceiling check, not a distribution |
+| `/v1/health` flat during a render | median **11ms**, max **16ms** | sampled from the Reports panel across a live render; the standing assertion is `test/workers/report-worker.test.ts` (< 500ms) |
+| Settings panels < 1.5s | General **507ms**, the other eight **991–1005ms** | click → panel heading swap + 300ms fetch-quiet, prod build |
+| NFR §1.1 calendar FCP < 1.5s / TTI-proxy < 2.0s | FCP **276ms**, domInteractive **270ms**, at **40** client columns (2× the 31×20 shape) | `E2E_PERF=1` unskips `content-calendar.spec.ts:406` against `next start` |
+| NFR §1.4 scroll 60fps, no long tasks | median **16.7ms**, p95 **16.8ms**, 0 long tasks > 50ms, 2466px scrolled | `content-calendar.spec.ts:437`, same run |
+| 10k-row audit export without heap growth | asserted | `test/routes/audit-log.test.ts:371` (row count through the stream, not a `heapUsed` delta — see its comment) |
+
+The report bar is measured on the **render**, not the HTTP call: ADR-027 made
+`POST /v1/reports/generate` a 202 that returns in milliseconds, so §1.2's 10s/20s can only
+mean generate → `ready`. That is what the harness times.
 
 `▶ /ponytail` — full-sprint review before the close-out checklist.
 
@@ -923,7 +942,9 @@ PRE-FLIGHT
   [ ] ADR-023..027 committed
 
 MIGRATIONS
-  [ ] staff_email_unique is now PARTIAL (WHERE deleted_at IS NULL) — mirrors migration 030
+  [x] staff_email_unique is now PARTIAL (WHERE deleted_at IS NULL) — mirrors migration 030
+      — verified against the live DB: `CREATE UNIQUE INDEX staff_email_unique ON
+      public.staff USING btree (email) WHERE (deleted_at IS NULL)`
   [ ] Migration comment records: non-additive but non-breaking (relaxes a constraint)
   [ ] reports table created (or confirmed pre-existing) + grants
   [ ] Reverse migrations exist and were exercised
@@ -977,7 +998,19 @@ RECOVERY CODES (carried since Sprint 8 STEP 8.4)
   [ ] Login entry point + remaining-count banner + Profile regenerate
   [x] ⭐ Codes issued AT ENROLLMENT, gated behind "I've saved these" (ADR-031)
       — incl. the 501 fallback path, which used to finish with zero codes
-  [ ] Live enrollment verified on staging (local Supabase 501s; unit-mocked only)
+  [x] Live enrollment verified — against REAL Supabase, by `mfa.spec.ts`, not on staging.
+      ⭐ THE PREMISE OF THE OLD ITEM WAS WRONG. "Local Supabase 501s" reads as an
+      environment limit; it is a LIBRARY one. `AuthService.enrollMfa` 501s because the
+      installed @supabase/auth-js 2.108.2 admin client exposes no `mfa.enrollFactor`
+      (AuthService.ts:894, shape documented at :120) — staging runs the same SDK and
+      would 501 identically and take the same client fallback. There was nothing
+      staging could show that this machine could not.
+      What WAS unproven is narrower: `mfa.spec.ts` treated the acknowledgment gate as
+      optional (`if (await ack.isVisible())`), so a live enrollment finishing with ZERO
+      codes passed it — the exact hole ADR-031 closed, invisible to the only test that
+      meets real Supabase. Now a hard assertion plus `count(*) = 10` on
+      mfa_recovery_codes (unambiguous: resetEnrollment() deletes them in beforeEach).
+      Observed on the wire: enroll 501 → fallback → recovery/regenerate → 10 rows.
 
 FRONTEND
   [ ] Nav derived from the permission source, not a hardcoded role list
@@ -1001,13 +1034,24 @@ TESTS + NFRs
   [x] Full API, frontend, and Playwright suites green — API 837, web 280,
       Playwright 91 passed / 2 skipped (the two chromium-gated content-calendar
       perf checks, §1.1 FCP and §1.4 60fps; nothing accidental)
+  [x] Close-out run (2026-07-30): API 838 · web 280 · Playwright 180 passed / 6 skipped
+      / 0 failed over 19.7m, BOTH engines (186 tests). The earlier "91 / 2" was a
+      one-engine count. All 6 skips deliberate: 2×2 the E2E_PERF-gated calendar perf
+      gates, plus 2 webkit-only login cases that mutate shared staff state
+      (login.spec.ts:144). Both servers were killed first, so Playwright ran the build
+      itself — `next build` output in the log, global-setup reporting `rate limit
+      100000` (which only happens when it starts the API rather than reusing one).
   [x] ⭐ AGAINST A FRESH BUILD. The web webServer is `pnpm build && pnpm start`
       with reuseExistingServer, so a `next start` left up from an earlier session
       is reused and the BUILD STEP NEVER RUNS. Three green full-suite runs here
       tested a build that predated the sprint's product changes. Rate limiting
       fails loudly; this fails GREEN. Check the server's CreationDate before
       trusting an E2E result that is meant to exercise a product change.
-  [ ] A4 re-hire E2E passes end to end
+  [x] A4 re-hire E2E passes end to end — settings.spec.ts:161, green in the close-out run
+      on both engines. It asserts the PRESENTATION too, which is what 13.1 #2 was
+      watching for: the heading `${name} previously worked here` and the button
+      `Reinstate their account` (not a rejection, not an error toast), then the original
+      id back with active=true / deleted_at=null and the request `approved`.
   [x] Permission-push two-context E2E passes — on the `subscribed` gate, not a
       frame count (see below)
   [x] ⭐ Socket-consumer test sweep: every event name a frontend consumer subscribes
@@ -1019,11 +1063,37 @@ TESTS + NFRs
       barrier: engine.io joins over long-polling before the upgrade, so the
       room:join ack is invisible to page.on('websocket') on a warm reload
       (measured). The barrier is the app's own `enabled: subscribed` gate.
-  [ ] Report p95 < 10s / p99 < 20s MEASURED over 10 runs
-  [ ] Every new test fails without its fix
-  [ ] pnpm typecheck + pnpm lint clean
+  [x] Report p95 < 10s / p99 < 20s MEASURED over 10 runs — p95 4919ms / p99 4919ms,
+      10/10 ready, at 40 clients. See the 13.1 MEASURED table.
+  [x] Every new test fails without its fix — the close-out's own two, checked by
+      reverting each: the freelancer comment-scope test returns [] instead of the admin
+      comment under the old author-scoped predicate; the RTL timeout fix is a config
+      raise with no assertion of its own (the flake it fixes is recorded in
+      apps/web/test-setup.ts).
+  [x] pnpm typecheck + pnpm lint clean
   [ ] /ponytail run at each build step — no outstanding flags
 ```
+
+### 13.2 — What the close-out did NOT verify directly
+
+Recorded rather than quietly ticked:
+
+- **13.1's ten items were walked, not all by hand.** Live in the browser: role gating (the
+  nav is the asserted `ADMIN_PANELS`), Months (an unlock with an empty reason → `DELETE
+  /v1/months/2096-03/lock` 400, dialog stays open with guidance, row still Locked — and a
+  stored reason from today rendering in HISTORY), Reports (202 → *Generating* at 679ms →
+  *Ready + Download* at 2666ms via socket, no reload), the destructive-dialog copy
+  ("They will be signed out immediately … you can reinstate them later from Former
+  staff"), and the panel-load timings. Delegated to specs that ran green in the same
+  session rather than re-driven by hand: A4 (above), client lifecycle + `reactivate_client`,
+  the three-state permission push, the signup rejection-note leak check, audit
+  filter/expand/export, and the recovery-code login.
+- **The audit CSV was not opened in a spreadsheet.** The comma/quote/newline round-trip
+  rests on `test/routes/audit-log.test.ts`, which asserts it on the produced bytes.
+- **"Return an hour later: the link regenerates without a re-render"** was not waited out;
+  `ReportService.test.ts` covers the cheap-revisit path (ADR-027 §7).
+- **Deployment items** (A1 hotfix deployed, reverse migrations exercised) are unchanged from
+  when they were ticked; nothing in this session re-proved them.
 
 ### 13.3 — Commit
 
@@ -1044,6 +1114,21 @@ PR to `main`; CI fully green before merge. Merge, then `git checkout main && git
 ## DECISIONS TO MAKE BEFORE SPRINT 12
 
 - **⚠️ The comment system is the last unbuilt dependency of two shipped features.** Sprint 9's global search has a `comments` category that has returned empty for three sprints (no write path), and `new_comment` is one of ADR-017's remaining deferred notification types. Sprint 12 closes both. Decide the visibility rule **before** building, because search already queries it: API-Contract says a team_member sees *own comments + all manager/admin replies in the same record*. That predicate must be written **once** and shared by `CommentService.list` and `SearchService`'s comments query — if they drift, search leaks or hides comments relative to the module view, and only one of those failures is visible.
+
+  **DECIDED AND BUILT (Sprint 11 close-out).** `apps/api/src/lib/comment-visibility.ts` is
+  that one predicate; `SearchService.searchComments` now passes it to `.where()` and has no
+  role branch of its own. Sprint 12's `CommentService.list` imports the same function — there
+  is no second place to get it wrong.
+
+  Writing it once settled the one branch that was wrong: **freelancer scope is by SHOOT ROW,
+  not by author.** Search filtered `comments.staff_id = self`, but ADR-015 §2 says "comments
+  only on their own shoot rows", and 04-APPFLOW §13 notifies the assigned freelancer of every
+  new comment on their shoot — so author-scoping pointed that notification at a comment they
+  could not read. Now `module='shoot_planner' AND EXISTS(shoot_schedules WHERE id=record_id
+  AND freelancer_id=self)`, mirroring `ShootPlannerService`'s own `freelancer_id = self`
+  (ADR-011). Access ends when the assignment does, exactly as `getSlot` already 404s them.
+  It was stricter than the owning service, which ADR-015 §2 calls a parity break that fails
+  safe — the kind nobody notices.
 
 - **Attachment orphan cron: what counts as an orphan, and how old?** ADR-007 deferred this. An R2 object whose `task_attachments` row never materialised (a presign issued, upload completed, confirm never called) is a genuine orphan. But an object mid-upload looks identical. The presign window is 15 minutes (`UPLOAD_EXPIRY_SECONDS` = 900), so anything unconfirmed for **more than an hour** is safely dead. *Recommendation: sweep R2 keys with no matching row older than 1 hour; log every deletion to `audit_log` with the System Actor. Never delete based on a DB-side "pending" flag alone — the crash you are cleaning up after is exactly the one that fails to set it.*
 

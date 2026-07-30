@@ -12,6 +12,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    setupFiles: ['./test-setup.ts'],
     include: ['**/*.test.{ts,tsx}'],
     // No web tests yet; don't fail CI until they exist (vitest 4 exits 1 on no tests).
     passWithNoTests: true,

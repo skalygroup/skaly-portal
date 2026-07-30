@@ -81,16 +81,23 @@ test.describe('mfa enrollment — live', () => {
       timeout: 30_000,
     });
 
-    // Continue is gated on the acknowledgement when codes were actually issued.
-    // The backend mints them; on the client-side fallback path the list is empty
-    // and the gate is absent — handle both rather than assume which ran.
+    /**
+     * ⭐ ADR-031's Rule, on the only path this environment actually runs.
+     *
+     * The gate is NOT optional. It used to be asserted as "if it's there" —
+     * which is a tautology on the branch that matters: `/v1/auth/mfa/enroll`
+     * 501s here (the installed auth-js admin client has no `mfa.enrollFactor`,
+     * see AuthService.ts), so this test always takes the client fallback, and
+     * that fallback is exactly the one that used to finish with zero codes and
+     * no gate. Tolerating a missing gate made the hole ADR-031 closed invisible
+     * to the one test that runs against real Supabase.
+     */
     const cont = page.getByRole('button', { name: 'Continue to portal' });
     const ack = page.getByText(/saved my recovery codes somewhere secure/);
-    if (await ack.isVisible()) {
-      await expect(cont).toBeDisabled();
-      await ack.click();
-      await expect(cont).toBeEnabled();
-    }
+    await expect(ack, 'ADR-031 §3: the acknowledgment gate applies to BOTH paths').toBeVisible();
+    await expect(cont).toBeDisabled();
+    await ack.click();
+    await expect(cont).toBeEnabled();
     await cont.click();
 
     // Landed inside the portal — not bounced back to setup or to the challenge.
@@ -103,6 +110,19 @@ test.describe('mfa enrollment — live', () => {
       c.query('SELECT mfa_enrolled FROM staff WHERE email = $1', [MFA_EMAIL]),
     );
     expect(rows[0]?.mfa_enrolled).toBe(true);
+
+    // ⭐ And the codes genuinely exist. Ten shown on screen proves the mint
+    // returned; this proves it PERSISTED, which is what the redeem path spends.
+    // Unambiguous because resetEnrollment() deleted this account's codes in
+    // beforeEach — a leftover set from an earlier run cannot be what is counted.
+    const codes = await withDb((c) =>
+      c.query(
+        `SELECT count(*)::int AS n FROM mfa_recovery_codes
+          WHERE staff_id = (SELECT id FROM staff WHERE email = $1)`,
+        [MFA_EMAIL],
+      ),
+    );
+    expect(codes.rows[0]?.n, 'ADR-031 Rule: nobody leaves enrollment without codes').toBe(10);
   });
 
   test('a wrong code is rejected and no recovery codes are revealed', async ({ page }) => {

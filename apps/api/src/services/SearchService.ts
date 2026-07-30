@@ -27,6 +27,7 @@
 import { sql, type Expression, type SqlBool } from 'kysely';
 
 import { getCurrentPeriod, type Executor } from './BaseService.js';
+import { commentVisibility } from '../lib/comment-visibility.js';
 import { softDeletable } from '../lib/queries.js';
 
 import type { CurrentUser } from './AttendanceService.js';
@@ -166,12 +167,9 @@ export class SearchService {
   }
 
   /**
-   * comments — the real isolation surface alongside freelancer tasks.
-   *
-   *   admin/manager → all
-   *   team_member   → their own, PLUS manager/admin comments on a record they have
-   *                   themselves commented on (a reply they need to see)
-   *   freelancer    → their own only
+   * comments — the real isolation surface alongside freelancer tasks. The role
+   * predicate is NOT written here: it is `commentVisibility()`, shared verbatim with
+   * `GET /v1/comments` so search and the module panel cannot drift (ADR-015 Rule).
    */
   private async searchComments(
     q: string,
@@ -188,38 +186,10 @@ export class SearchService {
         'comments.record_context as recordContext',
         'comments.period as period',
       ])
-      .where(this.tsMatch(sql.ref('comments.search_vector'), q));
+      .where(this.tsMatch(sql.ref('comments.search_vector'), q))
+      .where(commentVisibility(currentUser));
 
     if (period) query = query.where('comments.period', '=', period);
-
-    if (currentUser.role === 'freelancer') {
-      query = query.where('comments.staff_id', '=', currentUser.staffId);
-    } else if (currentUser.role === 'team_member') {
-      const self = currentUser.staffId;
-      query = query.where((eb) =>
-        eb.or([
-          eb('comments.staff_id', '=', self),
-          // A manager/admin reply on a record this member commented on.
-          eb.and([
-            eb.exists(
-              eb
-                .selectFrom('staff')
-                .select(sql`1`.as('one'))
-                .whereRef('staff.id', '=', 'comments.staff_id')
-                .where('staff.role', 'in', ['admin', 'manager']),
-            ),
-            eb.exists(
-              eb
-                .selectFrom('comments as mine')
-                .select(sql`1`.as('one'))
-                .whereRef('mine.record_id', '=', 'comments.record_id')
-                .whereRef('mine.module', '=', 'comments.module')
-                .where('mine.staff_id', '=', self),
-            ),
-          ]),
-        ]),
-      );
-    }
 
     return query
       .orderBy(this.tsRank(sql.ref('comments.search_vector'), q), 'desc')
