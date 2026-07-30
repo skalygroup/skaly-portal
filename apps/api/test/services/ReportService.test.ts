@@ -83,6 +83,46 @@ async function settled(id: string, timeoutMs = 10_000) {
   }
 }
 
+/**
+ * Wait for the report_ready notification belonging to ONE report.
+ *
+ * `settled()` is not a barrier for it: settle() marks the row and THEN notifies,
+ * so a test that polls the row and immediately reads the notification is racing a
+ * write it never waited for. Locally the insert lands inside the same 25ms poll
+ * tick and the race is invisible; on a 2-core CI runner it loses, and
+ * `executeTakeFirstOrThrow` reports it as `no result` on the notifications query
+ * — which reads like a missing notification rather than a missing await.
+ *
+ * Keyed on `payload->>'reportId'` (the same idiom the dedup assertion below uses)
+ * rather than `ORDER BY created_at DESC`: every test here notifies the same
+ * adminId, so newest-wins would hand back the PREVIOUS test's row while this
+ * test's own notification is still in flight — passing or failing on the wrong
+ * row instead of waiting for the right one.
+ */
+type NotifRow = { id: string; type: string; payload: unknown };
+
+async function reportNotifications(
+  reportId: string,
+  timeoutMs = 10_000,
+): Promise<[NotifRow, ...NotifRow[]]> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const rows = await db
+      .selectFrom('notifications')
+      .select(['id', 'type', 'payload'])
+      .where(sql<boolean>`payload->>'reportId' = ${reportId}`)
+      .execute();
+    // Destructured rather than length-checked so the non-empty guarantee is in the
+    // TYPE — callers read [0] without a `!` that would outlive the guard.
+    const [first, ...rest] = rows;
+    if (first) return [first, ...rest];
+    if (Date.now() > deadline) {
+      throw new Error(`no report_ready notification for report ${reportId} after ${timeoutMs}ms`);
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 async function cleanup() {
   const mine = db.selectFrom('staff').select('id').where('email', 'like', `%${DOMAIN}`);
   await db.deleteFrom('notifications').where('staff_id', 'in', mine).execute();
@@ -172,13 +212,7 @@ describe('⭐ the four exit paths all mark the row — none leaves it pending', 
     expect(row.file_key).toBe(key);
     expect(row.completed_at).not.toBeNull();
 
-    const notif = await db
-      .selectFrom('notifications')
-      .select(['type', 'payload'])
-      .where('staff_id', '=', adminId)
-      .where('type', '=', 'report_ready')
-      .orderBy('created_at', 'desc')
-      .executeTakeFirstOrThrow();
+    const [notif] = await reportNotifications(reportId);
     // ⭐ Audit M-08: the payload carries the reportId, never a presigned URL — the
     // link expires in 24h and the notification row does not.
     expect(notif.payload).toMatchObject({ reportId, status: 'ready' });
@@ -194,13 +228,7 @@ describe('⭐ the four exit paths all mark the row — none leaves it pending', 
     expect(row.error_message).toBe('Render blew up');
 
     // A failed request is a visible row, never a silent nothing (ADR-027 §8).
-    const notif = await db
-      .selectFrom('notifications')
-      .select('payload')
-      .where('staff_id', '=', adminId)
-      .where('type', '=', 'report_ready')
-      .orderBy('created_at', 'desc')
-      .executeTakeFirstOrThrow();
+    const [notif] = await reportNotifications(reportId);
     expect(notif.payload).toMatchObject({ status: 'failed' });
   });
 
@@ -251,14 +279,10 @@ describe('⭐ the four exit paths all mark the row — none leaves it pending', 
     // The first outcome wins; the second must not overwrite it.
     expect(row.error_message).toContain('first');
 
-    const notifs = await db
-      .selectFrom('notifications')
-      .select('id')
-      .where('staff_id', '=', adminId)
-      // notifications has no record_id COLUMN — the id lives in the JSONB payload,
-      // which is also what NotificationService's dedup guard matches on.
-      .where(sql<boolean>`payload->>'reportId' = ${reportId}`)
-      .execute();
+    // notifications has no record_id COLUMN — the id lives in the JSONB payload,
+    // which is also what NotificationService's dedup guard matches on, and what
+    // the helper waits on so a count of 0 cannot masquerade as dedup working.
+    const notifs = await reportNotifications(reportId);
     expect(notifs, 'one report, one notification').toHaveLength(1);
   });
 });
