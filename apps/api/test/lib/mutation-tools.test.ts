@@ -13,7 +13,7 @@ import type { CurrentUser } from '../../src/services/AttendanceService.js';
 import type { DB } from '@skaly/shared';
 
 /**
- * Descriptor-shape + wiring smoke for the 11 mutation tools (Sprint 9 STEP 4).
+ * Descriptor-shape + wiring smoke for the 12 mutation tools (Sprint 9 STEP 4 + ADR-026).
  *
  * These assert the contract every tool must satisfy for the STEP 5 interceptor to
  * work — not the business rules, which live in the services and are already tested
@@ -44,10 +44,10 @@ afterAll(async () => {
 });
 
 describe('the mutation tool registry', () => {
-  test('ships exactly 11 mutation tools, 22 in total', () => {
-    expect(MUTATION_TOOLS).toHaveLength(11);
+  test('ships exactly 12 mutation tools, 23 in total', () => {
+    expect(MUTATION_TOOLS).toHaveLength(12);
     expect(QUERY_TOOLS).toHaveLength(11);
-    expect(ALL_TOOLS).toHaveLength(22);
+    expect(ALL_TOOLS).toHaveLength(23);
   });
 
   test('every mutation tool carries isMutation: true, and no query tool does', () => {
@@ -57,7 +57,7 @@ describe('the mutation tool registry', () => {
     expect(QUERY_TOOLS.some((t) => t.isMutation)).toBe(false);
   });
 
-  test('the registry, the permission list and ROLE_DEFAULTS agree on all 22 names', () => {
+  test('the registry, the permission list and ROLE_DEFAULTS agree on all 23 names', () => {
     expect([...ALL_TOOLS].map((t) => t.name).sort()).toEqual([...BOT_TOOL_NAMES].sort());
     expect(MUTATION_TOOLS.map((t) => t.name).sort()).toEqual([...BOT_MUTATION_TOOL_NAMES].sort());
     // A name in one list and not the other is a tool that silently never resolves.
@@ -136,7 +136,7 @@ describe('a query tool must surface the id its mutation counterpart needs', () =
    * to obtain one is a query tool's output. Any hand-built line that drops the id
    * makes that mutation unreachable by name. This is the lock.
    */
-  describe('ADR-019 — the id contract, for all 11 mutation tools', () => {
+  describe('ADR-019 — the id contract, for all 12 mutation tools', () => {
     /** mutation tool → the id it consumes, and the query tool that must surface it. */
     // `rest` is the tool's other required input — just enough for the round-trip.
     const ID_SOURCE: Record<
@@ -151,6 +151,10 @@ describe('a query tool must surface the id its mutation counterpart needs', () =
       update_calendar_cell: { field: 'cellId', queryTool: 'get_content_calendar', rest: { status: 'Posted' } },
       remove_holiday: { field: 'holidayId', queryTool: 'get_holiday_list', rest: {} },
       deactivate_client: { field: 'clientId', queryTool: 'get_client_summary', rest: {} },
+      // Reachable only because list({ includeInactive: true }) now drops the
+      // soft-delete filter — a deactivated client is soft-deleted by definition,
+      // so before that fix no mode of get_client_summary could surface this id.
+      reactivate_client: { field: 'clientId', queryTool: 'get_client_summary', rest: {} },
     };
     /** Creates — there is no record to look up yet, so no id to surface. */
     const NO_TARGET = ['create_task', 'add_holiday', 'add_client'];
@@ -420,6 +424,7 @@ describe('summary specs render through buildSummary', () => {
       ['remove_holiday', { holidayId: 'x' }, { period: '2026-08', date: '2026-08-15', name: 'Independence Day' }],
       ['add_client', { name: 'Naaz', shootSlotsPerMonth: 4 }, { period: '2026-07' }],
       ['deactivate_client', { clientId: 'x' }, { name: 'Naaz', active: true }],
+      ['reactivate_client', { clientId: 'x' }, { name: 'Naaz', active: false, isInternal: false, period: '2026-07' }],
     ];
 
     expect(fixtures).toHaveLength(MUTATION_TOOLS.length);

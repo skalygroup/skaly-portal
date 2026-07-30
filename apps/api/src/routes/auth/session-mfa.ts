@@ -3,6 +3,10 @@ import {
   PasswordResetConfirmSchema,
   MfaVerifySchema,
   MfaEnrollResponseSchema,
+  MfaRecoveryRedeemSchema,
+  MfaRecoveryRedeemResponseSchema,
+  MfaRecoveryRegenerateResponseSchema,
+  MfaRecoveryStatusResponseSchema,
   SessionRefreshResponseSchema,
 } from '@skaly/shared/schemas/auth';
 import { z } from 'zod';
@@ -54,6 +58,13 @@ function readAal(authorization: string | undefined): string | undefined {
  *   DELETE /v1/auth/session         — revoke the caller's session (204)
  *   POST   /v1/auth/mfa/enroll      — start TOTP enrollment (QR + recovery codes)
  *   POST   /v1/auth/mfa/verify      — confirm enrollment (204)
+ *
+ * Sprint 11 STEP 8 — the recovery-code half:
+ *
+ *   POST   /v1/auth/mfa/recovery            — spend a code (aal1 is enough)
+ *   POST   /v1/auth/mfa/failure             — report a failed TOTP challenge
+ *   GET    /v1/auth/mfa/recovery            — remaining count (never the codes)
+ *   POST   /v1/auth/mfa/recovery/regenerate — fresh set, returned once (aal2)
  */
 export async function sessionMfaRoutes(app: FastifyInstance) {
   const authService = new AuthService(
@@ -167,6 +178,97 @@ export async function sessionMfaRoutes(app: FastifyInstance) {
           request.body.code,
         );
         return reply.status(204).send();
+      } catch (err) {
+        return sendAuthError(err, reply);
+      }
+    },
+  );
+
+  // ── Recovery-code redeem (authenticated, aal1 is enough) ────────────
+  //
+  // NOT aal2-gated, and that is the whole point: the caller has passed password
+  // auth and cannot pass the authenticator step, which is the situation this
+  // endpoint exists for. Requiring aal2 would make it reachable only by people
+  // who do not need it.
+  r.post(
+    '/auth/mfa/recovery',
+    {
+      preHandler: [app.verifyJwt],
+      schema: {
+        body: MfaRecoveryRedeemSchema,
+        response: { 200: MfaRecoveryRedeemResponseSchema },
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      try {
+        const result = await authService.redeemRecoveryCode(
+          request.user.id,
+          request.user.supabase_uid,
+          request.body.code,
+        );
+        return reply.status(200).send(result);
+      } catch (err) {
+        return sendAuthError(err, reply);
+      }
+    },
+  );
+
+  // ── Report a failed TOTP challenge (authenticated) ──────────────────
+  //
+  // The login challenge runs client-side against the user's own Supabase
+  // session — the API never sees the TOTP code — so this is the only way a
+  // failed authenticator attempt can reach the SHARED failure budget. Without
+  // it the "3 attempts" in AUTH-MATRIX §10 would silently mean three per
+  // credential type.
+  //
+  // Self-inflicted only: it is authenticated, so the worst a caller can do with
+  // it is lock themselves out for 15 minutes.
+  r.post(
+    '/auth/mfa/failure',
+    { preHandler: [app.verifyJwt], schema: { security: [{ bearerAuth: [] }] } },
+    async (request, reply) => {
+      await authService.recordMfaFailure(request.user.id);
+      return reply.status(204).send();
+    },
+  );
+
+  // ── Remaining recovery codes (authenticated) ────────────────────────
+  // The COUNT only. There is no endpoint that returns the codes themselves.
+  r.get(
+    '/auth/mfa/recovery',
+    {
+      preHandler: [app.verifyJwt],
+      schema: { response: { 200: MfaRecoveryStatusResponseSchema }, security: [{ bearerAuth: [] }] },
+    },
+    async (request) => ({
+      remainingCodes: await authService.remainingRecoveryCodes(request.user.id),
+    }),
+  );
+
+  // ── Regenerate recovery codes (authenticated, aal2) ─────────────────
+  // aal2 HERE, unlike redeem: issuing a fresh set from a session that never
+  // cleared the authenticator step would let a stolen password mint its own
+  // recovery codes and invalidate the real owner's.
+  r.post(
+    '/auth/mfa/recovery/regenerate',
+    {
+      preHandler: [app.verifyJwt],
+      schema: {
+        response: { 200: MfaRecoveryRegenerateResponseSchema },
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      try {
+        if (readAal(request.headers.authorization) !== 'aal2') {
+          // Thrown rather than replied so it goes out through sendAuthError —
+          // the route declares a 200 response schema, and a direct 403 reply
+          // would have to satisfy it.
+          throw new AuthError('MFA_REQUIRED', 403, 'Multi-factor verification required.');
+        }
+        const result = await authService.regenerateRecoveryCodes(request.user.id);
+        return reply.status(200).send(result);
       } catch (err) {
         return sendAuthError(err, reply);
       }

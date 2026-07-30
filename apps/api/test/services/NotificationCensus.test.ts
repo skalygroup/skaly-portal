@@ -2,7 +2,12 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { NOTIFICATION_REGISTRY, NOTIFICATION_TYPES, SPRINT_10_DEFERRED_TYPES } from '@skaly/shared';
+import {
+  NOTIFICATION_REGISTRY,
+  NOTIFICATION_TYPES,
+  DEFERRED_NOTIFICATION_TYPES,
+  SHIPPED_THROUGH_SPRINT,
+} from '@skaly/shared';
 import { describe, test, expect } from 'vitest';
 
 import type { NotificationType } from '@skaly/shared';
@@ -55,18 +60,18 @@ async function producersByType(): Promise<Map<NotificationType, string[]>> {
   return found;
 }
 
-/** The 11 with a producer as of Sprint 10 — the complement of the deferred list. */
-const WITH_PRODUCERS = NOTIFICATION_TYPES.filter((t) => !SPRINT_10_DEFERRED_TYPES.includes(t));
+/** The 13 with a producer as of Sprint 11 — the complement of the deferred list. */
+const WITH_PRODUCERS = NOTIFICATION_TYPES.filter((t) => !DEFERRED_NOTIFICATION_TYPES.includes(t));
 
 describe('every type the census claims has a producer, has one in src', () => {
-  test('⭐ all 11 resolve to a real emitter', async () => {
+  test('⭐ all 13 resolve to a real emitter', async () => {
     const producers = await producersByType();
     const missing = WITH_PRODUCERS.filter((t) => !producers.has(t));
 
     // A failure here means a producer was deleted or renamed. The type stays valid
     // everywhere else, so nothing else in the suite would notice.
     expect(missing, 'types claiming a producer that src does not emit').toEqual([]);
-    expect(WITH_PRODUCERS).toHaveLength(11);
+    expect(WITH_PRODUCERS).toHaveLength(13);
   });
 
   test('each producer lives where the census says it does', async () => {
@@ -85,6 +90,9 @@ describe('every type the census claims has a producer, has one in src', () => {
       signup_rejected: 'services/AuthService.ts',
       client_updated: 'services/ClientService.ts',
       mention: 'services/ChatService.ts',
+      // Sprint 11 (ADR-026 staff reinstate, ADR-027 off-loop reports).
+      account_reactivated: 'services/AuthService.ts',
+      report_ready: 'services/ReportService.ts',
     };
 
     for (const type of WITH_PRODUCERS) {
@@ -93,32 +101,32 @@ describe('every type the census claims has a producer, has one in src', () => {
     }
   });
 
-  test('⭐ the deferred seven emit NOTHING — no invented emitters', async () => {
+  test('⭐ the deferred five emit NOTHING — no invented emitters', async () => {
     const producers = await producersByType();
 
     // ADR-020 decision 4: a type with no producer is named and dated, never invented.
     // If one of these acquires an emitter, it has stopped being deferred and both this
-    // test and SPRINT_10_DEFERRED_TYPES must be updated deliberately.
-    for (const type of SPRINT_10_DEFERRED_TYPES) {
+    // test and DEFERRED_NOTIFICATION_TYPES must be updated deliberately.
+    for (const type of DEFERRED_NOTIFICATION_TYPES) {
       expect(producers.get(type) ?? [], `${type} should have no producer yet`).toEqual([]);
     }
-    expect(SPRINT_10_DEFERRED_TYPES).toHaveLength(7);
+    expect(DEFERRED_NOTIFICATION_TYPES).toHaveLength(5);
   });
 
-  test('11 + 7 accounts for the whole enum, with nothing double-counted', () => {
-    expect(WITH_PRODUCERS.length + SPRINT_10_DEFERRED_TYPES.length).toBe(18);
-    const overlap = WITH_PRODUCERS.filter((t) => SPRINT_10_DEFERRED_TYPES.includes(t));
+  test('13 + 5 accounts for the whole enum, with nothing double-counted', () => {
+    expect(WITH_PRODUCERS.length + DEFERRED_NOTIFICATION_TYPES.length).toBe(18);
+    const overlap = WITH_PRODUCERS.filter((t) => DEFERRED_NOTIFICATION_TYPES.includes(t));
     expect(overlap).toEqual([]);
   });
 });
 
 describe('the census matches what the registry claims', () => {
-  test('producerSprint ≤ 10 exactly when a producer exists', async () => {
+  test('producerSprint ≤ SHIPPED_THROUGH_SPRINT exactly when a producer exists', async () => {
     const producers = await producersByType();
 
     for (const type of NOTIFICATION_TYPES) {
       const hasProducer = producers.has(type);
-      const claimsProducer = NOTIFICATION_REGISTRY[type].producerSprint <= 10;
+      const claimsProducer = NOTIFICATION_REGISTRY[type].producerSprint <= SHIPPED_THROUGH_SPRINT;
       // The registry's producerSprint is the DOCUMENTED claim; src is the truth. This
       // is the assertion that caught account_reactivated claiming Sprint 2 while
       // having no write path at all.

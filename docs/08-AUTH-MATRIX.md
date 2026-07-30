@@ -118,9 +118,12 @@ Layer 3 — Service Layer (per-operation)
 | POST /v1/auth/invite | ✅ | ❌ | ❌ | ❌ |
 | GET /v1/settings/signup-requests | ✅ | ❌ | ❌ | ❌ |
 | POST .../approve / .../reject | ✅ | ❌ | ❌ | ❌ |
+| POST .../signup-requests/:id/reinstate | ✅ | ❌ | ❌ | ❌ |
 | PUT /v1/staff/:id/deactivate | ✅ | ❌ | ❌ | ❌ |
 | PUT /v1/staff/:id/reactivate | ✅ | ❌ | ❌ | ❌ |
+| GET /v1/staff/:id/permissions | ✅ | ❌ | ❌ | ❌ |
 | PUT /v1/staff/:id/permissions/:key | ✅ | ❌ | ❌ | ❌ |
+| DELETE /v1/staff/:id/permissions/:key | ✅ | ❌ | ❌ | ❌ |
 | PUT /v1/staff/:id/mfa/reset | ✅ | ❌ | ❌ | ❌ |
 | POST/DELETE /v1/months/:period/lock | ✅ | ❌ | ❌ | ❌ |
 | GET /v1/audit-log | ✅ | ❌ | ❌ | ❌ |
@@ -262,6 +265,19 @@ Supabase JWT payload:
 | Admin/Manager — first login, mfa_enrolled = false | Redirect to /mfa-setup before any portal route |
 | Admin/Manager — login, mfa_enrolled = true | Redirected to TOTP verification screen after password auth |
 | Team Member / Freelancer — any login | No MFA required; direct to /home |
-| Admin/Manager — 3 failed TOTP attempts | 15-minute lockout with code `MFA_LOCKED` |
-| Lost authenticator | Use recovery codes; if exhausted, another admin resets via Settings |
+| Admin/Manager — 3 failed MFA attempts | 15-minute lockout with code `MFA_LOCKED`. **One budget for every credential type** — TOTP and recovery-code failures share the counter (Sprint 11 STEP 8) |
+| Lost authenticator | Use a recovery code at `/mfa-challenge` → *"Lost your authenticator?"*. Spending one clears the factor and routes to `/mfa-setup` to enrol a new authenticator; the remaining codes survive. If exhausted, another admin resets via Settings |
 | Admin resets MFA for a user | staff.mfa_enrolled = false; user re-enrolls on next login |
+
+> **Why a recovery code cannot simply let you in.** The portal's MFA gate reads the `aal2`
+> claim on the Supabase token, and only Supabase's own challenge+verify mints it — the API
+> never sees a TOTP code and cannot forge the claim. So the redeem path proves account
+> ownership and clears the factor rather than "completing the session". Enrolling a new
+> authenticator is also what losing the device actually requires. The rejected alternative was
+> a server-side flag the middleware accepts *instead of* aal2, i.e. a second way past the MFA
+> gate — and a second way past a gate is a second thing to get wrong.
+>
+> This closes the hole that made the row above dishonest: recovery codes had been generated
+> and stored since Sprint 8 with no endpoint that could spend them, so "use recovery codes"
+> resolved to "ask another admin" — which is no answer when the locked-out person is the only
+> admin.

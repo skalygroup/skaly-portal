@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { Upload } from '@aws-sdk/lib-storage';
 import { sql, type Kysely, type Transaction } from 'kysely';
@@ -7,6 +7,8 @@ import { AttendanceService } from './AttendanceService.js';
 import { AuditService } from './AuditService.js';
 import { NotificationService } from './NotificationService.js';
 import { transactionWithEmits } from '../lib/emit-after-commit.js';
+import { AppError } from '../lib/errors.js';
+import { softDelete } from '../lib/queries.js';
 
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { DB } from '@skaly/shared';
@@ -36,6 +38,19 @@ export class AuthError extends Error {
 
 // 5-minute TTL, matching the auth plugin's staff_lookup cache (STEP 4).
 const STAFF_CACHE_TTL_SECONDS = 300;
+
+/**
+ * ONE failure budget for the whole MFA step, shared by every credential type
+ * (AUTH-MATRIX §10, ERROR-HANDLING §2 `MFA_LOCKED`).
+ *
+ * The sharing is the point, not an implementation detail. A recovery code and a
+ * TOTP code are two ways through the same gate, so giving each its own counter
+ * would hand an attacker 3 + 3 guesses and call it a 3-attempt lockout. One key,
+ * both paths.
+ */
+const MFA_MAX_FAILURES = 3;
+const MFA_LOCKOUT_SECONDS = 15 * 60;
+const mfaFailureKey = (staffId: string) => `mfa:fail:${staffId}`;
 const staffCacheKey = (supabaseUid: string) => `staff_lookup:${supabaseUid}`;
 
 // Where Supabase's recovery email lands the user to set a new password. The
@@ -512,15 +527,45 @@ export class AuthService {
         throw new AuthError('ALREADY_REVIEWED', 409, 'This request has already been reviewed.');
       }
 
-      // b. H-04 backstop: a staff row may have appeared (any state) since the
-      // request was filed. If so, mark this request rejected with an internal
-      // note (committed by returning, not throwing) and signal the caller.
+      // b. A staff row may have appeared since the request was filed. ONE lookup,
+      // three outcomes (ADR-026 §4) — and which one turns entirely on whether that
+      // row is alive:
+      //
+      //   none         → proceed, this is an ordinary approval
+      //   LIVE row     → H-04 backstop: reject with an internal note, 409. Correct.
+      //   DELETED row  → the returning employee. Surface "reinstate?" and leave the
+      //                  request PENDING. This is audit A4: the old code did not
+      //                  distinguish the two and rejected both with "Account
+      //                  already exists at approval time" — a sentence that is
+      //                  false for a deleted row, and which made every offboarded
+      //                  employee permanently unhireable through the product.
+      //
+      // Since migration 031 a live row and one or more deleted rows may share an
+      // email, so the ordering matters: a live row outranks any tombstone, and
+      // among tombstones the most recent one is the person we last employed.
       const existing = await trx
         .selectFrom('staff')
-        .select('id')
+        .select(['id', 'deleted_at'])
         .where('email', '=', row.email)
+        .orderBy(sql`deleted_at IS NOT NULL`)
+        .orderBy('deleted_at', 'desc')
         .limit(1)
         .executeTakeFirst();
+
+      if (existing?.deleted_at) {
+        // Throwing rolls the transaction back, which is the point: nothing is
+        // written, the request stays pending, and the admin gets a button.
+        throw new AppError(
+          'ALREADY_PROCESSED',
+          'This person previously worked here. Reinstate their account instead of creating a new one.',
+          {
+            previousStaffId: existing.id,
+            deactivatedAt: existing.deleted_at.toISOString(),
+            suggestion: 'reinstate',
+          },
+        );
+      }
+
       if (existing) {
         await trx
           .updateTable('signup_requests')
@@ -902,13 +947,19 @@ export class AuthService {
     factorId: string,
     code: string,
   ): Promise<void> {
+    await this.assertMfaNotLocked(staffId);
+
     const adminMfa = this.adminMfa();
     if (adminMfa?.verifyFactor) {
       const { error } = await adminMfa.verifyFactor({ userId: supabaseUid, factorId, code });
       if (error) {
+        // Same budget as the recovery path — this is the other credential type
+        // for the same gate, not a separate one.
+        await this.recordMfaFailure(staffId);
         throw new AuthError('MFA_VERIFY_FAILED', 400, 'Invalid verification code.');
       }
     }
+    await this.clearMfaFailures(staffId);
 
     await this.db
       .updateTable('staff')
@@ -957,6 +1008,236 @@ export class AuthService {
     this.securityLog('password.reset_confirm', { staffId });
   }
 
+  // ── The MFA failure budget ────────────────────────────────────────────
+  /**
+   * Throw `MFA_LOCKED` once the shared budget is spent.
+   *
+   * FAILS OPEN when Redis is unreachable, deliberately. This gate stands in
+   * front of the recovery-code path, which exists because a sole admin who lost
+   * their authenticator has no other way in. Failing closed would mean a Redis
+   * blip locks that person out of their own portal permanently — reintroducing
+   * the exact availability hole STEP 8 closes, in exchange for softening a
+   * lockout on 40-bit single-use secrets that are not brute-forceable anyway.
+   */
+  private async assertMfaNotLocked(staffId: string): Promise<void> {
+    let failures = 0;
+    try {
+      failures = Number((await this.redis.get(mfaFailureKey(staffId))) ?? 0);
+    } catch (err) {
+      this.logger.warn({ err, staffId }, 'assertMfaNotLocked: redis read failed; allowing attempt');
+      return;
+    }
+    if (failures >= MFA_MAX_FAILURES) {
+      throw new AuthError(
+        'MFA_LOCKED',
+        403,
+        'Too many failed verification attempts. Try again in 15 minutes.',
+      );
+    }
+  }
+
+  /**
+   * Count one failed MFA attempt against the shared budget, whatever the
+   * credential was. The TTL is set from the FIRST failure and not extended, so
+   * the window is 15 minutes from when the run started rather than a rolling
+   * lock that a persistent attacker can hold open indefinitely.
+   */
+  async recordMfaFailure(staffId: string): Promise<void> {
+    try {
+      const failures = await this.redis.incr(mfaFailureKey(staffId));
+      if (failures === 1) await this.redis.expire(mfaFailureKey(staffId), MFA_LOCKOUT_SECONDS);
+    } catch (err) {
+      this.logger.warn({ err, staffId }, 'recordMfaFailure: redis incr failed');
+    }
+    this.securityLog('mfa.attempt_failed', { staffId });
+  }
+
+  /** Clear the budget. Called on any SUCCESSFUL verification, from either path. */
+  async clearMfaFailures(staffId: string): Promise<void> {
+    try {
+      await this.redis.del(mfaFailureKey(staffId));
+    } catch (err) {
+      this.logger.warn({ err, staffId }, 'clearMfaFailures: redis del failed');
+    }
+  }
+
+  /** Unconsumed recovery codes left for this user. Drives the "regenerate" nag. */
+  async remainingRecoveryCodes(staffId: string): Promise<number> {
+    const row = await this.db
+      .selectFrom('mfa_recovery_codes')
+      .select(({ fn }) => fn.countAll<string>().as('n'))
+      .where('staff_id', '=', staffId)
+      .where('used_at', 'is', null)
+      .executeTakeFirst();
+    return Number(row?.n ?? 0);
+  }
+
+  /**
+   * Spend a recovery code — the availability hole carried since Sprint 8 STEP 8.4.
+   *
+   * Codes have been generated and stored since Sprint 8 with no way to spend
+   * them, while MFA is mandatory for admin and manager. The documented recovery
+   * is another admin running `PUT /v1/staff/:id/mfa/reset` (AUTH-MATRIX §10),
+   * which cannot help the case that matters: the locked-out person IS the only
+   * admin. This is that same reset, authorised by a code instead of a colleague.
+   *
+   * WHY IT DOES NOT JUST LET YOU IN. The portal's MFA gate reads the `aal2`
+   * claim on the Supabase token (`middleware.ts`), and only Supabase's own
+   * challenge+verify can mint that claim — the API never sees a TOTP code and
+   * cannot forge one. So a redeemed code cannot "complete the session"; what it
+   * can do is prove account ownership and clear the factor, which drops the user
+   * into `/mfa-setup` to enrol the authenticator they no longer have. That is
+   * also what "lost authenticator" means in the world: you need a new one. The
+   * alternative — a server-side flag the middleware accepts INSTEAD of aal2 —
+   * would add a second way past the MFA gate, and a second way past a gate is a
+   * second thing to get wrong.
+   *
+   * The OTHER codes survive. `resetMfa` drops the whole set, which is right for
+   * an admin-initiated reset and wrong here: someone who abandons `/mfa-setup`
+   * halfway would have spent their one way back in. Only the redeemed row is
+   * marked. Re-enrolment replaces the set at the end of the flow.
+   */
+  async redeemRecoveryCode(
+    staffId: string,
+    supabaseUid: string,
+    code: string,
+  ): Promise<{ remainingCodes: number }> {
+    await this.assertMfaNotLocked(staffId);
+
+    const rows = await this.db
+      .selectFrom('mfa_recovery_codes')
+      .select(['id', 'code_hash'])
+      .where('staff_id', '=', staffId)
+      .where('used_at', 'is', null)
+      .execute();
+
+    // CONSTANT-TIME COMPARE. `WHERE code_hash = $1` would be the obvious query
+    // and is the bug: it makes the database's index the comparator, and a
+    // short-circuiting one at that. A timing-variable compare on an auth secret
+    // is the same class of defect as B-03's internal-secret comparison.
+    //
+    // Every candidate is compared and there is no early break, so the response
+    // time does not reveal WHICH code matched or how far down the list it sat.
+    // Codes are hex, displayed once and usually retyped from a printed sheet, so
+    // the spacing and case a user adds are theirs, not the secret's.
+    const normalised = code.replace(/[\s-]/g, '').toLowerCase();
+    const submitted = Buffer.from(hashRecoveryCode(normalised), 'hex');
+    let matchedId: string | null = null;
+    for (const row of rows) {
+      const stored = Buffer.from(row.code_hash, 'hex');
+      if (stored.length === submitted.length && timingSafeEqual(stored, submitted)) {
+        matchedId = row.id;
+      }
+    }
+
+    if (!matchedId) {
+      await this.recordMfaFailure(staffId);
+      throw new AuthError('MFA_FAILED', 403, 'That recovery code is not valid.');
+    }
+
+    // Single use is enforced HERE, by the DB, not by the read above: the
+    // `used_at IS NULL` predicate makes two concurrent redeems of the same code
+    // race for one row, and the loser updates nothing. A check-then-write would
+    // let both through.
+    const consumed = await this.db
+      .updateTable('mfa_recovery_codes')
+      .set({ used_at: sql`NOW()` })
+      .where('id', '=', matchedId)
+      .where('used_at', 'is', null)
+      .executeTakeFirst();
+
+    if (Number(consumed.numUpdatedRows ?? 0) === 0) {
+      await this.recordMfaFailure(staffId);
+      throw new AuthError('MFA_FAILED', 403, 'That recovery code has already been used.');
+    }
+
+    // Consumption comes FIRST and the factor teardown after. Reversed, a failure
+    // between the two leaves the code unspent and the authenticator gone.
+    await this.db
+      .updateTable('staff')
+      .set({ mfa_enrolled: false })
+      .where('id', '=', staffId)
+      .execute();
+    await this.deleteSupabaseFactors(supabaseUid, staffId, 'redeemRecoveryCode');
+    await this.invalidateCache(supabaseUid);
+    await this.clearMfaFailures(staffId);
+
+    const remainingCodes = await this.remainingRecoveryCodes(staffId);
+
+    // A recovery-code login is a security-relevant event, and it is recorded
+    // DISTINCTLY from an ordinary TOTP login — "someone signed in without the
+    // authenticator" is the sentence an incident review needs to find.
+    await this.audit.log({
+      actorId: staffId,
+      actorSource: 'user',
+      entity: 'staff',
+      entityId: staffId,
+      action: 'UPDATE',
+      after: { mfa_enrolled: false, event: 'mfa_recovery_code_redeemed', remainingCodes },
+      trx: this.db,
+    });
+    this.securityLog('mfa.recovery_code_redeemed', { staffId, remainingCodes });
+
+    return { remainingCodes };
+  }
+
+  /**
+   * Invalidate every existing code and issue a fresh set, returned ONCE.
+   *
+   * Same one-time-display contract as enrolment: there is no endpoint that shows
+   * them again, because a set of recovery codes readable from a live session is
+   * not a second factor.
+   */
+  async regenerateRecoveryCodes(staffId: string): Promise<{ recoveryCodes: string[] }> {
+    const codes = Array.from({ length: 10 }, () => randomBytes(5).toString('hex'));
+    await transactionWithEmits(this.db, async (trx) => {
+      await trx.deleteFrom('mfa_recovery_codes').where('staff_id', '=', staffId).execute();
+      await trx
+        .insertInto('mfa_recovery_codes')
+        .values(codes.map((c) => ({ staff_id: staffId, code_hash: hashRecoveryCode(c) })))
+        .execute();
+    });
+
+    await this.audit.log({
+      actorId: staffId,
+      actorSource: 'user',
+      entity: 'mfa_recovery_codes',
+      action: 'INSERT',
+      after: { staffId, event: 'recovery_codes_regenerated', count: codes.length },
+      trx: this.db,
+    });
+
+    return { recoveryCodes: codes };
+  }
+
+  /**
+   * Delete every Supabase TOTP factor for a user. Best-effort and logged: the
+   * local `mfa_enrolled = false` is what the portal gates on, so a Supabase
+   * hiccup must not abort the caller mid-reset.
+   */
+  private async deleteSupabaseFactors(
+    supabaseUid: string | null,
+    staffId: string,
+    context: string,
+  ): Promise<void> {
+    if (!supabaseUid) return;
+    const adminMfa = this.supabaseAdmin.auth.admin.mfa;
+    const { data, error } = await adminMfa.listFactors({ userId: supabaseUid });
+    if (error) {
+      this.logger.warn({ err: error, staffId }, `${context}: listFactors failed`);
+      return;
+    }
+    for (const factor of data?.factors ?? []) {
+      const del = await adminMfa.deleteFactor({ id: factor.id, userId: supabaseUid });
+      if (del.error) {
+        this.logger.warn(
+          { err: del.error, factorId: factor.id, staffId },
+          `${context}: deleteFactor failed`,
+        );
+      }
+    }
+  }
+
   /**
    * Admin-only MFA reset for a user who lost their authenticator. Deletes every
    * Supabase factor, clears mfa_enrolled, drops their recovery codes, and evicts
@@ -973,23 +1254,7 @@ export class AuthService {
       throw new AuthError('NOT_FOUND', 404, 'Staff member not found.');
     }
 
-    if (target.supabase_uid) {
-      const adminMfa = this.supabaseAdmin.auth.admin.mfa;
-      const { data, error } = await adminMfa.listFactors({ userId: target.supabase_uid });
-      if (error) {
-        this.logger.warn({ err: error, targetStaffId }, 'resetMfa: listFactors failed');
-      } else {
-        for (const factor of data?.factors ?? []) {
-          const del = await adminMfa.deleteFactor({ id: factor.id, userId: target.supabase_uid });
-          if (del.error) {
-            this.logger.warn(
-              { err: del.error, factorId: factor.id, targetStaffId },
-              'resetMfa: deleteFactor failed',
-            );
-          }
-        }
-      }
-    }
+    await this.deleteSupabaseFactors(target.supabase_uid, targetStaffId, 'resetMfa');
 
     await transactionWithEmits(this.db, async (trx) => {
       await trx
@@ -999,6 +1264,16 @@ export class AuthService {
         .execute();
       await trx.deleteFrom('mfa_recovery_codes').where('staff_id', '=', targetStaffId).execute();
     });
+
+    // The failure budget goes with the credentials it counted against.
+    //
+    // Without this, an admin resetting MFA for the person who just burned all
+    // three attempts hands them a fresh authenticator they cannot use for the
+    // rest of the 15-minute window — and the only remedy the product offers for
+    // MFA_LOCKED is this exact button. Every other place the budget is spent
+    // clears it on the way out (verifyMfa, redeemRecoveryCode); this one did
+    // not, which made "Reset MFA" a fix that appears not to work.
+    await this.clearMfaFailures(targetStaffId);
 
     if (target.supabase_uid) {
       await this.invalidateCache(target.supabase_uid);
@@ -1012,6 +1287,247 @@ export class AuthService {
       after: { mfa_enrolled: false, event: 'mfa_reset' },
       trx: this.db,
     });
+  }
+
+  /**
+   * Admin deactivates a staff member (Auth-Matrix §4). Soft-delete + active =
+   * false, then revoke their Supabase sessions so they are LOGGED OUT, not merely
+   * blocked on their next request.
+   *
+   * Two layers, deliberately. The enforcement layer is ours: `auth.plugin`
+   * re-reads the staff row and answers `ACCOUNT_DEACTIVATED` (auth.plugin.ts:90),
+   * so eviction of `staff_lookup:{uid}` below is what makes deactivation
+   * immediate. The Supabase `signOut` is the courtesy layer — it ends the
+   * session rather than leaving a logged-in-looking tab that 401s on every
+   * action. It is best-effort and logged on failure: THIRD-PARTY §2.2 documents
+   * `signOut(userId)`, but supabase-js v2 types the argument as a JWT, so this
+   * call may be a no-op on some SDK builds. Our own layer is unaffected either
+   * way, which is why the failure is a warning rather than a rollback.
+   */
+  async deactivateStaff(targetStaffId: string, adminId: string): Promise<{ deactivated: true }> {
+    if (targetStaffId === adminId) {
+      throw new AuthError('PERMISSION_DENIED', 403, 'You cannot deactivate your own account.');
+    }
+
+    const target = await this.db
+      .selectFrom('staff')
+      .select(['id', 'name', 'email', 'active', 'supabase_uid'])
+      .where('id', '=', targetStaffId)
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+    if (!target) {
+      throw new AuthError('NOT_FOUND', 404, 'Staff member not found.');
+    }
+
+    await transactionWithEmits(this.db, async (trx) => {
+      await softDelete('staff', targetStaffId, adminId, trx);
+      await trx
+        .updateTable('staff')
+        .set({ active: false })
+        .where('id', '=', targetStaffId)
+        .execute();
+      await this.audit.log({
+        actorId: adminId,
+        entity: 'staff',
+        entityId: targetStaffId,
+        action: 'DELETE',
+        before: { name: target.name, email: target.email, active: target.active },
+        trx,
+      });
+    });
+
+    if (target.supabase_uid) {
+      await this.invalidateCache(target.supabase_uid);
+      try {
+        await (
+          this.supabaseAdmin.auth.admin as unknown as {
+            signOut: (jwt: string) => Promise<{ error: unknown }>;
+          }
+        ).signOut(target.supabase_uid);
+      } catch (err) {
+        this.logger.warn({ err, targetStaffId }, 'deactivateStaff: supabase signOut failed');
+      }
+    }
+
+    return { deactivated: true };
+  }
+
+  /**
+   * Admin reinstates a soft-deleted staff member — `PUT /v1/staff/:id/reactivate`,
+   * already specified in Auth-Matrix §4 and never built (ADR-026 §3).
+   *
+   * The ORIGINAL row is revived, never a duplicate. The history and the audit
+   * trail are the entire reason the row was soft-deleted rather than hard-deleted;
+   * a returning employee who comes back as a new id loses both.
+   *
+   * MFA state is left EXACTLY as it was (ADR-026 / Auth-Matrix §10). If they were
+   * enrolled, they stay enrolled: their authenticator very likely still has the
+   * secret, and silently clearing it would drop a returning admin straight into
+   * the /mfa-setup flow with no way back if they no longer hold the device. An
+   * admin who needs it cleared has `PUT /v1/staff/:id/mfa/reset` — an explicit,
+   * audited action — which is the right shape for a security downgrade.
+   */
+  async reactivateStaff(
+    targetStaffId: string,
+    adminId: string,
+  ): Promise<{ staffId: string; reactivated: true }> {
+    const supabaseUid = await transactionWithEmits(this.db, (trx) =>
+      this.reviveStaffRow(targetStaffId, adminId, trx),
+    );
+
+    if (supabaseUid) await this.invalidateCache(supabaseUid);
+
+    return { staffId: targetStaffId, reactivated: true };
+  }
+
+  /**
+   * The revive itself — checks, update, notification, audit — against a caller's
+   * transaction. Returns the row's `supabase_uid` so the caller can evict the
+   * staff_lookup cache AFTER the commit (evicting inside would repopulate from a
+   * read the transaction has not published yet).
+   *
+   * Extracted because `reinstateFromSignupRequest` needs the identical work in a
+   * transaction that ALSO closes the signup request. Copying it there would put
+   * the live-email collision check (§5) in one copy and forget it in the other —
+   * and the forgotten one is the path that surfaces a Postgres unique violation
+   * as a 500.
+   */
+  private async reviveStaffRow(
+    targetStaffId: string,
+    adminId: string,
+    trx: Transaction<DB>,
+  ): Promise<string | null> {
+    const target = await trx
+      .selectFrom('staff')
+      .select(['id', 'name', 'email', 'active', 'deleted_at', 'supabase_uid'])
+      .where('id', '=', targetStaffId)
+      .executeTakeFirst();
+    if (!target) {
+      throw new AuthError('NOT_FOUND', 404, 'Staff member not found.');
+    }
+    if (target.deleted_at === null && target.active) {
+      throw new AuthError('ALREADY_PROCESSED', 409, `${target.name} is already active.`);
+    }
+
+    // ADR-026 §5. Since migration 031 the unique index is partial, so a live row
+    // and this tombstone can legitimately share an email — and reviving into that
+    // collision would raise a raw Postgres unique violation as a 500. Check first
+    // and say what actually happened.
+    const liveHolder = await trx
+      .selectFrom('staff')
+      .select(['id', 'name'])
+      .where('email', '=', target.email)
+      .where('id', '!=', targetStaffId)
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+    if (liveHolder) {
+      throw new AuthError(
+        'ALREADY_PROCESSED',
+        409,
+        `${target.email} is already in use by an active account (${liveHolder.name}). Change that account's email, or deactivate it, before reinstating this one.`,
+      );
+    }
+
+    await trx
+      .updateTable('staff')
+      .set({ deleted_at: null, active: true })
+      .where('id', '=', targetStaffId)
+      .execute();
+
+    // The enum value that has existed for exactly this since Sprint 10 (ADR-020).
+    await this.notifications.create({
+      recipientId: targetStaffId,
+      type: 'account_reactivated',
+      title: 'Your account has been reactivated',
+      trx,
+    });
+
+    await this.audit.log({
+      actorId: adminId,
+      entity: 'staff',
+      entityId: targetStaffId,
+      action: 'UPDATE',
+      before: { active: target.active, deletedAt: target.deleted_at?.toISOString() ?? null },
+      after: { active: true, deletedAt: null, event: 'reinstated' },
+      trx,
+    });
+
+    return target.supabase_uid;
+  }
+
+  /**
+   * Approve a pending signup request BY REINSTATING the applicant's old staff row
+   * — the other half of A4's fix, and the action the reinstate branch in Settings
+   * → Signup Requests calls.
+   *
+   * `approveSignupRequest` detects the tombstone and stops (ADR-026 §4); this is
+   * what the admin's answer to that question runs. It is ONE endpoint rather than
+   * "reactivate, then mark approved" from the client, because those two are one
+   * decision: if the second call fails, the person is live again and their request
+   * is still pending — and re-approving it now hits the LIVE-row branch, which
+   * rejects with "Account already exists at approval time". The exact false
+   * sentence A4 exists to delete would come straight back through a dropped
+   * fetch.
+   *
+   * The role assigned is the one on the OLD staff row. This endpoint reinstates a
+   * person; changing what they are is a separate, separately-audited act, and
+   * silently honouring `roleRequested` here would let an applicant pick their own
+   * role by asking for it.
+   */
+  async reinstateFromSignupRequest(
+    requestId: string,
+    adminId: string,
+  ): Promise<{ staffId: string; status: 'approved' }> {
+    const outcome = await transactionWithEmits(this.db, async (trx) => {
+      const row = await trx
+        .selectFrom('signup_requests')
+        .select(['id', 'email', 'name', 'status'])
+        .where('id', '=', requestId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!row) {
+        throw new AuthError('NOT_FOUND', 404, 'Signup request not found.');
+      }
+      if (row.status !== 'pending') {
+        throw new AuthError('ALREADY_REVIEWED', 409, 'This request has already been reviewed.');
+      }
+
+      // The same lookup and the same ordering approveSignupRequest uses, so the
+      // row we revive is the row it offered. A live row outranks any tombstone;
+      // among tombstones the most recent is the person we last employed.
+      const previous = await trx
+        .selectFrom('staff')
+        .select(['id', 'deleted_at'])
+        .where('email', '=', row.email)
+        .orderBy(sql`deleted_at IS NOT NULL`)
+        .orderBy('deleted_at', 'desc')
+        .limit(1)
+        .executeTakeFirst();
+
+      if (!previous?.deleted_at) {
+        // Either nobody by that email, or a LIVE one. Neither is reinstatable, and
+        // both mean the admin is acting on a screen that has gone stale.
+        throw new AuthError(
+          'ALREADY_PROCESSED',
+          409,
+          'There is no deactivated account for this email to reinstate. Reload the queue and approve it normally.',
+        );
+      }
+
+      const supabaseUid = await this.reviveStaffRow(previous.id, adminId, trx);
+
+      await trx
+        .updateTable('signup_requests')
+        .set({ status: 'approved', reviewed_at: sql`NOW()`, reviewed_by: adminId })
+        .where('id', '=', requestId)
+        .execute();
+
+      return { staffId: previous.id, supabaseUid };
+    });
+
+    if (outcome.supabaseUid) await this.invalidateCache(outcome.supabaseUid);
+
+    return { staffId: outcome.staffId, status: 'approved' };
   }
 
   /**

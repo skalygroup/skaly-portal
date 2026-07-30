@@ -181,3 +181,49 @@ export const deactivateClientTool = defineMutationTool({
     return { text: 'Client deactivated. Their history is unchanged.', card: { type: 'mutation_result' }, link: '/settings/clients' };
   },
 });
+
+// ADR-026 §6: a bot that can destroy but not undo is its own footgun. Same
+// confirmation machine, same service, opposite direction.
+export const reactivateClientTool = defineMutationTool({
+  name: 'reactivate_client',
+  family: 'clients.write',
+  capability: 'reactivating clients',
+  description:
+    "Reactivate a deactivated client. They start appearing again, and this month's shoot slots, pipeline row and calendar cells are regenerated. Look them up with get_client_summary first to get their id.",
+  inputSchema: z.object({ clientId: uuid }),
+  jsonSchema: {
+    type: 'object',
+    properties: { clientId: { type: 'string', description: 'The client id, from get_client_summary.' } },
+    required: ['clientId'],
+  },
+  async readCurrent(input, _currentUser, db) {
+    const found = (await clients.list({ includeInactive: true }, db)).find((c) => c.id === input.clientId);
+    if (!found) {
+      throw new AppError('RESOURCE_NOT_FOUND', `clients row ${input.clientId} does not exist.`);
+    }
+    const { period } = await getCurrentPeriod(db);
+    return { state: { name: found.name, active: found.active, isInternal: found.isInternal, period } };
+  },
+  summary: {
+    entity: 'Client',
+    action: () => 'Reactivate a client',
+    target: (state) => state.name,
+    period: (_input, state) => state.period,
+    changes: [
+      { field: 'Active', from: (s) => s.active, to: () => true },
+      {
+        field: 'This month’s rows',
+        from: () => null,
+        to: (_i, s) => (s.isInternal ? 'None — internal client' : `Regenerated for ${s.period}`),
+      },
+    ],
+  },
+  async handler(input, currentUser, db) {
+    const result = await clients.reactivate(input.clientId, currentUser, db);
+    return {
+      text: `${result.name} is active again${result.isInternal ? '' : ", and this month's rows are back"}.`,
+      card: { type: 'mutation_result' },
+      link: '/settings/clients',
+    };
+  },
+});

@@ -1,5 +1,6 @@
 import { Kysely, PostgresDialect } from 'kysely';
 import pg from 'pg';
+import Cursor from 'pg-cursor';
 
 import { env } from './env.js';
 
@@ -22,5 +23,10 @@ export const pool = new pg.Pool({
 });
 
 export const db = new Kysely<DB>({
-  dialect: new PostgresDialect({ pool }),
+  // `cursor` is what makes `.stream()` work (ADR-028 — the audit log export).
+  // Installing pg-query-stream is NOT enough: without it wired in here, Kysely
+  // throws "`cursor` is not present in your postgres dialect config" at RUNTIME,
+  // on the request, with no type error anywhere to catch it first. It costs
+  // nothing when nothing streams — the cursor is only constructed by `.stream()`.
+  dialect: new PostgresDialect({ pool, cursor: Cursor }),
 });

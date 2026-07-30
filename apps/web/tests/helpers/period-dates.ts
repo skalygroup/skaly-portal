@@ -49,6 +49,24 @@ export function currentIstPeriod(): string {
   return todayIst().slice(0, 7);
 }
 
+/**
+ * The period immediately before the current one, as `YYYY-MM`.
+ *
+ * ⚠️ NOT `SELECT period FROM months WHERE locked = false ORDER BY period DESC
+ * OFFSET 1`. That reads as "the previous month" and is not: `months` holds rows
+ * other suites created far in the future, so the query returned 2098-03 — a real
+ * row, with no attendance data behind it. Every assertion about a locked grid
+ * then passed vacuously, because a grid with no cells has no toggles either way.
+ *
+ * Derived arithmetically for the same reason the rest of this file exists: the
+ * answer must not depend on what other tests happened to leave in the table.
+ */
+export function priorIstPeriod(): string {
+  const [year, month] = currentIstPeriod().split('-').map(Number);
+  const d = new Date(Date.UTC(year!, month! - 2, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
 export function periodDates(period: string = currentIstPeriod()): PeriodDates {
   const [year, month] = period.split('-').map(Number);
   // Day 0 of the NEXT month is the last day of this one — no leap-year special case.

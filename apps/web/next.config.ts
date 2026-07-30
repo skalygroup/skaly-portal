@@ -47,7 +47,12 @@ export default (phase: string): NextConfig => {
       ],
     },
     experimental: {
-      // Reserve for future use
+      // `forbidden()` + app/forbidden.tsx. Auth-Matrix §3 requires a real HTTP
+      // 403 on direct URL access to a panel the role may not see, not a
+      // redirect — and a page that merely RENDERS "403" still answers 200.
+      // This is the platform's own answer to that; the alternative was a
+      // middleware branch per panel, which is a second copy of the panel list.
+      authInterrupts: true,
     },
   };
 };

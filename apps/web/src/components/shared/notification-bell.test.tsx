@@ -84,10 +84,21 @@ function renderBell() {
   );
 }
 
-/** Fire a socket event exactly as the server would. */
+/**
+ * Fire a socket event exactly as the server would — BY THE SERVER'S NAME.
+ *
+ * Throws on an unregistered name rather than `?.()`-ing into nothing. That
+ * optional call is how the reports panel shipped a handler bound to an event no
+ * server ever emits: the test fired the same wrong name, hit `undefined`, did
+ * nothing, and passed. Every name below must appear in the api's emit list
+ * (`notify:new`, `notify:read`); if the bell stops subscribing to one, this
+ * fails loudly instead of quietly proving nothing.
+ */
 async function emit(event: string, payload: unknown) {
+  const handler = sockets.handlers.get(event);
+  if (!handler) throw new Error(`the bell never subscribed to "${event}"`);
   await act(async () => {
-    sockets.handlers.get(event)?.(payload);
+    handler(payload);
   });
 }
 

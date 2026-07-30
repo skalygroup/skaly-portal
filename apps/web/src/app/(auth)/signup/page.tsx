@@ -21,10 +21,10 @@ import {
 } from '@/components/auth/form-controls';
 import { SelectMenuField } from '@/components/auth/select-menu-field';
 import { api, ApiError } from '@/lib/api';
+import { currentIstDate } from '@/lib/hooks/use-month-context';
 import { buildSignupFormData, validateCvFile, CV_ACCEPT, ROLE_OPTIONS } from '@/lib/signup-form';
 import { createClient } from '@/lib/supabase/client';
 
-const today = new Date().toISOString().slice(0, 10);
 
 // Display the mobile as the user types (+CC then grouped digits); the form
 // value stays the schema-shaped raw `+<digits>` (no spaces).
@@ -231,7 +231,7 @@ export default function SignupPage() {
                   label="Date of birth"
                   value={dob}
                   onChange={(v) => setValue('dateOfBirth', v, { shouldValidate: !!errors.dateOfBirth })}
-                  max={today}
+                  max={currentIstDate()}
                   disabled={busy}
                   error={errors.dateOfBirth?.message}
                 />

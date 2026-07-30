@@ -1,7 +1,7 @@
 import {
   NOTIFICATION_REGISTRY,
   NOTIFICATION_TYPES,
-  SPRINT_10_DEFERRED_TYPES,
+  DEFERRED_NOTIFICATION_TYPES,
   isNotificationType,
 } from '@skaly/shared';
 import { Kysely, PostgresDialect, sql } from 'kysely';
@@ -112,6 +112,55 @@ describe('every registry entry is complete', () => {
     }
   });
 
+  test('⭐ every linkBuilder produces a DURABLE in-app route, never a signed URL', () => {
+    /**
+     * A notification row lives forever; a presigned R2 link lives 24h
+     * (REPORT_EXPIRY_SECONDS). `report_ready` returned `payload.downloadUrl`
+     * from Sprint 10 until Sprint 11 and nothing caught it — the deferred-list
+     * census asserts an emitter is ABSENT, not that the registry entry beside
+     * it is correct, so any of the other 17 could have been storing the same
+     * thing. This is that fix generalised (audit M-08): one test, 18 entries.
+     *
+     * The payload is POISONED — every plausible link-ish key carries a signed,
+     * expiring URL. A builder that reaches for one fails here.
+     */
+    const poisoned: Record<string, unknown> = {
+      downloadUrl: 'https://r2.example.com/r/x.pdf?X-Amz-Signature=dead&X-Amz-Expires=86400',
+      url: 'https://r2.example.com/o/x.pdf?X-Amz-Signature=dead',
+      signedUrl: 'https://cdn.example.com/s?token=abc&expires=1791830400',
+      link: '//evil.example.com/looks-relative',
+      href: 'http://r2.example.com/plain',
+      // The real addressing keys too, so builders that DO address something
+      // return their route here instead of trivially passing via null.
+      taskId: 't1',
+      period: '2026-07',
+      messageId: 'm1',
+      requestId: 'r1',
+      reportId: 'rep1',
+    };
+
+    for (const type of NOTIFICATION_TYPES) {
+      const link = NOTIFICATION_REGISTRY[type].linkBuilder(poisoned);
+      // null is the safe outcome — the bell renders the row unlinked.
+      if (link === null) continue;
+      // A single leading slash: `//host` is protocol-relative, not in-app.
+      expect(link, `${type} must be an in-app path`).toMatch(/^\/(?!\/)/);
+      expect(link, `${type} must not carry an expiring URL`).not.toMatch(
+        /https?:|X-Amz|signature=|token=|expires=/i,
+      );
+    }
+
+    // The 17 that build their route from a template are covered above by
+    // construction. `new_comment` is the one that takes it from the payload, so
+    // prove it still works when the payload is honest.
+    expect(NOTIFICATION_REGISTRY.new_comment.linkBuilder({ url: '/tasks?highlight=t1' })).toBe(
+      '/tasks?highlight=t1',
+    );
+    expect(NOTIFICATION_REGISTRY.report_ready.linkBuilder(poisoned)).toBe(
+      '/settings/reports?reportId=rep1',
+    );
+  });
+
   test('a linkBuilder given its payload produces the deep link', () => {
     expect(NOTIFICATION_REGISTRY.task_assigned.linkBuilder({ taskId: 't1', period: '2026-07' })).toBe(
       '/tasks?period=2026-07&highlight=t1',
@@ -121,25 +170,22 @@ describe('every registry entry is complete', () => {
   });
 });
 
-describe('the deferred six are asserted by name, not merely commented', () => {
-  test('⭐ exactly 7 types have no producer as of Sprint 10', () => {
-    // When Sprint 11 wires report_ready this FAILS until the expectation is updated.
-    // That failure is the intended workflow — it is how the deferral stays honest.
+describe('the deferred five are asserted by name, not merely commented', () => {
+  test('⭐ exactly 5 types have no producer as of Sprint 11', () => {
+    // Bumping SHIPPED_THROUGH_SPRINT makes this FAIL until every producer that
+    // sprint owes exists in src. That failure is the intended workflow — it is how
+    // the deferral stays honest.
     //
-    // SEVEN, not the six the sprint plan predicted. account_reactivated was counted
-    // as a shipped-sprint gap like holiday_added and client_updated, but unlike those
-    // it has no write path to hook into: StaffService is read-only and there is no
-    // staff deactivate OR reactivate anywhere. Its producer needs Settings → Staff,
-    // so it is a genuine deferral to Sprint 11 rather than a gap Sprint 10 could
-    // close. Inventing an emitter to make this number 6 is exactly what ADR-020
-    // forbids.
-    expect(SPRINT_10_DEFERRED_TYPES).toHaveLength(7);
-    expect(SPRINT_10_DEFERRED_TYPES).toEqual(
+    // Sprint 10 left SEVEN, not the six its plan predicted: account_reactivated was
+    // counted as a shipped-sprint gap like holiday_added and client_updated, but
+    // unlike those it had no write path to hook into — StaffService was read-only
+    // and there was no staff deactivate OR reactivate anywhere. Sprint 11 built
+    // both (ADR-026 reinstate, ADR-027 reports), so seven becomes five.
+    expect(DEFERRED_NOTIFICATION_TYPES).toHaveLength(5);
+    expect(DEFERRED_NOTIFICATION_TYPES).toEqual(
       [
-        'account_reactivated',
         'month_ready',
         'new_comment',
-        'report_ready',
         'rollover_failed',
         'rollover_success',
         'rollover_view_refresh_failed',
@@ -149,26 +195,24 @@ describe('the deferred six are asserted by name, not merely commented', () => {
 
   test('each deferred type names the sprint that owns its producer', () => {
     const owners: Record<string, number> = {
-      report_ready: 11,
-      account_reactivated: 11,
       new_comment: 12,
       month_ready: 12,
       rollover_success: 12,
       rollover_failed: 12,
       rollover_view_refresh_failed: 12,
     };
-    for (const type of SPRINT_10_DEFERRED_TYPES) {
+    for (const type of DEFERRED_NOTIFICATION_TYPES) {
       expect(NOTIFICATION_REGISTRY[type].producerSprint, type).toBe(owners[type]);
     }
   });
 
-  test('the other 11 are claimed by a sprint at or before 10', () => {
+  test('the other 13 are claimed by a sprint at or before 11', () => {
     const withProducers = NOTIFICATION_TYPES.filter(
-      (t) => !SPRINT_10_DEFERRED_TYPES.includes(t),
+      (t) => !DEFERRED_NOTIFICATION_TYPES.includes(t),
     );
-    expect(withProducers).toHaveLength(11);
+    expect(withProducers).toHaveLength(13);
     for (const t of withProducers) {
-      expect(NOTIFICATION_REGISTRY[t].producerSprint, t).toBeLessThanOrEqual(10);
+      expect(NOTIFICATION_REGISTRY[t].producerSprint, t).toBeLessThanOrEqual(11);
     }
   });
 });

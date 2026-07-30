@@ -197,7 +197,19 @@ export const NOTIFICATION_REGISTRY = {
     template: 'An async report finished; the link expires after 24h.',
     icon: 'FileText',
     severity: 'success',
-    linkBuilder: (p) => str(p, 'downloadUrl'),
+    // Audit M-08: a PORTAL route, never the presigned R2 URL. The presigned link
+    // lives 24h (REPORT_EXPIRY_SECONDS) and the notification row lives forever, so
+    // a link baked into the payload is a bell that stops working overnight while
+    // still looking clickable. /settings/reports fetches a fresh URL on open.
+    //
+    // This entry returned `payload.downloadUrl` from Sprint 10 until Sprint 11.
+    // Nothing caught it because the type had no producer to exercise it — the
+    // deferred-list census proves an emitter is absent, not that the registry
+    // entry beside it is right.
+    linkBuilder: (p) => {
+      const id = str(p, 'reportId');
+      return id ? `/settings/reports?reportId=${id}` : '/settings/reports';
+    },
     producerSprint: 11,
   },
   new_comment: {
@@ -205,7 +217,15 @@ export const NOTIFICATION_REGISTRY = {
     template: 'Someone comments on a record you follow.',
     icon: 'MessageSquare',
     severity: 'info',
-    linkBuilder: (p) => str(p, 'url'),
+    // The ONLY builder that takes its address from the payload, so it is the only
+    // one that can be handed an absolute URL. It must not be: the row lives
+    // forever and a signed link does not (audit M-08, the report_ready defect
+    // generalised). A non-portal value yields null — an unlinked row — rather
+    // than a bell that navigates off the portal or expires overnight.
+    linkBuilder: (p) => {
+      const url = str(p, 'url');
+      return url?.startsWith('/') && !url.startsWith('//') ? url : null;
+    },
     producerSprint: 12,
   },
   month_ready: {
@@ -257,15 +277,26 @@ export type NotificationType = keyof typeof NOTIFICATION_REGISTRY;
 export const NOTIFICATION_TYPES = Object.keys(NOTIFICATION_REGISTRY) as NotificationType[];
 
 /**
- * Types with no producer as of Sprint 10, with the sprint that owns each.
+ * The last sprint whose producers are built. Bump it when a sprint ships its
+ * notification producers, and the census test tells you which ones you still owe.
+ */
+export const SHIPPED_THROUGH_SPRINT = 11;
+
+/**
+ * Types with no producer yet, with the sprint that owns each.
  *
  * Derived, not hand-maintained — a new entry with a future `producerSprint` joins this
- * list automatically. The coverage test asserts its length, so when Sprint 11 wires
- * `report_ready` the assertion fails until the expectation is updated. That failure is
- * the intended workflow, not a regression.
+ * list automatically, and an entry whose sprint has shipped leaves it. The coverage test
+ * asserts its length, so bumping SHIPPED_THROUGH_SPRINT above fails until every producer
+ * that sprint owes actually exists in src. That failure is the intended workflow, not a
+ * regression.
+ *
+ * Was `SPRINT_10_DEFERRED_TYPES`, a name that had to be edited every sprint. Sprint 11
+ * lands two of them: `account_reactivated` (ADR-026 staff reinstate) and `report_ready`
+ * (ADR-027), taking the list 7 → 5.
  */
-export const SPRINT_10_DEFERRED_TYPES = NOTIFICATION_TYPES.filter(
-  (t) => NOTIFICATION_REGISTRY[t].producerSprint > 10,
+export const DEFERRED_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
+  (t) => NOTIFICATION_REGISTRY[t].producerSprint > SHIPPED_THROUGH_SPRINT,
 ).sort();
 
 export const isNotificationType = (value: string): value is NotificationType =>

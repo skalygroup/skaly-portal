@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 import { accessToken, createHolidayOnFreeDate, login } from './helpers/auth';
 
-import type { Browser } from '@playwright/test';
+import type { Browser, Page } from '@playwright/test';
 
 /**
  * The notification bell, live (Sprint 10 STEP 12).
@@ -37,6 +37,46 @@ async function openAs(browser: Browser, email: string, password: string, path = 
   return { context, page, close: async () => { try { await context.close(); } catch { /* already disposed */ } } };
 }
 
+/**
+ * ⚠️ WAIT FOR THE /ws/notify ROOM JOIN BEFORE EMITTING ANYTHING AT THIS TAB.
+ *
+ * ── The race ────────────────────────────────────────────────────────────────
+ * `emitAfterCommit` sends to `user:{staffId}` and socket.io delivers to whoever
+ * is in that room AT THAT MOMENT. There is no replay. A tab's socket connects
+ * asynchronously and the server ACKs `room:join` (ADR-025); anything emitted
+ * before that ack lands nowhere, permanently, for that tab. Every test in this
+ * file reloads B and then immediately causes a notification, so all three were
+ * racing the join and simply winning the coin-flip.
+ *
+ * ── Why not watch the websocket ──────────────────────────────────────────────
+ * The obvious barrier is to watch frames for the ack packet
+ * (`43/ws/notify,N[{"rooms":[…]}]`). It does not work, and the reason is worth
+ * recording: engine.io opens on HTTP long-polling and upgrades to a websocket
+ * afterwards, so whether `room:join` rides the websocket depends on whether the
+ * React tree mounts before or after that upgrade. Measured on a warm reload the
+ * join goes out over POLLING and the websocket carries `2probe`/`3probe`/`5`
+ * and nothing else — the ack is real, acknowledged, and completely invisible to
+ * `page.on('websocket')`. A frame-counting barrier passes on first load and
+ * hangs on every reload.
+ *
+ * ── The barrier ─────────────────────────────────────────────────────────────
+ * Ask the APP instead of the transport. `useRealtimeQuery` gates its fetch on
+ * `enabled: subscribed`, and `subscribed` flips only on the join ack — so a
+ * rendered attendance row IS the ack, observed through the mechanism that
+ * actually depends on it.
+ *
+ * The one hole is `useSocketRooms`' deliberate 5s degraded fallback, which sets
+ * `subscribed` without an ack so a blocked websocket cannot hide the page. That
+ * only fires when the join genuinely failed — a case the delivery assertion
+ * fails on anyway. It cannot turn "we were early" into a pass, which is the
+ * whole point.
+ */
+async function waitForNotifyJoin(page: Page): Promise<void> {
+  await expect(page.getByRole('button', { name: /Toggle/ }).first()).toBeVisible({
+    timeout: 20_000,
+  });
+}
+
 test.describe('notifications — live bell', () => {
   test.skip(!FLOW_ENABLED, 'Set TEST_ADMIN_*, TEST_MEMBER_* and DATABASE_URL to run the notifications E2E.');
 
@@ -51,6 +91,7 @@ test.describe('notifications — live bell', () => {
         headers: { authorization: `Bearer ${bToken}` },
       });
       await b.page.reload();
+      await waitForNotifyJoin(b.page);
 
       // B's display name, so the mention actually resolves server-side.
       const meRes = await b.page.request.get(`${process.env.NEXT_PUBLIC_API_URL}/v1/staff/me`, {
@@ -59,8 +100,12 @@ test.describe('notifications — live bell', () => {
       const me = (await meRes.json()) as { name?: string };
       test.skip(!me.name, 'Could not resolve the member display name.');
 
+      // ENABLED, not merely visible — the same trap chat.spec.ts records: the
+      // composer is disabled while disconnected and filling a disabled textarea
+      // silently does nothing, so the mention would never be sent and this test
+      // would fail as "B's bell never rang".
       const composer = a.page.getByTestId('chat-composer');
-      await expect(composer).toBeVisible({ timeout: 20_000 });
+      await expect(composer).toBeEnabled({ timeout: 20_000 });
       await composer.click();
       await composer.fill(`E2E-NOTIF @${me.name} please look`);
       await composer.press('Enter');
@@ -95,11 +140,15 @@ test.describe('notifications — live bell', () => {
         headers: { authorization: `Bearer ${bToken}` },
       });
       await b.page.reload();
+      await waitForNotifyJoin(b.page);
 
       // A SECOND tab for the same user — same context, so the same session. This is
       // exactly the scenario notify:read exists for.
       const tab2 = await b.context.newPage();
       await tab2.goto('/attendance');
+      // BOTH tabs must be in the room before the holiday is created — the whole
+      // assertion is that tab 2 receives, and an unjoined tab 2 receives nothing.
+      await waitForNotifyJoin(tab2);
 
       const aToken = await accessToken(admin.context);
       const created = await createHolidayOnFreeDate(
@@ -155,6 +204,12 @@ test.describe('notifications — live bell', () => {
         headers: { authorization: `Bearer ${aToken}` },
       });
       await a.page.reload();
+
+      // BOTH sides, and A is not optional here: the actor assertion is a NEGATIVE
+      // ("no badge"), which an unjoined socket satisfies for the wrong reason. The
+      // ADR-006 non-actor rule would be untested and look proven.
+      await waitForNotifyJoin(b.page);
+      await waitForNotifyJoin(a.page);
 
       const created = await createHolidayOnFreeDate(
         a.page.request,

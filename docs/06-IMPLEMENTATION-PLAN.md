@@ -352,7 +352,8 @@
 - [ ] Failure summary: Claude Sonnet generates plain-language message → admin notification
 - [ ] `POST /v1/internal/rollover` (header: X-Internal-Secret, handled by `internalAuthPlugin`) + `POST /v1/internal/rollover/manual` (admin JWT)
 - [ ] REFRESH MATERIALISED VIEW CONCURRENTLY after successful rollover
-- [ ] `POST /v1/reports/generate`, `GET /v1/reports/:id/download`, `GET /v1/reports`
+- [ ] `POST /v1/reports/generate` (**202 + reportId**), `GET /v1/reports/:id` (the poll — freshly presigned `downloadUrl` when `ready`), `GET /v1/reports`
+      <br>⚠️ ADR-027 folded the old `GET /v1/reports/:id/download` into the poll: it returned a fresh presigned URL and nothing else, and one endpoint cannot disagree with itself about whether a report is downloadable.
 - [ ] @react-pdf/renderer PDF template (Skaly branding: logo, gold accents, white background)
 - [ ] `GET /v1/comments`, `POST /v1/comments`, `PATCH /v1/comments/:id/acknowledge`
 - [ ] Comment visibility enforcement: team_member sees own + manager/admin replies

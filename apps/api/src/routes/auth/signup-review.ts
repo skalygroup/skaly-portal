@@ -60,6 +60,29 @@ export async function signupReviewRoutes(app: FastifyInstance) {
     },
   );
 
+  // ── Approve BY REINSTATING (ADR-026 §4, the other half of A4) ───────
+  // The admin's answer to the question `approve` asks when it finds a tombstone.
+  // No body: the role comes from the old staff row, not from the request — this
+  // reinstates a person, it does not decide what they are.
+  r.post(
+    '/auth/signup-requests/:id/reinstate',
+    {
+      ...adminOnly,
+      schema: { params: z.object({ id: z.string().uuid() }), security: [{ bearerAuth: [] }] },
+    },
+    async (request, reply) => {
+      try {
+        const result = await authService.reinstateFromSignupRequest(
+          request.params.id,
+          request.user.id,
+        );
+        return reply.status(200).send(result);
+      } catch (err) {
+        return sendAuthError(err, reply);
+      }
+    },
+  );
+
   // ── Reject ──────────────────────────────────────────────────────────
   r.post(
     '/auth/signup-requests/:id/reject',

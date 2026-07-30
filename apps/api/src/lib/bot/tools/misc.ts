@@ -49,7 +49,8 @@ export const getClientSummaryTool = defineTool({
   name: 'get_client_summary',
   family: 'clients.read',
   capability: 'viewing the client list',
-  description: 'Summarise the active clients (id and name).',
+  description:
+    'Summarise the clients (id and name). Pass includeInactive to also see deactivated ones — needed to reactivate a client.',
   inputSchema: z.object({ includeInactive: z.boolean().optional() }),
   jsonSchema: {
     type: 'object',

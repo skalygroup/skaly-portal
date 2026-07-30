@@ -210,15 +210,22 @@ describe('ClientService.deactivate', () => {
     expect(await countsFor(client.id)).toEqual(before);
   });
 
-  test('list() excludes a deactivated client, with and without includeInactive', async () => {
+  test('list() hides a deactivated client by default and shows it under includeInactive', async () => {
     const client = await createTracked({ name: 'Vanishing Co', shootSlotsPerMonth: 1 });
     expect((await svc.list({ includeInactive: false }, db)).map((c) => c.id)).toContain(client.id);
 
     await svc.deactivate(client.id, admin, db);
 
     expect((await svc.list({ includeInactive: false }, db)).map((c) => c.id)).not.toContain(client.id);
-    // includeInactive relaxes `active`, never `deleted_at` (audit H-02).
-    expect((await svc.list({ includeInactive: true }, db)).map((c) => c.id)).not.toContain(client.id);
+
+    // includeInactive drops the soft-delete filter too (ADR-026). It has to:
+    // deactivate stamps deleted_at AND active=false together, so a filtered
+    // includeInactive returned exactly the default set and the flag was dead —
+    // which left `reactivate_client` unable to obtain an id from the only query
+    // tool sanctioned to give it one (ADR-019). Admin-gated at the route.
+    const withInactive = await svc.list({ includeInactive: true }, db);
+    expect(withInactive.map((c) => c.id)).toContain(client.id);
+    expect(withInactive.find((c) => c.id === client.id)?.active).toBe(false);
   });
 
   test('manager is refused; a missing client is 404', async () => {
@@ -238,5 +245,73 @@ describe('ClientService.deactivate', () => {
     await expect(svc.deactivate(client.id, admin, db)).rejects.toMatchObject({
       code: 'RESOURCE_NOT_FOUND',
     });
+  });
+});
+
+describe('ClientService.reactivate (ADR-026 §2)', () => {
+  test('restores the row AND regenerates all three period-row types', async () => {
+    const client = await createTracked({ name: 'Boomerang Co', shootSlotsPerMonth: 2 });
+    const before = await countsFor(client.id);
+    expect(before).toEqual({ slots: 2, pipelines: 1, cells: DAYS });
+
+    await svc.deactivate(client.id, admin, db);
+    // Deactivation keeps history — the rows are still there, the client is not.
+    await db.deleteFrom('shoot_schedules').where('client_id', '=', client.id).execute();
+    await db.deleteFrom('content_calendar').where('client_id', '=', client.id).execute();
+    await db.deleteFrom('content_pipelines').where('client_id', '=', client.id).execute();
+    expect(await countsFor(client.id)).toEqual({ slots: 0, pipelines: 0, cells: 0 });
+
+    const revived = await svc.reactivate(client.id, admin, db);
+    expect(revived.id).toBe(client.id);
+    expect(revived.active).toBe(true);
+    // The SAME backfill create runs — not a copy that could generate a different set.
+    expect(await countsFor(client.id)).toEqual(before);
+  });
+
+  test('an internal client gets no period rows, exactly as on create', async () => {
+    const client = await createTracked({ name: 'Skaly Internal', shootSlotsPerMonth: 1, isInternal: true });
+    expect(await countsFor(client.id)).toEqual({ slots: 0, pipelines: 0, cells: 0 });
+
+    await svc.deactivate(client.id, admin, db);
+    await svc.reactivate(client.id, admin, db);
+
+    expect(await countsFor(client.id)).toEqual({ slots: 0, pipelines: 0, cells: 0 });
+  });
+
+  test('an already-active client → ALREADY_PROCESSED', async () => {
+    const client = await createTracked({ name: 'Still Here Co', shootSlotsPerMonth: 1 });
+    await expect(svc.reactivate(client.id, admin, db)).rejects.toMatchObject({
+      code: 'ALREADY_PROCESSED',
+    });
+  });
+
+  test('non-admin is refused; a missing client is 404', async () => {
+    const client = await createTracked({ name: 'Admin Undo Co', shootSlotsPerMonth: 1 });
+    await svc.deactivate(client.id, admin, db);
+
+    for (const user of [manager, member]) {
+      await expect(svc.reactivate(client.id, user, db)).rejects.toMatchObject({
+        code: 'PERMISSION_DENIED',
+      });
+    }
+    await expect(
+      svc.reactivate('e0000000-0000-4000-8000-00000000dead', admin, db),
+    ).rejects.toMatchObject({ code: 'RESOURCE_NOT_FOUND' });
+  });
+
+  test('it is audited as an UPDATE naming the backfilled period', async () => {
+    const client = await createTracked({ name: 'Audited Undo Co', shootSlotsPerMonth: 1 });
+    await svc.deactivate(client.id, admin, db);
+    await svc.reactivate(client.id, admin, db);
+
+    const row = await db
+      .selectFrom('audit_log')
+      .select(['action', 'new_value'])
+      .where('table_name', '=', 'clients')
+      .where('record_id', '=', client.id)
+      .orderBy('created_at', 'desc')
+      .executeTakeFirstOrThrow();
+    expect(row.action).toBe('UPDATE');
+    expect(JSON.stringify(row.new_value)).toContain(PERIOD);
   });
 });

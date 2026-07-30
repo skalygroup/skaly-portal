@@ -219,12 +219,58 @@ Initiate password reset. Response is always success to prevent enumeration.
 ---
 
 ### POST /v1/auth/mfa/verify
-Verify TOTP code during login (for admin/manager roles).
-**Auth:** Partially authenticated (valid JWT, MFA not yet verified)
+Confirm TOTP **enrolment** — flips `staff.mfa_enrolled`.
+**Auth:** Authenticated (valid JWT)
 
-**Request:** `{ "code": "123456" }`
-**Response 200:** `{ "data": { "verified": true, "accessToken": "jwt..." } }`
-**Errors:** 403 `MFA_FAILED` | 403 `MFA_LOCKED` (after 3 failures)
+**Request:** `{ "factorId": "...", "code": "123456" }`
+**Response 204**
+**Errors:** 400 `MFA_VERIFY_FAILED` | 403 `MFA_LOCKED` (after 3 failures)
+
+> **The login challenge is not an API call.** `/mfa-challenge` runs Supabase's own
+> `challengeAndVerify` against the user's session, because only Supabase can mint the `aal2`
+> claim the portal's middleware gates on — the API never sees a login TOTP code. That is why
+> a failed login attempt is *reported* (below) rather than counted by the endpoint that
+> checked it.
+
+---
+
+### POST /v1/auth/mfa/failure
+Report a failed TOTP challenge so it counts against the **shared** MFA failure budget.
+**Auth:** Authenticated (valid JWT) — self-inflicted only; the worst a caller can do is lock
+themselves out for 15 minutes.
+
+**Response 204**
+
+---
+
+### POST /v1/auth/mfa/recovery
+Spend a single-use recovery code. **Sprint 11 STEP 8.**
+**Auth:** Authenticated, **aal1 is enough** — this endpoint exists precisely for the caller
+who has passed password auth and *cannot* pass the authenticator step. Requiring aal2 would
+make it reachable only by people who do not need it.
+
+**Request:** `{ "code": "4f2a9c1e7b" }` — spacing and case are normalised server-side.
+**Response 200:** `{ "remainingCodes": 9 }`
+**Errors:** 403 `MFA_FAILED` | 403 `MFA_LOCKED`
+
+On success the code is consumed (single use, enforced by the DB), the Supabase factor is
+deleted, and `staff.mfa_enrolled` becomes `false` — so the caller lands on `/mfa-setup` to
+enrol a new authenticator. **The other codes survive**, unlike an admin `mfa/reset`: someone
+who abandons enrolment halfway must not have spent their one way back in. Audited distinctly
+from a TOTP login (`event: 'mfa_recovery_code_redeemed'`, `changed_by_source: 'user'`).
+
+### GET /v1/auth/mfa/recovery
+Remaining unconsumed codes. **The count only** — no endpoint returns a code.
+**Response 200:** `{ "remainingCodes": 7 }`
+
+### POST /v1/auth/mfa/recovery/regenerate
+Invalidate every existing code and issue a fresh set, returned **once**.
+**Auth:** Authenticated **+ aal2** — unlike redeem. Issuing codes from a session that never
+cleared the authenticator step would let a stolen password mint its own recovery codes and
+invalidate the real owner's.
+
+**Response 200:** `{ "recoveryCodes": ["...", … 10 total] }`
+**Errors:** 403 `MFA_REQUIRED`
 
 ---
 
@@ -745,25 +791,55 @@ Role-filtered event feed for home page. NOT the admin audit log.
 
 ### Reports
 
+> **Report generation is ASYNCHRONOUS — superseded by ADR-027 (Sprint 11).** This section
+> previously documented a synchronous contract: one call that rendered the PDF, uploaded it,
+> and returned a presigned `downloadUrl` in a 201. That shape is unimplementable as written —
+> it requires the render to finish inside the request, and a PDF render is CPU-bound on a
+> single-core Railway instance, so month-end requests block the event loop and take the API
+> down with them (the health check queues behind the render and Railway restarts the box).
+> The render now runs in a worker thread and the endpoint returns **202 + `reportId`**;
+> the client polls `GET /v1/reports/:id`. The old `GET /v1/reports/:id/download` is folded
+> into that poll — it returned a fresh presigned URL and nothing else, and one endpoint
+> cannot disagree with itself about whether a report is downloadable.
+
 **POST /v1/reports/generate**
 **Auth:** admin, manager
 ```json
 { "type": "client_monthly", "clientId": "uuid", "period": "2025-06" }
 ```
-Generates PDF server-side → uploads to R2 → creates reports row → returns presigned URL.
-**Response 201:**
+Creates a `reports` row with `status: 'pending'` and dispatches the render to a worker thread.
+Returns immediately — **no PDF, no link**. `clientId` is required for `client_monthly` and
+rejected for `org_monthly`.
+**Response 202:**
 ```json
-{ "data": { "reportId": "uuid", "downloadUrl": "https://r2... (24hr expiry)", "fileKey": "..." } }
+{ "data": { "reportId": "uuid", "status": "pending" } }
 ```
 
-**GET /v1/reports/:id/download**
-Generates fresh presigned GET URL. For reports > 30 days, R2 object may be gone — returns 410 with `[Regenerate]` CTA.
-**Response 200:** `{ "data": { "downloadUrl": "..." } }`
+**GET /v1/reports/:id**
+The poll. Returns the row's current `status` (`pending` → `ready` | `failed`), and once
+`ready`, a **freshly presigned** `downloadUrl`. The URL is generated from `file_key` on every
+read and never stored — a stored URL is a URL that expires in the database. `downloadUrl` is
+`null` for any status but `ready`; a `failed` report carries `errorMessage`.
+**Response 200:**
+```json
+{ "data": { "id": "uuid", "type": "client_monthly", "period": "2025-06", "clientId": "uuid",
+            "clientName": "Acme", "status": "ready", "errorMessage": null,
+            "requestedAt": "...", "completedAt": "...", "requestedBy": "uuid",
+            "downloadUrl": "https://r2... (24hr expiry)" } }
+```
+**410 `RESOURCE_EXPIRED`** for reports past R2's 30-day lifecycle rule — the row is still
+readable, the object is gone. Distinct from 404 so the panel can offer `[Regenerate]` rather
+than "not found".
 
-> **report_ready notification link target (audit M-08):** The `report_ready` notification's `payload.link` MUST point to `/settings/reports?reportId={id}` (a portal route), NEVER directly to a presigned R2 URL. The presigned URL expires in 24 hours, and a stale notification link would break. The `/settings/reports` page calls this endpoint to get a fresh presigned URL each time.
+> **report_ready notification link target (audit M-08):** The `report_ready` notification's
+> link MUST be `/settings/reports?reportId={id}` (a portal route), NEVER a presigned R2 URL.
+> The presigned URL expires in 24 hours and the notification row does not, so a baked-in link
+> is a bell that stops working overnight while still looking clickable. `/settings/reports`
+> calls `GET /v1/reports/:id` for a fresh URL on open. This is enforced for **all 18** types
+> by the registry link-durability test, not just for `report_ready`.
 
 **GET /v1/reports?period=**
-Lists all reports for the period.
+Lists reports for the period. A manager sees their own; an admin sees everyone's.
 
 ---
 

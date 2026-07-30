@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
-import { Client } from 'pg';
 
 import { login } from '../helpers/auth';
+import { withDb } from '../helpers/db';
 
 /**
  * E2E: admin signup-request review (Sprint 1 STEP 14).
@@ -24,16 +24,6 @@ const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD ?? '';
 const FLOW_ENABLED = Boolean(ADMIN_EMAIL && ADMIN_PASSWORD && process.env.DATABASE_URL);
 
 const uniqueEmail = (tag: string) => `e2e-${tag}-${Date.now()}@test.skaly.in`;
-
-async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
-  const client = new Client({ connectionString: process.env.DATABASE_URL });
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
-}
 
 async function seedPendingRequest(email: string, name: string) {
   return withDb(async (c) => {

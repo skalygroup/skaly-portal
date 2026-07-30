@@ -1,5 +1,5 @@
 /**
- * The 22-tool registry — 11 read (Sprint 8) + 11 mutation (Sprint 9). BotService
+ * The 23-tool registry — 11 read (Sprint 8) + 12 mutation (Sprint 9 + ADR-026). BotService
  * filters this by getPermittedBotTools before handing the definitions to
  * Anthropic, and dispatches each tool_use block back through getBotTool by name.
  *
@@ -22,6 +22,7 @@ import {
   addClientTool,
   addHolidayTool,
   deactivateClientTool,
+  reactivateClientTool,
   removeHolidayTool,
 } from './mutations-misc.js';
 import {
@@ -69,6 +70,7 @@ export const MUTATION_TOOLS: BotTool[] = [
   removeHolidayTool,
   addClientTool,
   deactivateClientTool,
+  reactivateClientTool,
 ];
 
 export const ALL_TOOLS: BotTool[] = [...QUERY_TOOLS, ...MUTATION_TOOLS];
@@ -81,10 +83,10 @@ export function getBotTool(name: string): BotTool | undefined {
 
 /**
  * Human-readable capability phrases for a set of DENIED tool names (Sprint 8.1,
- * re-tuned for 22 tools in Sprint 9 STEP 6).
+ * re-tuned for 22 tools in Sprint 9 STEP 6; 23 since ADR-026).
  *
  * Grouped BY FAMILY, one phrase per family with any denied member. 8.1 budgeted
- * ~120 tokens for ~10 denied query tools; a team_member is now denied 13 of 22, and
+ * ~120 tokens for ~10 denied query tools; a team_member is now denied 14 of 23, and
  * thirteen near-identical phrases do two bad things — they bloat the prompt, and
  * they give the model so much refusal surface that it starts pattern-matching onto
  * it and refusing things the user CAN do. 8.1's own troubleshooting predicted this.

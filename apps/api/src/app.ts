@@ -27,6 +27,7 @@ import { registerSwagger } from './lib/swagger.js';
 import authPlugin from './middleware/auth.plugin.js';
 import internalAuthPlugin from './middleware/internalAuth.plugin.js';
 import attendanceRoutes from './routes/attendance/index.js';
+import auditLogRoutes from './routes/audit-log/index.js';
 import authRoutes from './routes/auth/index.js';
 import botRoutes from './routes/bot/index.js';
 import chatRoutes from './routes/chat/index.js';
@@ -37,6 +38,7 @@ import { healthRoutes } from './routes/health.js';
 import holidaysRoutes from './routes/holidays/index.js';
 import monthsRoutes from './routes/months/index.js';
 import notificationsRoutes from './routes/notifications/index.js';
+import reportsRoutes from './routes/reports/index.js';
 import searchRoutes from './routes/search/index.js';
 import settingsRoutes from './routes/settings/index.js';
 import shootPlannerRoutes from './routes/shoot-planner/index.js';
@@ -271,6 +273,8 @@ export async function buildApp(
   await app.register(contentDropperRoutes, { prefix: '/v1' });
   await app.register(contentCalendarRoutes, { prefix: '/v1' });
   await app.register(settingsRoutes, { prefix: '/v1' });
+  await app.register(auditLogRoutes, { prefix: '/v1' });
+  await app.register(reportsRoutes, { prefix: '/v1' });
   await app.register(notificationsRoutes, { prefix: '/v1' });
   await app.register(chatRoutes, { prefix: '/v1' });
 

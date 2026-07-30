@@ -33,8 +33,8 @@ All API error responses follow a single consistent shape:
 | `TOKEN_EXPIRED` | 401 | JWT has expired — client should attempt silent refresh |
 | `ACCOUNT_DEACTIVATED` | 401 | Staff account has been deactivated by an admin |
 | `MFA_REQUIRED` | 403 | Admin/Manager must complete MFA enrollment before proceeding |
-| `MFA_FAILED` | 403 | Incorrect TOTP code |
-| `MFA_LOCKED` | 403 | Too many failed TOTP attempts — 15-minute lockout |
+| `MFA_FAILED` | 403 | Incorrect TOTP code, or a recovery code that is invalid or already spent |
+| `MFA_LOCKED` | 403 | 3 failed MFA attempts — 15-minute lockout. **One budget across every credential type**: TOTP and recovery-code failures share the counter, so 2 bad TOTP + 1 bad recovery code locks. A per-type counter would be a bypass dressed as a lockout |
 | `PERMISSION_DENIED` | 403 | Role or per-user override blocks this action |
 | `INVITE_EXPIRED` | 400 | Invite link is older than 24 hours |
 | `INVITE_ALREADY_USED` | 400 | Invite link has already been consumed |
@@ -59,6 +59,7 @@ All API error responses follow a single consistent shape:
 | `SHOOT_RESET_CONFIRMATION_REQUIRED` | 400 | Reset endpoint called without `{ confirm: true }` |
 | `CLIENT_SHOOT_SLOTS_REQUIRED` | 400 | Client creation missing `shoot_slots_per_month` |
 | `RESOURCE_NOT_FOUND` | 404 | Resource does not exist or has been soft-deleted |
+| `RESOURCE_EXPIRED` | 410 | The row exists but its stored object is gone — a report past R2's 30-day lifecycle rule. Distinct from 404 so the UI can offer `[Regenerate]` instead of "not found" (Sprint 11, `07-API-CONTRACT.md` §Reports) |
 
 ### File Upload
 

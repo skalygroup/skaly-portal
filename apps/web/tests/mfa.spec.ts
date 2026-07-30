@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { Client } from 'pg';
 
 import { login } from './helpers/auth';
+import { withDb } from './helpers/db';
+import { resetEnrollment } from './helpers/mfa-admin';
 import { totp } from './helpers/totp';
 
 /**
@@ -30,48 +31,8 @@ const FLOW_ENABLED = Boolean(
   MFA_EMAIL && MFA_PASSWORD && SUPABASE_URL && SERVICE_KEY && process.env.DATABASE_URL,
 );
 
-async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
-  const client = new Client({ connectionString: process.env.DATABASE_URL });
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
-}
-
-const sbHeaders = { apikey: SERVICE_KEY, authorization: `Bearer ${SERVICE_KEY}` };
-
-/** The throwaway admin's Supabase uid, read from the staff row that links them. */
-async function mfaAdminUid(): Promise<string> {
-  const { rows } = await withDb((c) =>
-    c.query('SELECT supabase_uid FROM staff WHERE email = $1 AND deleted_at IS NULL', [MFA_EMAIL]),
-  );
-  const uid = rows[0]?.supabase_uid as string | undefined;
-  if (!uid) throw new Error(`No staff row with a supabase_uid for ${MFA_EMAIL}.`);
-  return uid;
-}
-
-/**
- * Put the throwaway admin back in the un-enrolled state: no TOTP factor in
- * Supabase, mfa_enrolled=false in our own table. Both halves matter — a factor
- * left behind sends the next run to /mfa-challenge instead of /mfa-setup, and a
- * stale mfa_enrolled=true does the same via the middleware.
- */
-async function resetEnrollment(): Promise<void> {
-  const uid = await mfaAdminUid();
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${uid}/factors`, {
-    headers: sbHeaders,
-  });
-  const factors = (await res.json()) as Array<{ id: string }>;
-  for (const f of Array.isArray(factors) ? factors : []) {
-    await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${uid}/factors/${f.id}`, {
-      method: 'DELETE',
-      headers: sbHeaders,
-    });
-  }
-  await withDb((c) => c.query('UPDATE staff SET mfa_enrolled = false WHERE email = $1', [MFA_EMAIL]));
-}
+// withDb / resetEnrollment moved to helpers — mfa-recovery.spec.ts needs the
+// same reset, and two copies is one place to forget the mfa_enrolled half.
 
 test.describe('mfa enrollment — live', () => {
   // Supabase enroll + challenge + verify plus a possible 30s TOTP-window wait.
@@ -120,16 +81,23 @@ test.describe('mfa enrollment — live', () => {
       timeout: 30_000,
     });
 
-    // Continue is gated on the acknowledgement when codes were actually issued.
-    // The backend mints them; on the client-side fallback path the list is empty
-    // and the gate is absent — handle both rather than assume which ran.
+    /**
+     * ⭐ ADR-031's Rule, on the only path this environment actually runs.
+     *
+     * The gate is NOT optional. It used to be asserted as "if it's there" —
+     * which is a tautology on the branch that matters: `/v1/auth/mfa/enroll`
+     * 501s here (the installed auth-js admin client has no `mfa.enrollFactor`,
+     * see AuthService.ts), so this test always takes the client fallback, and
+     * that fallback is exactly the one that used to finish with zero codes and
+     * no gate. Tolerating a missing gate made the hole ADR-031 closed invisible
+     * to the one test that runs against real Supabase.
+     */
     const cont = page.getByRole('button', { name: 'Continue to portal' });
     const ack = page.getByText(/saved my recovery codes somewhere secure/);
-    if (await ack.isVisible()) {
-      await expect(cont).toBeDisabled();
-      await ack.click();
-      await expect(cont).toBeEnabled();
-    }
+    await expect(ack, 'ADR-031 §3: the acknowledgment gate applies to BOTH paths').toBeVisible();
+    await expect(cont).toBeDisabled();
+    await ack.click();
+    await expect(cont).toBeEnabled();
     await cont.click();
 
     // Landed inside the portal — not bounced back to setup or to the challenge.
@@ -142,6 +110,19 @@ test.describe('mfa enrollment — live', () => {
       c.query('SELECT mfa_enrolled FROM staff WHERE email = $1', [MFA_EMAIL]),
     );
     expect(rows[0]?.mfa_enrolled).toBe(true);
+
+    // ⭐ And the codes genuinely exist. Ten shown on screen proves the mint
+    // returned; this proves it PERSISTED, which is what the redeem path spends.
+    // Unambiguous because resetEnrollment() deleted this account's codes in
+    // beforeEach — a leftover set from an earlier run cannot be what is counted.
+    const codes = await withDb((c) =>
+      c.query(
+        `SELECT count(*)::int AS n FROM mfa_recovery_codes
+          WHERE staff_id = (SELECT id FROM staff WHERE email = $1)`,
+        [MFA_EMAIL],
+      ),
+    );
+    expect(codes.rows[0]?.n, 'ADR-031 Rule: nobody leaves enrollment without codes').toBe(10);
   });
 
   test('a wrong code is rejected and no recovery codes are revealed', async ({ page }) => {

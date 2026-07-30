@@ -95,6 +95,25 @@ export default async function clientsRoutes(app: FastifyInstance) {
     },
   );
 
+  // Reactivate a client — deactivate's undo (ADR-026 §2). admin only. The
+  // service regenerates the current period's shoot/pipeline/calendar rows via
+  // the same backfill create uses.
+  r.put(
+    '/clients/:id/reactivate',
+    {
+      preHandler: [app.verifyJwt, app.requireRole('admin')],
+      schema: {
+        params: IdParam,
+        response: { 200: z.object({ data: ClientItemSchema }) },
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request) => {
+      const currentUser: CurrentUser = { staffId: request.user.id, role: request.user.role };
+      return { data: await service.reactivate(request.params.id, currentUser, app.db) };
+    },
+  );
+
   // Client name inline edit (04-APPFLOW §7). admin/manager only; clients is not
   // versioned → last-write-wins. The frontend invalidates every clientId-keyed
   // query so the rename propagates across modules.

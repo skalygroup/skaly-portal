@@ -20,19 +20,26 @@ export class ApiError extends Error {
 }
 
 /**
- * Thin fetch wrapper for the Skaly API. Attaches the current Supabase access
- * token as a Bearer header, sets JSON content-type for non-FormData bodies, and
- * normalises the backend's `{ error: { code, message } }` envelope into an
- * {@link ApiError}. Returns the parsed JSON body on success.
+ * The authenticated fetch, returning the RAW `Response`.
+ *
+ * `api()` is this plus JSON parsing, and is what almost every caller wants. This
+ * exists for the one response the app must not parse: the audit-log CSV export
+ * (ADR-028) streams, and `res.json()` would pull the whole thing into the heap —
+ * reintroducing on the client the ceiling the ADR removed on the server.
+ *
+ * The API authenticates on the `authorization` header only (auth.plugin.ts), so
+ * a plain `<a href>` — which would let the browser stream the download straight
+ * to disk with no JS involved — cannot reach it. That constraint is why the
+ * export handler has to hold a Response at all.
  */
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const supabase = createClient();
   const {
     data: { session },
   } = await supabase.auth.getSession();
   const token = session?.access_token;
 
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}${path}`, {
+  return fetch(`${process.env.NEXT_PUBLIC_API_URL}${path}`, {
     ...init,
     headers: {
       ...(init?.headers ?? {}),
@@ -44,6 +51,16 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     },
     credentials: 'include',
   });
+}
+
+/**
+ * Thin fetch wrapper for the Skaly API. Attaches the current Supabase access
+ * token as a Bearer header, sets JSON content-type for non-FormData bodies, and
+ * normalises the backend's `{ error: { code, message } }` envelope into an
+ * {@link ApiError}. Returns the parsed JSON body on success.
+ */
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(path, init);
 
   if (!res.ok) {
     // Backend errors are `{ error: { code, message } }`; fall back gracefully if
