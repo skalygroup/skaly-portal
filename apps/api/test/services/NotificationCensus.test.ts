@@ -60,18 +60,18 @@ async function producersByType(): Promise<Map<NotificationType, string[]>> {
   return found;
 }
 
-/** The 13 with a producer as of Sprint 11 — the complement of the deferred list. */
+/** The 14 with a producer as of Sprint 12 — the complement of the deferred list. */
 const WITH_PRODUCERS = NOTIFICATION_TYPES.filter((t) => !DEFERRED_NOTIFICATION_TYPES.includes(t));
 
 describe('every type the census claims has a producer, has one in src', () => {
-  test('⭐ all 13 resolve to a real emitter', async () => {
+  test('⭐ all 14 resolve to a real emitter', async () => {
     const producers = await producersByType();
     const missing = WITH_PRODUCERS.filter((t) => !producers.has(t));
 
     // A failure here means a producer was deleted or renamed. The type stays valid
     // everywhere else, so nothing else in the suite would notice.
     expect(missing, 'types claiming a producer that src does not emit').toEqual([]);
-    expect(WITH_PRODUCERS).toHaveLength(13);
+    expect(WITH_PRODUCERS).toHaveLength(14);
   });
 
   test('each producer lives where the census says it does', async () => {
@@ -93,6 +93,8 @@ describe('every type the census claims has a producer, has one in src', () => {
       // Sprint 11 (ADR-026 staff reinstate, ADR-027 off-loop reports).
       account_reactivated: 'services/AuthService.ts',
       report_ready: 'services/ReportService.ts',
+      // Sprint 12 (ADR-032) — the fifth deferred type to get a producer.
+      new_comment: 'services/CommentService.ts',
     };
 
     for (const type of WITH_PRODUCERS) {
@@ -101,7 +103,7 @@ describe('every type the census claims has a producer, has one in src', () => {
     }
   });
 
-  test('⭐ the deferred five emit NOTHING — no invented emitters', async () => {
+  test('⭐ the deferred four emit NOTHING — no invented emitters', async () => {
     const producers = await producersByType();
 
     // ADR-020 decision 4: a type with no producer is named and dated, never invented.
@@ -110,10 +112,11 @@ describe('every type the census claims has a producer, has one in src', () => {
     for (const type of DEFERRED_NOTIFICATION_TYPES) {
       expect(producers.get(type) ?? [], `${type} should have no producer yet`).toEqual([]);
     }
-    expect(DEFERRED_NOTIFICATION_TYPES).toHaveLength(5);
+    // The four left are the rollover set, and Sprint 13 ships them together.
+    expect(DEFERRED_NOTIFICATION_TYPES).toHaveLength(4);
   });
 
-  test('13 + 5 accounts for the whole enum, with nothing double-counted', () => {
+  test('14 + 4 accounts for the whole enum, with nothing double-counted', () => {
     expect(WITH_PRODUCERS.length + DEFERRED_NOTIFICATION_TYPES.length).toBe(18);
     const overlap = WITH_PRODUCERS.filter((t) => DEFERRED_NOTIFICATION_TYPES.includes(t));
     expect(overlap).toEqual([]);

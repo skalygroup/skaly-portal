@@ -181,11 +181,14 @@ describe('the deferred five are asserted by name, not merely commented', () => {
     // unlike those it had no write path to hook into — StaffService was read-only
     // and there was no staff deactivate OR reactivate anywhere. Sprint 11 built
     // both (ADR-026 reinstate, ADR-027 reports), so seven becomes five.
-    expect(DEFERRED_NOTIFICATION_TYPES).toHaveLength(5);
+    // Sprint 12 lands new_comment (ADR-032), five becomes four — and the four left
+    // are the rollover set, which Sprint 13 ships together. Those four claimed
+    // sprint 12 until this census ran; Sprint 12 builds the recompute that runs
+    // inside rollover, not rollover itself.
+    expect(DEFERRED_NOTIFICATION_TYPES).toHaveLength(4);
     expect(DEFERRED_NOTIFICATION_TYPES).toEqual(
       [
         'month_ready',
-        'new_comment',
         'rollover_failed',
         'rollover_success',
         'rollover_view_refresh_failed',
@@ -195,24 +198,23 @@ describe('the deferred five are asserted by name, not merely commented', () => {
 
   test('each deferred type names the sprint that owns its producer', () => {
     const owners: Record<string, number> = {
-      new_comment: 12,
-      month_ready: 12,
-      rollover_success: 12,
-      rollover_failed: 12,
-      rollover_view_refresh_failed: 12,
+      month_ready: 13,
+      rollover_success: 13,
+      rollover_failed: 13,
+      rollover_view_refresh_failed: 13,
     };
     for (const type of DEFERRED_NOTIFICATION_TYPES) {
       expect(NOTIFICATION_REGISTRY[type].producerSprint, type).toBe(owners[type]);
     }
   });
 
-  test('the other 13 are claimed by a sprint at or before 11', () => {
+  test('the other 14 are claimed by a sprint at or before 12', () => {
     const withProducers = NOTIFICATION_TYPES.filter(
       (t) => !DEFERRED_NOTIFICATION_TYPES.includes(t),
     );
-    expect(withProducers).toHaveLength(13);
+    expect(withProducers).toHaveLength(14);
     for (const t of withProducers) {
-      expect(NOTIFICATION_REGISTRY[t].producerSprint, t).toBeLessThanOrEqual(11);
+      expect(NOTIFICATION_REGISTRY[t].producerSprint, t).toBeLessThanOrEqual(12);
     }
   });
 });

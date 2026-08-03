@@ -99,7 +99,11 @@ beforeAll(async () => {
       { module: 'shoot_planner', record_id: RECORD, period: PERIOD, staff_id: MEMBER, content: `My ${TERM} note`, record_context: 'Slot 1' },
       { module: 'shoot_planner', record_id: RECORD, period: PERIOD, staff_id: ADMIN, content: `Admin reply about ${TERM}`, record_context: 'Slot 1' },
       { module: 'content_calendar', record_id: CLIENT_2, period: PERIOD, staff_id: ADMIN, content: `Private ${TERM} memo`, record_context: 'Cell' },
-      { module: 'shoot_planner', record_id: SHOOT, period: PERIOD, staff_id: ADMIN, content: `Bring the ${TERM} lens`, record_context: 'Zibberwock / Slot 1' },
+      // record_id is the CLIENT id, not the slot id (audit H-06). This seed said
+      // SHOOT until Sprint 12, which made it agree with a predicate that joined
+      // shoot_schedules.id — so the freelancer branch passed here while matching
+      // nothing at all against a real write.
+      { module: 'shoot_planner', record_id: CLIENT, period: PERIOD, staff_id: ADMIN, content: `Bring the ${TERM} lens`, record_context: 'Zibberwock / Slot 1' },
     ])
     .execute();
 });

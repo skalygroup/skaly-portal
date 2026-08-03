@@ -128,3 +128,18 @@ export {
   ChatSendResponseSchema,
 } from './schemas/chat';
 export type { ChatMessageDTOWire, ChatListResponse, ChatSendBody } from './schemas/chat';
+
+// Comment wire schemas (07-API-CONTRACT §Comments) — three modules, no tasks.
+export {
+  COMMENT_MODULES,
+  CommentModuleSchema,
+  CommentListQuerySchema,
+  CommentCreateSchema,
+  CommentAcknowledgeSchema,
+} from './schemas/comments';
+export type {
+  CommentModule,
+  CommentListQuery,
+  CommentCreateBody,
+  CommentAcknowledgeBody,
+} from './schemas/comments';

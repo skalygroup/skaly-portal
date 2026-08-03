@@ -21,6 +21,22 @@
  *
  * Only shoot_planner comments are reachable by a freelancer at all: Auth-Matrix
  * §4 gives them no content_dropper or content_calendar access.
+ *
+ * ── `record_id` IS A CLIENT ID (Sprint 12, audit H-06) ────────────────────────
+ * This file shipped in Sprint 11 matching `shoot_schedules.id = record_id`. That
+ * is wrong, and it took a second consumer to notice. `comments.record_id` soft-
+ * references `shoot_schedules.client_id` / `content_pipelines.client_id` /
+ * `content_calendar.client_id` depending on `module` (API-Contract, POST
+ * /v1/comments) — APPFLOW §13 agrees, because the comment icon opens from the end
+ * of a GRID ROW, and all three grids are one row per client per period.
+ *
+ * Matching a slot id against a client id never succeeds, so the branch returned
+ * NOTHING for every freelancer. It failed safe, which is exactly why three
+ * sprints did not catch it: with no write path, the only rows in the table were
+ * seeded ones, and the seed was written to agree with the predicate.
+ *
+ * `period` joins the match because `record_id` alone names a client, not a
+ * client-month, and an assignment ends when its period does.
  */
 import { sql, type Expression, type ExpressionBuilder, type SqlBool } from 'kysely';
 
@@ -40,7 +56,8 @@ export function commentVisibility(
           eb
             .selectFrom('shoot_schedules')
             .select(sql`1`.as('one'))
-            .whereRef('shoot_schedules.id', '=', 'comments.record_id')
+            .whereRef('shoot_schedules.client_id', '=', 'comments.record_id')
+            .whereRef('shoot_schedules.period', '=', 'comments.period')
             .where('shoot_schedules.freelancer_id', '=', self),
         ),
       ]);

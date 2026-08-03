@@ -237,7 +237,12 @@ export const NOTIFICATION_REGISTRY = {
       const period = str(p, 'period');
       return period ? `/dashboard?period=${period}` : '/dashboard';
     },
-    producerSprint: 12,
+    // The rollover four claimed sprint 12 until Sprint 12's census ran against src.
+    // Sprint 12 builds the recompute that runs INSIDE rollover, not rollover itself
+    // — that is Sprint 13 ("Rollover, Hardening & Launch"), and these four ship with
+    // it. producerSprint is the documented claim; src is the truth, and the census
+    // is what forced the claim to come back down to earth.
+    producerSprint: 13,
   },
   rollover_success: {
     title: 'Rollover completed',
@@ -245,7 +250,7 @@ export const NOTIFICATION_REGISTRY = {
     icon: 'CheckCircle2',
     severity: 'success',
     linkBuilder: (_payload: Record<string, unknown>) => '/settings/months',
-    producerSprint: 12,
+    producerSprint: 13,
   },
   rollover_failed: {
     title: 'Rollover failed',
@@ -254,7 +259,7 @@ export const NOTIFICATION_REGISTRY = {
     icon: 'XCircle',
     severity: 'critical',
     linkBuilder: (_payload: Record<string, unknown>) => '/settings/months',
-    producerSprint: 12,
+    producerSprint: 13,
   },
   rollover_view_refresh_failed: {
     title: 'Rollover view refresh failed',
@@ -262,7 +267,7 @@ export const NOTIFICATION_REGISTRY = {
     icon: 'AlertTriangle',
     severity: 'critical',
     linkBuilder: (_payload: Record<string, unknown>) => '/settings/months',
-    producerSprint: 12,
+    producerSprint: 13,
   },
   // `satisfies` WITHOUT `as const`: the keys stay literal (so NotificationType is the
   // union and NOTIFICATION_REGISTRY.mention is typed), while each linkBuilder widens
@@ -280,7 +285,7 @@ export const NOTIFICATION_TYPES = Object.keys(NOTIFICATION_REGISTRY) as Notifica
  * The last sprint whose producers are built. Bump it when a sprint ships its
  * notification producers, and the census test tells you which ones you still owe.
  */
-export const SHIPPED_THROUGH_SPRINT = 11;
+export const SHIPPED_THROUGH_SPRINT = 12;
 
 /**
  * Types with no producer yet, with the sprint that owns each.
@@ -293,7 +298,10 @@ export const SHIPPED_THROUGH_SPRINT = 11;
  *
  * Was `SPRINT_10_DEFERRED_TYPES`, a name that had to be edited every sprint. Sprint 11
  * lands two of them: `account_reactivated` (ADR-026 staff reinstate) and `report_ready`
- * (ADR-027), taking the list 7 → 5.
+ * (ADR-027), taking the list 7 → 5. Sprint 12 lands `new_comment` (ADR-032), 5 → 4.
+ *
+ * The remaining four are the rollover set, and they ship together in Sprint 13:
+ * `month_ready`, `rollover_success`, `rollover_failed`, `rollover_view_refresh_failed`.
  */
 export const DEFERRED_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
   (t) => NOTIFICATION_REGISTRY[t].producerSprint > SHIPPED_THROUGH_SPRINT,

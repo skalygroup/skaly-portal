@@ -32,6 +32,7 @@ import authRoutes from './routes/auth/index.js';
 import botRoutes from './routes/bot/index.js';
 import chatRoutes from './routes/chat/index.js';
 import clientsRoutes from './routes/clients/index.js';
+import commentsRoutes from './routes/comments/index.js';
 import contentCalendarRoutes from './routes/content-calendar/index.js';
 import contentDropperRoutes from './routes/content-dropper/index.js';
 import { healthRoutes } from './routes/health.js';
@@ -277,6 +278,7 @@ export async function buildApp(
   await app.register(reportsRoutes, { prefix: '/v1' });
   await app.register(notificationsRoutes, { prefix: '/v1' });
   await app.register(chatRoutes, { prefix: '/v1' });
+  await app.register(commentsRoutes, { prefix: '/v1' });
 
   return app;
 }
