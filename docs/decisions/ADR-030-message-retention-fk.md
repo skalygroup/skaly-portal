@@ -64,3 +64,81 @@ whole-conversation delete the job is designed around.
 ## Rule
 
 > Retention deletes whole conversations, never halves of turns.
+
+---
+
+## Amendment (Sprint 12 build)
+
+### Correction to §4 — session scoping is superseded
+
+§4 above says the job is bounded by `bot_sessions.last_activity_at`. **It is not, and it
+cannot be.** ADR-021's own correction (Sprint 10 STEP 8, found by a test) records why:
+`messages` carries no session reference, so the only available join is
+`bot_sessions.staff_id`, and that means **one expired session deletes that person's entire
+bot history, live conversations included.** ADR-021 is the later document and it wins.
+
+The turn-pair guarantee §4 was reaching for comes from `parent_id`, not from the envelope.
+The rule is one rule for both channels:
+
+> Delete a message past the cutoff **unless it still has a reply inside the window.**
+
+`NotificationService.deleteExpiredMessages` (Sprint 10 STEP 4) already implements exactly
+that, and `test/services/MessageRetention.test.ts` already covers the straddling pair and
+the two-conversations-one-person regression. Sprint 12 does **not** rewrite the predicate.
+
+Whole-conversation retention scoped to a real session would need a `session_id` column on
+`messages` — a migration and a deliberate decision. It is not in Sprint 12.
+
+### Batching
+
+Sprint 12 adds the bound that was missing. §4's single-statement property is load-bearing
+and is preserved; what changes is that one statement no longer covers the entire 12-month
+purge. Each batch is:
+
+```sql
+WITH batch AS (
+  SELECT m.id FROM messages m
+  WHERE m.created_at < :cutoff
+    AND NOT EXISTS (SELECT 1 FROM messages r
+                    WHERE r.parent_id = m.id AND r.created_at >= :cutoff)
+  ORDER BY m.created_at
+  LIMIT :batchSize
+)
+DELETE FROM messages d
+WHERE d.id IN (SELECT id FROM batch)
+   OR d.parent_id IN (SELECT id FROM batch)   -- the closure that keeps a turn whole
+RETURNING d.id
+```
+
+The `OR d.parent_id IN (batch)` closure is the part that matters: a parent selected into the
+batch takes **all** its children with it in the same statement, even if a child fell outside
+the `LIMIT`. Those children are necessarily past the cutoff already — a parent with a reply
+inside the window is excluded by the `NOT EXISTS`. So the statement is bounded *and* whole,
+and `NO ACTION`'s statement-end check still passes.
+
+The job loops until a batch returns zero rows, with an iteration cap so a runaway can never
+spin. Between batches, other traffic proceeds — a single monster `DELETE` would hold locks
+on `messages` for the length of the purge, during live chat.
+
+### Schedule
+
+**03:00 IST, monthly**, on the existing Railway cron service behind `X-Internal-Secret`.
+Well clear of the 00:01 rollover window: a long `DELETE` holding locks while rollover's
+atomic transaction is open is the one way to turn two safe jobs into an outage. It is also
+clear of the 04:00 attachment sweep (ADR-033).
+
+### Scope
+
+This job is **only** the 12-month message cleanup, plus `bot_sessions` envelopes whose
+`last_activity_at` is past the same cutoff (deleted separately — no FK ties them to
+`messages`, which is the whole point of ADR-021 §4).
+
+It is **not** the 2-year audit-log archival (separate, post-launch) and **not** the 30-day
+report/backup R2 lifecycle (R2 lifecycle rules, Infra §7). It deletes no audit rows and no
+R2 objects.
+
+### Audit
+
+A **summary** row per run to the System Actor — messages removed, sessions removed, batches
+run. Not per-row: a single run can clear ~15k messages (NFR §2.2), and 15k audit rows to
+record one scheduled cleanup is how the audit log becomes unreadable.
