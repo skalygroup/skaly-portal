@@ -37,6 +37,7 @@ import contentCalendarRoutes from './routes/content-calendar/index.js';
 import contentDropperRoutes from './routes/content-dropper/index.js';
 import { healthRoutes } from './routes/health.js';
 import holidaysRoutes from './routes/holidays/index.js';
+import internalRoutes from './routes/internal/index.js';
 import monthsRoutes from './routes/months/index.js';
 import notificationsRoutes from './routes/notifications/index.js';
 import reportsRoutes from './routes/reports/index.js';
@@ -279,6 +280,8 @@ export async function buildApp(
   await app.register(notificationsRoutes, { prefix: '/v1' });
   await app.register(chatRoutes, { prefix: '/v1' });
   await app.register(commentsRoutes, { prefix: '/v1' });
+  // Cron-only (X-Internal-Secret, no JWT) — the three Sprint 12 jobs.
+  await app.register(internalRoutes, { prefix: '/v1' });
 
   return app;
 }

@@ -13,6 +13,7 @@ import { STAGES, type PipelineRow, type PipelineStatus, type PipelineUpdatedBy, 
 import type { MonthItem } from '../attendance/types';
 import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 
+import { CommentTrigger } from '@/components/shared/comment-panel';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
@@ -211,13 +212,15 @@ function StageCell({ row, stage, field, editable, onMark, onFocus, onBlur }: Sta
 interface ClientCellProps {
   row: PipelineRow;
   canEdit: boolean;
+  period: string;
+  locked: boolean;
   onDraftChange: (id: string, value: string, original: string) => void;
   onCommit: (id: string, name: string, original: string) => void;
   onRefresh: (clientId: string) => void;
 }
 
 /** Sticky client cell: name (inline-editable), status chip, STALE_DATA banner, progress bar. Self-subscribing. */
-function ClientCell({ row, canEdit, onDraftChange, onCommit, onRefresh }: ClientCellProps) {
+function ClientCell({ row, canEdit, period, locked, onDraftChange, onCommit, onRefresh }: ClientCellProps) {
   const editing = useDropperUiStore((s) => s.editingClientId === row.clientId);
   const nameDraft = useDropperUiStore((s) => s.nameDraft);
   const staleName = useDropperUiStore((s) => s.stale[row.clientId] ?? null);
@@ -254,6 +257,13 @@ function ClientCell({ row, canEdit, onDraftChange, onCommit, onRefresh }: Client
         <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{row.clientName}</span>
       )}
       <StatusChip status={row.status} />
+      <CommentTrigger
+        module="content_dropper"
+        recordId={row.clientId}
+        recordName={row.clientName}
+        period={period}
+        locked={locked}
+      />
       {staleName ? (
         <button
           type="button"
@@ -460,6 +470,8 @@ export function ContentDropperGrid() {
           <ClientCell
             row={row.original}
             canEdit={!!canEdit}
+            period={period}
+            locked={locked}
             onDraftChange={onDraftChange}
             onCommit={commitRename}
             onRefresh={refreshRow}
@@ -511,7 +523,7 @@ export function ContentDropperGrid() {
         cell: ({ row }) => <ComingShootCell row={row.original} today={today} />,
       }),
     ],
-    [canEdit, today, markStage, refreshRow, onDraftChange, commitRename, focusHandlers],
+    [canEdit, period, locked, today, markStage, refreshRow, onDraftChange, commitRename, focusHandlers],
   );
 
   const table = useReactTable({ data: rows ?? [], columns, getCoreRowModel: getCoreRowModel() });

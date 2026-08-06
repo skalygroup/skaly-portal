@@ -28,12 +28,13 @@ import { useNotifySocket } from '@/lib/socket';
  * a row in the cache that never existed on the server, which is the failure
  * ADR-022 rule (b) names. One refetch answers all of it.
  *
- * ── Two keys, one endpoint ───────────────────────────────────────────────────
- * ⚠️ The five module grids read `['months']`; Settings → Months reads
- * `['settings', 'months']`. Same `GET /v1/months`, two cache entries — so both
- * must be invalidated or one surface silently keeps the stale lock state. This
- * is the split PermissionSync's test exists to prevent on `['staff-me']`; here it
- * already happened. Worth unifying, but not while closing a sprint.
+ * ── One key, one endpoint ────────────────────────────────────────────────────
+ * The five module grids and Settings → Months all read `['months']` now. They
+ * did not when this shipped: the panel had its own `['settings', 'months']`
+ * entry for the same `GET /v1/months`, so this component had to invalidate two
+ * keys and a third consumer inventing a fourth would have been missed silently.
+ * That is the split PermissionSync's test prevents on `['staff-me']`, and it had
+ * already happened here. Unified in Sprint 12 — one invalidation, every surface.
  *
  * Mounted once in the portal layout — the socket is a per-namespace singleton, so
  * a second mount would handle every event twice.
@@ -43,7 +44,6 @@ export function MonthLockSync() {
 
   const onLockChanged = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['months'] });
-    void queryClient.invalidateQueries({ queryKey: ['settings', 'months'] });
   }, [queryClient]);
 
   useNotifySocket('month:lock_changed', onLockChanged);

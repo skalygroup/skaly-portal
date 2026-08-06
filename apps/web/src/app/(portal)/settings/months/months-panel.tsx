@@ -28,7 +28,13 @@ interface MonthRow {
   unlockReason: string | null;
 }
 
-const QUERY_KEY = ['settings', 'months'] as const;
+/**
+ * The SAME key the five module grids use — `GET /v1/months` is one resource, so
+ * it gets one cache entry (Sprint 12 STEP 8). This panel used to read it under
+ * `['settings', 'months']`, which meant every invalidation had to name both keys
+ * or one surface kept a lock state the server had already changed.
+ */
+const QUERY_KEY = ['months'] as const;
 
 export function MonthsPanel({ canWrite }: { canWrite: boolean }) {
   const qc = useQueryClient();

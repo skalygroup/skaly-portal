@@ -6,7 +6,7 @@ import { CommentService } from '../../src/services/CommentService.js';
 import { SearchService } from '../../src/services/SearchService.js';
 
 import type { CurrentUser } from '../../src/services/AttendanceService.js';
-import type { DB } from '@skaly/shared';
+import type { CommentModule, DB } from '@skaly/shared';
 
 /**
  * CommentService (ADR-032) — the write path the `comments` table has been waiting
@@ -55,7 +55,13 @@ const otherFreelancer: CurrentUser = { staffId: OTHER_FREELANCER, role: 'freelan
 /** Unlikely to collide with another suite's full-text fixtures. */
 const TERM = 'quibblewax';
 
-const row = { module: 'shoot_planner', recordId: CLIENT, period: PERIOD } as const;
+/** The grid row under test. Typed, not `as const` — every helper below varies it. */
+interface RowRef {
+  module: CommentModule;
+  recordId: string;
+  period: string;
+}
+const row: RowRef = { module: 'shoot_planner', recordId: CLIENT, period: PERIOD };
 
 beforeAll(async () => {
   await db
@@ -114,10 +120,10 @@ afterAll(async () => {
   await db.destroy(); // ends the pool it owns — a second pool.end() throws
 });
 
-const post = (user: CurrentUser, content: string, over: Partial<typeof row> = {}) =>
+const post = (user: CurrentUser, content: string, over: Partial<RowRef> = {}) =>
   db.transaction().execute((trx) => comments.create({ ...row, ...over, content }, user, trx));
 
-const contentsFor = async (user: CurrentUser, over: Partial<typeof row> = {}) =>
+const contentsFor = async (user: CurrentUser, over: Partial<RowRef> = {}) =>
   (await comments.list({ ...row, ...over }, user, db)).map((c) => c.content).sort();
 
 describe('create', () => {

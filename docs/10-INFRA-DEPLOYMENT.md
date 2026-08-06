@@ -133,12 +133,29 @@ restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 ```
 
-**Cron service** (separate Railway service — only responsible for firing the rollover endpoint):
+**Cron service** (separate Railway service — fires the `/v1/internal/*` endpoints; every one is gated by `X-Internal-Secret` and has no JWT path at all):
 ```
-Schedule: 31 18 * * *   (00:01 IST = 18:31 UTC)
+Schedule: 31 18 * * *   (00:01 IST = 18:31 UTC)   — rollover (Sprint 13)
 Command: curl -X POST https://api.skaly.in/v1/internal/rollover
          -H "X-Internal-Secret: ${CRON_SECRET}"
+
+Schedule: 30 22 * * *   (04:00 IST = 22:30 UTC)   — attachment orphan sweep (ADR-033)
+Command: curl -X POST https://api.skaly.in/v1/internal/attachment-sweep
+         -H "X-Internal-Secret: ${CRON_SECRET}"
+
+Schedule: 30 21 1 * *   (03:00 IST on the 1st = 21:30 UTC on the last day) — message retention (ADR-030)
+Command: curl -X POST https://api.skaly.in/v1/internal/message-retention
+         -H "X-Internal-Secret: ${CRON_SECRET}"
 ```
+
+The three are deliberately hours apart and all clear of the 00:01 rollover window.
+Retention runs monthly and is the heaviest of them, so it sits at 03:00 — after
+the 02:00 backup has finished, and long before anyone is in the chat it deletes
+from.
+
+`coming_shoot_date` recompute has **no schedule of its own**: it runs inside the
+rollover transaction (ADR-034). `POST /v1/internal/recompute-shoot-dates` exists
+as the manual re-run handle and for Sprint 13 to call in-process.
 
 ---
 

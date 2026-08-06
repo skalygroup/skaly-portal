@@ -28,7 +28,16 @@ export interface OrgMonthlyData {
   activeStaffCount: number;
   activeClientCount: number;
   tasks: { total: number; done: number; pending: number; overdue: number };
-  perStaff: Array<{ name: string; role: string; assigned: number; done: number; overdue: number }>;
+  // staffId is carried for identity only — two colleagues share a display name
+  // often enough that keying the PDF's rows by name dropped one of them.
+  perStaff: Array<{
+    staffId: string;
+    name: string;
+    role: string;
+    assigned: number;
+    done: number;
+    overdue: number;
+  }>;
   shoots: { total: number; completed: number; confirmed: number; unset: number };
   posts: number;
 }
@@ -115,6 +124,7 @@ async function collectOrgMonthly(
     .selectFrom('dashboard_staff_task_stats as s')
     .innerJoin('staff', 'staff.id', 's.staff_id')
     .select([
+      'staff.id as staff_id',
       'staff.name',
       'staff.role',
       's.total_assigned',
@@ -171,6 +181,7 @@ async function collectOrgMonthly(
       overdue: perStaffRows.reduce((acc, r) => acc + n(r.tasks_overdue), 0),
     },
     perStaff: perStaffRows.map((r) => ({
+      staffId: r.staff_id,
       name: r.name,
       role: r.role,
       assigned: n(r.total_assigned),

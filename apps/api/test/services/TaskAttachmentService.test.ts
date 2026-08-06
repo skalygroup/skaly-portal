@@ -15,6 +15,7 @@ vi.mock('../../src/lib/r2.js', () => ({
   getPresignedDownloadUrl: vi.fn(async () => 'https://r2.fake/get'),
   headObjectSize: vi.fn(),
   deleteR2Object: vi.fn(async () => undefined),
+  ATTACHMENTS_PREFIX: 'attachments/',
   UPLOAD_EXPIRY_SECONDS: 900,
   DOWNLOAD_EXPIRY_SECONDS: 3600,
 }));
@@ -213,5 +214,64 @@ describe('confirmAttachment — the ADR-007 two-point size check', () => {
       .where('action', '=', 'INSERT')
       .executeTakeFirst();
     expect(audit).toBeDefined();
+  });
+});
+
+/**
+ * ADR-033 §8 — the OTHER orphan direction: a row whose R2 object is gone.
+ *
+ * Handled lazily, at download, rather than by a cron HEAD-storm over every
+ * attachment row. We learn the object's fate exactly when somebody asks for it,
+ * and a presigned URL for a missing key is worse than an error — it hands the
+ * browser a link that fails with no explanation.
+ */
+describe('getAttachmentDownloadUrl — the lazy dangling-ref check', () => {
+  async function seedRow(): Promise<string> {
+    mockedHead.mockResolvedValue(1024);
+    const dto = await db.transaction().execute((trx) =>
+      svc.confirmAttachment(
+        TASK_ID,
+        {
+          fileKey: `attachments/${TASK_ID}/xyz_present.pdf`,
+          fileName: 'present.pdf',
+          mimeType: 'application/pdf',
+          fileSize: 1024,
+        },
+        admin,
+        trx,
+      ),
+    );
+    return dto.id;
+  }
+
+  test('a present object yields a fresh presigned URL', async () => {
+    const id = await seedRow();
+    mockedHead.mockResolvedValue(1024);
+
+    const { downloadUrl } = await svc.getAttachmentDownloadUrl(TASK_ID, id, admin, db);
+    expect(downloadUrl).toBe('https://r2.fake/get');
+  });
+
+  test('⭐ a row whose object is GONE returns a clean error, not a broken link', async () => {
+    const id = await seedRow();
+    mockedHead.mockResolvedValue(null); // HeadObject 404
+
+    await expect(svc.getAttachmentDownloadUrl(TASK_ID, id, admin, db)).rejects.toMatchObject({
+      code: 'RESOURCE_NOT_FOUND',
+    });
+  });
+
+  test('the row is left in place — no column is written, the HEAD re-derives it', async () => {
+    const id = await seedRow();
+    mockedHead.mockResolvedValue(null);
+
+    await expect(svc.getAttachmentDownloadUrl(TASK_ID, id, admin, db)).rejects.toThrow();
+
+    const row = await db
+      .selectFrom('task_attachments')
+      .select('id')
+      .where('id', '=', id)
+      .executeTakeFirst();
+    expect(row, 'no soft-delete, no missing_at — ADR-033 §8 adds no column').toBeDefined();
   });
 });

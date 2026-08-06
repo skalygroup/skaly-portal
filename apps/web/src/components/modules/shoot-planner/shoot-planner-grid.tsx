@@ -18,6 +18,7 @@ import type { ShootClient, ShootGridData, Slot } from './types';
 import type { MonthItem } from '../attendance/types';
 import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 
+import { CommentTrigger } from '@/components/shared/comment-panel';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
@@ -437,6 +438,13 @@ export function ShootPlannerGrid() {
             <span className="text-xs" style={{ ...mono, color: 'var(--text-muted)' }}>
               {row.original.client.shootSlotsPerMonth} slots · ×{row.original.client.piecesPerVisit}/visit
             </span>
+            <CommentTrigger
+              module="shoot_planner"
+              recordId={row.original.client.id}
+              recordName={row.original.client.name}
+              period={period}
+              locked={locked}
+            />
           </div>
         ),
       }),
@@ -446,6 +454,7 @@ export function ShootPlannerGrid() {
     slotColumnCount,
     slotMap,
     canEdit,
+    locked,
     errorSlotIds,
     openSlotId,
     menuSlotId,

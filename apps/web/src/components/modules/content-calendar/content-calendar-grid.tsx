@@ -24,6 +24,7 @@ import type { MonthItem } from '../attendance/types';
 import type { CalendarStatus } from '@skaly/shared';
 import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 
+import { CommentTrigger } from '@/components/shared/comment-panel';
 import { api, ApiError } from '@/lib/api';
 import { useColumnHighlightStore } from '@/lib/hooks/use-column-highlight';
 import { useMonthContext } from '@/lib/hooks/use-month-context';
@@ -541,6 +542,16 @@ export function ContentCalendarGrid() {
                   }}
                 >
                   <span className="truncate">{client.name}</span>
+                  {/* Icon only — the header is one virtualised column wide, and
+                      the client name has first claim on it. */}
+                  <CommentTrigger
+                    compact
+                    module="content_calendar"
+                    recordId={client.id}
+                    recordName={client.name}
+                    period={period}
+                    locked={locked}
+                  />
                 </div>
               );
             })}

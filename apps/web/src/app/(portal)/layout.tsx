@@ -1,3 +1,4 @@
+import { CommentPanelHost } from '@/components/shared/comment-panel';
 import { ConnectionBanner } from '@/components/shared/connection-banner';
 import { MonthLockSync } from '@/components/shared/month-lock-sync';
 import { NotificationBell } from '@/components/shared/notification-bell';
@@ -53,6 +54,10 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
             (FR-SEARCH-01). Inside the md+ branch — the palette is desktop-only,
             like the rest of the portal. */}
         <SearchPalette />
+        {/* One panel for every grid's comment buttons. Mounted here rather than
+            inside the trigger because the triggers live in TanStack cells, and a
+            column rebuild remounts those — taking an open panel with it. */}
+        <CommentPanelHost />
       </div>
     </>
   );

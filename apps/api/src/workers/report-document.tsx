@@ -135,7 +135,10 @@ function OrgBody({ d }: { d: OrgMonthlyData }) {
           <Row header cells={['Name', 'Role', 'Assigned', 'Done', 'Overdue']} widths={[34, 22, 15, 14, 15]} />
           {d.perStaff.map((p) => (
             <Row
-              key={p.name}
+              // Not the name: two staff called "Member" collided, and React
+              // renders ONE row for a duplicate key — a person silently missing
+              // from a month-end report nobody would think to check.
+              key={p.staffId}
               cells={[p.name, p.role, String(p.assigned), String(p.done), String(p.overdue)]}
               widths={[34, 22, 15, 14, 15]}
             />

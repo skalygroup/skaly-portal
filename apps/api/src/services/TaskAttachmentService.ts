@@ -37,6 +37,7 @@ import {
   getPresignedDownloadUrl,
   headObjectSize,
   deleteR2Object,
+  ATTACHMENTS_PREFIX,
   UPLOAD_EXPIRY_SECONDS,
   DOWNLOAD_EXPIRY_SECONDS,
 } from '../lib/r2.js';
@@ -101,7 +102,10 @@ export class TaskAttachmentService {
       });
     }
 
-    const fileKey = `attachments/${taskId}/${randomUUID()}_${sanitizeFileName(input.fileName)}`;
+    // The prefix comes from r2.ts, not a literal: the orphan sweep's scope
+    // assertion is only worth anything if the writer and the sweeper agree on
+    // one string (ADR-033).
+    const fileKey = `${ATTACHMENTS_PREFIX}${taskId}/${randomUUID()}_${sanitizeFileName(input.fileName)}`;
     const presignedUrl = await getPresignedUploadUrl(fileKey, input.mimeType, UPLOAD_EXPIRY_SECONDS);
     return { presignedUrl, fileKey };
   }
@@ -120,7 +124,7 @@ export class TaskAttachmentService {
     await assertPeriodNotLocked(task.period, trx);
 
     // A client can only confirm a key it was legitimately presigned under THIS task.
-    if (!input.fileKey.startsWith(`attachments/${taskId}/`)) {
+    if (!input.fileKey.startsWith(`${ATTACHMENTS_PREFIX}${taskId}/`)) {
       throw new AppError('VALIDATION_ERROR', 'fileKey does not belong to this task.');
     }
 
@@ -174,7 +178,15 @@ export class TaskAttachmentService {
     return mapAttachment(row);
   }
 
-  /** Fresh 1-hour presigned GET. Same read permission as the task. */
+  /**
+   * Fresh 1-hour presigned GET. Same read permission as the task.
+   *
+   * The OTHER orphan direction — a row whose object is gone — is handled here,
+   * LAZILY, rather than by a cron HEAD-storm over every attachment row
+   * (ADR-033 §8). We already know the object's fate at exactly the moment
+   * somebody cares, and a presigned URL for a missing key is worse than an
+   * error: it hands the browser a link that 403s or 404s with no explanation.
+   */
   async getAttachmentDownloadUrl(
     taskId: string,
     attachmentId: string,
@@ -191,6 +203,14 @@ export class TaskAttachmentService {
       .executeTakeFirst();
     if (!att) {
       throw new AppError('RESOURCE_NOT_FOUND', `Attachment ${attachmentId} does not exist on this task.`);
+    }
+
+    if ((await headObjectSize(att.file_key)) === null) {
+      // No `missing_at` column is written: the state is re-derived by this same
+      // HEAD next time, and a migration to persist it would be storage for its
+      // own sake until something actually renders a "broken attachment" badge.
+      logger.warn({ fileKey: att.file_key, attachmentId }, 'attachment row points at a missing R2 object');
+      throw new AppError('RESOURCE_NOT_FOUND', 'This file is no longer available in storage.');
     }
 
     const downloadUrl = await getPresignedDownloadUrl(att.file_key, DOWNLOAD_EXPIRY_SECONDS);

@@ -4,6 +4,8 @@ import {
   PutObjectCommand,
   HeadObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -18,15 +20,23 @@ export const DOWNLOAD_EXPIRY_SECONDS = 3600; // 1 hour
 export const REPORT_EXPIRY_SECONDS = 86400; // 24 hours (Sprint 12 report downloads)
 
 /**
+ * The ONE key prefix task attachments live under (ADR-033).
+ *
+ * The bucket also holds CVs, reports, and backups (Infra §1), so this string is
+ * the entire difference between the orphan sweep and a job that deletes every
+ * backup. It is written once, here, and asserted at the sweep's entry point —
+ * every other reference imports it.
+ */
+export const ATTACHMENTS_PREFIX = 'attachments/';
+
+/**
  * Cloudflare R2 is S3-compatible, so we drive it with the AWS S3 v3 client.
  * ONE client for the whole app. Built lazily on first use: requireR2() throws if
  * R2 isn't configured, and we don't want that to fire at import time on
  * processes that never touch storage.
  *
- * TODO(Sprint 12 cron): sweep `attachments/*` objects with no matching
- * task_attachments row older than 24h (orphan reaping — ADR-007). Until then the
- * R2 bucket lifecycle rule on the `attachments/` prefix (Cloudflare console)
- * covers presigned-but-never-confirmed uploads.
+ * The Sprint 12 orphan sweep (ADR-033) lives in jobs/attachment-orphan-sweep.ts
+ * and reaps `attachments/` keys with no task_attachments row older than an hour.
  */
 let client: S3Client | null = null;
 
@@ -117,6 +127,54 @@ export async function headObjectSize(key: string): Promise<number | null> {
 /** Delete an R2 object by key. Used to reap the orphan when confirm rejects. */
 export async function deleteR2Object(key: string): Promise<void> {
   await getR2Client().send(new DeleteObjectCommand({ Bucket: getR2Bucket(), Key: key }));
+}
+
+/** One page of `ListObjectsV2` under `prefix`. */
+export interface R2Object {
+  key: string;
+  lastModified: Date | null;
+}
+
+/**
+ * One page of keys under `prefix`, with the continuation token for the next.
+ *
+ * `prefix` is required and has no default — a caller that forgets it is a
+ * compile error rather than a full-bucket listing.
+ */
+export async function listR2Objects(
+  prefix: string,
+  continuationToken?: string,
+): Promise<{ objects: R2Object[]; nextToken: string | undefined }> {
+  const res = await getR2Client().send(
+    new ListObjectsV2Command({
+      Bucket: getR2Bucket(),
+      Prefix: prefix,
+      ContinuationToken: continuationToken,
+    }),
+  );
+
+  return {
+    objects: (res.Contents ?? []).flatMap((o) =>
+      o.Key ? [{ key: o.Key, lastModified: o.LastModified ?? null }] : [],
+    ),
+    nextToken: res.IsTruncated ? res.NextContinuationToken : undefined,
+  };
+}
+
+/** R2/S3 caps a single DeleteObjects request at 1000 keys. */
+const DELETE_BATCH_MAX = 1000;
+
+/** Delete many objects, chunked to the API's per-request ceiling. */
+export async function deleteR2Objects(keys: string[]): Promise<void> {
+  for (let i = 0; i < keys.length; i += DELETE_BATCH_MAX) {
+    const chunk = keys.slice(i, i + DELETE_BATCH_MAX);
+    await getR2Client().send(
+      new DeleteObjectsCommand({
+        Bucket: getR2Bucket(),
+        Delete: { Objects: chunk.map((Key) => ({ Key })), Quiet: true },
+      }),
+    );
+  }
 }
 
 /** True for an S3/R2 "object does not exist" error (NotFound / 404). */
