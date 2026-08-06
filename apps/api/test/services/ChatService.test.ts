@@ -149,6 +149,50 @@ describe('mention RESOLUTION — where the name actually gets decided', () => {
     const msg = await send('@Rahul Menon and again @Rahul Menon', asMember);
     expect(msg.mentions).toHaveLength(1);
   });
+
+  test('⭐ two staff share a display name → BOTH are mentioned, not an arbitrary one', async () => {
+    // Display names are not unique, and the resolver used to build
+    // `Map(lower(name) → row)` — so one of these two silently won and the other
+    // was never notified. The author could not have noticed or corrected it: the
+    // composer offers both identically and either choice types the same text.
+    //
+    // The twin is created HERE rather than in the suite fixture on purpose. A
+    // permanent duplicate would quietly change what every other mention test is
+    // asserting, and those counts are the ADR-006 fan-out contract.
+    const TWIN = 'e8000000-0000-4000-8000-00000000c005';
+    await db
+      .insertInto('staff')
+      .values({ id: TWIN, name: 'Rahul Menon', email: `rahul2${DOMAIN}`, role: 'team_member', active: true })
+      .onConflict((oc) => oc.column('id').doNothing())
+      .execute();
+
+    try {
+      const msg = await send('@Rahul Menon can you look at this', asMember);
+
+      expect(msg.mentions.map((m) => m.staffId).sort()).toEqual([MENTIONEE, TWIN].sort());
+
+      const rows = await db
+        .selectFrom('message_mentions')
+        .select('staff_id')
+        .where('message_id', '=', msg.id)
+        .execute();
+      expect(rows.map((r) => r.staff_id).sort()).toEqual([MENTIONEE, TWIN].sort());
+
+      // Over-notification is the accepted cost (both can already read a common-channel
+      // message); silently reaching neither the intended person nor an explanation is not.
+      const notifs = await db
+        .selectFrom('notifications')
+        .select('staff_id')
+        .where('type', '=', 'mention')
+        .where('staff_id', 'in', [MENTIONEE, TWIN])
+        .execute();
+      expect(notifs.map((n) => n.staff_id).sort()).toEqual([MENTIONEE, TWIN].sort());
+    } finally {
+      await db.deleteFrom('message_mentions').where('staff_id', '=', TWIN).execute();
+      await db.deleteFrom('notifications').where('staff_id', '=', TWIN).execute();
+      await db.deleteFrom('staff').where('id', '=', TWIN).execute();
+    }
+  });
 });
 
 describe('send', () => {

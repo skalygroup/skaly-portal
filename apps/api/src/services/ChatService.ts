@@ -460,6 +460,10 @@ export class ChatService {
    * Resolve @names to active staff. Case-insensitive exact match on display name —
    * fuzzy matching would let "@Ra" notify Rahul, and a notification sent to the wrong
    * person is worse than one not sent.
+   *
+   * An exact match can still be AMBIGUOUS: display names are not unique. Every
+   * staff member carrying the matched name is returned, deduped by id — see the
+   * note at the Map below for why that beats picking one or refusing.
    */
   private async resolveMentions(content: string, db: Executor): Promise<ChatMentionDTO[]> {
     const sites = parseMentionCandidates(content);
@@ -474,7 +478,34 @@ export class ChatService {
       .where(sql<boolean>`lower(name) = ANY(${allCandidates})`)
       .execute();
 
-    const byLowerName = new Map(rows.map((r) => [r.name.toLowerCase(), r]));
+    // ⭐ EVERY staff member with this name, not the last row to be inserted.
+    //
+    // This was `new Map(rows.map((r) => [name, r]))`, which silently kept one of
+    // them — so with two active people called "Priya", `@Priya` notified an
+    // arbitrary one and the other never heard about it. No error, nothing for the
+    // author to notice, and the composer offers the two identically, so they
+    // could not have corrected it if they had.
+    //
+    // Notifying every match trades that silent misdirection for over-notification:
+    // the intended person is always in the set, and the others are in a COMMON
+    // channel where they can already read the message, so the cost is a spurious
+    // bell — not private information going to the wrong desk. Refusing an
+    // ambiguous mention was the alternative and it is worse: it makes a real
+    // colleague permanently unmentionable.
+    //
+    // ponytail: identity by display string, deliberately. The clean fix is for the
+    // composer — which already made the author pick a specific person — to carry
+    // the chosen staffId through the send payload, so this never re-derives an id
+    // from a name. Only load-bearing if two ACTIVE staff share a display name;
+    // do it when that first happens for real.
+    const byLowerName = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const key = r.name.toLowerCase();
+      const bucket = byLowerName.get(key);
+      if (bucket) bucket.push(r);
+      else byLowerName.set(key, [r]);
+    }
+
     const resolved: ChatMentionDTO[] = [];
     const seen = new Set<string>();
 
@@ -482,9 +513,10 @@ export class ChatService {
       // Longest-first, so "@Rahul Menon" resolves to Rahul Menon rather than to a
       // different staff member called Rahul.
       for (const candidate of candidates) {
-        const hit = byLowerName.get(candidate.toLowerCase());
-        if (!hit) continue;
-        if (!seen.has(hit.id)) {
+        const hits = byLowerName.get(candidate.toLowerCase());
+        if (!hits) continue;
+        for (const hit of hits) {
+          if (seen.has(hit.id)) continue;
           seen.add(hit.id);
           resolved.push({ staffId: hit.id, name: hit.name });
         }
