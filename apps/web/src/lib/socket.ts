@@ -170,7 +170,28 @@ export function useSocketEvent<T = unknown>(
   }, [namespace, event, handler]);
 }
 
-/** `/ws/notify` — notifications and every grid-sync broadcast. */
+/**
+ * `/ws/notify` — notifications and every grid-sync broadcast.
+ *
+ * ⚠️ TWO INVARIANTS, both of which have already cost a sprint each.
+ *
+ * 1. A notification TYPE IS NOT AN EVENT. The namespace emits exactly two
+ *    notification events, `notify:new` and `notify:read`. `report_ready`,
+ *    `new_comment`, `task_assigned` … are values of the row's `type`, so a
+ *    consumer subscribes to `notify:new` and filters. Subscribing to the type
+ *    name registers a handler for something the server never sends, and the
+ *    silence is indistinguishable from "nothing happened yet".
+ *
+ * 2. THE ROW ARRIVES UNDER `payload`, NOT `data`. NotificationService emits the
+ *    inserted row (`returningAll`), whose jsonb column is `payload` — `data` is
+ *    only the name of the service's argument on the way in. Reading `n.data`
+ *    type-checks, renders nothing, and never refreshes.
+ *
+ * Both failures share a shape: the component and its unit test agree with each
+ * other about a payload the server does not send, so the test passes and the
+ * feature is dead. A consumer's test must fire the SERVER's emit — copy a real
+ * row shape, not the interface the handler wishes for.
+ */
 export function useNotifySocket<T = unknown>(event: string, handler: (payload: T) => void): void {
   useSocketEvent<T>(WS_NOTIFY, event, handler);
 }
