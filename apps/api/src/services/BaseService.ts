@@ -174,6 +174,23 @@ export function currentIstDate(now: Date = new Date()): string {
 }
 
 /**
+ * Human label for a period: '2026-06' → 'June 2026'. `months.label` is NOT NULL,
+ * so every writer of a months row needs this — the dev seed and the rollover
+ * (ADR-037's create-if-absent insert). It lived privately in the seed until the
+ * rollover became its second caller; two copies would drift into two label
+ * formats in one column, visible in the period picker.
+ */
+export function monthLabel(period: string): string {
+  const year = Number(period.slice(0, 4));
+  const month = Number(period.slice(5, 7)); // 1-based
+  const name = new Date(Date.UTC(year, month - 1, 1)).toLocaleString('en-US', {
+    month: 'long',
+    timeZone: 'UTC',
+  });
+  return `${name} ${year}`;
+}
+
+/**
  * The current month's row. months has no is_current/status column, so we match
  * on the computed IST period; if that row doesn't exist yet (e.g. before the
  * first rollover) we fall back to the most recent period. Throws

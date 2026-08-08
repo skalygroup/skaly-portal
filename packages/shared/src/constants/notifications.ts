@@ -285,7 +285,7 @@ export const NOTIFICATION_TYPES = Object.keys(NOTIFICATION_REGISTRY) as Notifica
  * The last sprint whose producers are built. Bump it when a sprint ships its
  * notification producers, and the census test tells you which ones you still owe.
  */
-export const SHIPPED_THROUGH_SPRINT = 12;
+export const SHIPPED_THROUGH_SPRINT = 13;
 
 /**
  * Types with no producer yet, with the sprint that owns each.
@@ -300,8 +300,13 @@ export const SHIPPED_THROUGH_SPRINT = 12;
  * lands two of them: `account_reactivated` (ADR-026 staff reinstate) and `report_ready`
  * (ADR-027), taking the list 7 → 5. Sprint 12 lands `new_comment` (ADR-032), 5 → 4.
  *
- * The remaining four are the rollover set, and they ship together in Sprint 13:
- * `month_ready`, `rollover_success`, `rollover_failed`, `rollover_view_refresh_failed`.
+ * ⭐ SPRINT 13 LANDS THE LAST FOUR AND THIS LIST IS NOW EMPTY. `month_ready`,
+ * `rollover_success`, `rollover_failed` and `rollover_view_refresh_failed` ship
+ * together in `RolloverService` (ADR-035/036/037), so all 18 enum values have a
+ * producer and ADR-020 is closed. The census test asserts length 0 — which means
+ * this list has stopped being a countdown and started being a ratchet: any new
+ * type added with a future `producerSprint` re-opens it and fails the suite until
+ * its producer exists.
  */
 export const DEFERRED_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
   (t) => NOTIFICATION_REGISTRY[t].producerSprint > SHIPPED_THROUGH_SPRINT,

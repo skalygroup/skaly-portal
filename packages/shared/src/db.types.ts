@@ -187,9 +187,21 @@ export interface Months {
   locked_at: Timestamp | null;
   locked_by: string | null;
   period: string;
+  /**
+   * Tier 1 commit time (ADR-035/037). The completion signal — NOT the row's presence.
+   */
+  rollover_completed_at: Timestamp | null;
+  /**
+   * Last failed POST-commit step (ADR-037). Tier 1 failures roll back and thread the step through the error instead.
+   */
+  rollover_failed_step: string | null;
   unlock_reason: string | null;
   unlocked_at: Timestamp | null;
   unlocked_by: string | null;
+  /**
+   * Tier 2 success time (ADR-035). NULL while completed_at is set = resume Tier 2 only.
+   */
+  view_refreshed_at: Timestamp | null;
 }
 
 export interface Notifications {

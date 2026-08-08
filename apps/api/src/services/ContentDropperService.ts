@@ -24,7 +24,7 @@
  *
  * (coming_shoot_date is written by the Trigger 1 listener, STEP 3 — never here.)
  */
-import { sql, type Kysely, type Updateable } from 'kysely';
+import { sql, type Kysely, type Transaction, type Updateable } from 'kysely';
 
 import { AuditService } from './AuditService.js';
 import { assertPeriodNotLocked, currentIstDate, optimisticUpdate, type Executor } from './BaseService.js';
@@ -258,57 +258,85 @@ export class ContentDropperService {
    * Owns its own short transaction (the event handler has none).
    */
   async recomputeComingShootDate(clientId: string, period: string, db: Kysely<DB>): Promise<void> {
-    await transactionWithEmits(db, async (trx) => {
-      // nextDate = MIN(slot_date) over confirmed, still-upcoming slots; NULL if none.
-      const agg = await trx
-        .selectFrom('shoot_schedules')
-        .select(sql<string | null>`to_char(min(slot_date), 'YYYY-MM-DD')`.as('next_date'))
-        .where('client_id', '=', clientId)
-        .where('period', '=', period)
-        .where('slot_status', '=', 'Confirmed')
-        .where('slot_date', '>=', sql<string>`CURRENT_DATE`)
-        .executeTakeFirst();
-      const nextDate = agg?.next_date ?? null;
+    await transactionWithEmits(db, (trx) => this.recomputeComingShootDateIn(clientId, period, trx));
+  }
 
-      const pipeline = await trx
-        .selectFrom('content_pipelines')
-        .select([
-          'id',
-          'coming_shoot_source',
-          sql<string | null>`to_char(coming_shoot_date, 'YYYY-MM-DD')`.as('coming_shoot_date'),
-        ])
-        .where('client_id', '=', clientId)
-        .where('period', '=', period)
-        .executeTakeFirst();
-      // No pipeline row (client has none for this period) → nothing to project onto.
-      if (!pipeline) return;
-      // Manual override wins — never clobber it (guard mirrors calendar M-04).
-      if (pipeline.coming_shoot_source === 'manual') return;
-      // Idempotent no-op: value already correct and already sourced 'trigger'.
-      if (pipeline.coming_shoot_date === nextDate && pipeline.coming_shoot_source === 'trigger') return;
+  /**
+   * The same recompute, ENROLLED IN THE CALLER'S transaction — rollover Tier 1
+   * (ADR-035's amendment to ADR-034 §5).
+   *
+   * ADR-034 §5 recorded that this recompute owns its own transaction, and that the
+   * standalone sweep's per-client isolation is a property of that. True there.
+   * Inside Tier 1 it is neither wanted nor available:
+   *
+   *   - not wanted: Tier 1 is all-or-nothing, so swallowing a per-client failure
+   *     would commit a month quietly missing a recompute.
+   *   - not available: Kysely 0.29 has no implicit nested transactions.
+   *     `trx.transaction().execute()` re-BEGINs on an already-pinned connection,
+   *     so the inner COMMIT would commit the OUTER transaction. Calling the
+   *     public method from inside Tier 1 does not merely nest redundantly — it
+   *     ends Tier 1 early, mid-loop.
+   *
+   * So the body lives here and the public method above is a two-line delegation.
+   * ADR-034's actual invariant — ONE implementation of the logic, ONE
+   * `coming_shoot_source = 'manual'` guard — is preserved exactly; only the
+   * ownership of the transaction differs between the two entry points. A second
+   * copy of this body would have been the ADR-034 violation.
+   */
+  async recomputeComingShootDateIn(
+    clientId: string,
+    period: string,
+    trx: Transaction<DB>,
+  ): Promise<void> {
+    // nextDate = MIN(slot_date) over confirmed, still-upcoming slots; NULL if none.
+    const agg = await trx
+      .selectFrom('shoot_schedules')
+      .select(sql<string | null>`to_char(min(slot_date), 'YYYY-MM-DD')`.as('next_date'))
+      .where('client_id', '=', clientId)
+      .where('period', '=', period)
+      .where('slot_status', '=', 'Confirmed')
+      .where('slot_date', '>=', sql<string>`CURRENT_DATE`)
+      .executeTakeFirst();
+    const nextDate = agg?.next_date ?? null;
 
-      // Orthogonal write — NO version bump, NO optimisticUpdate (ADR-012).
-      const changes: Record<string, unknown> = {
-        coming_shoot_date: nextDate,
-        coming_shoot_source: 'trigger',
-      };
-      await trx
-        .updateTable('content_pipelines')
-        .set(changes)
-        .where('period', '=', period)
-        .where('client_id', '=', clientId)
-        .execute();
+    const pipeline = await trx
+      .selectFrom('content_pipelines')
+      .select([
+        'id',
+        'coming_shoot_source',
+        sql<string | null>`to_char(coming_shoot_date, 'YYYY-MM-DD')`.as('coming_shoot_date'),
+      ])
+      .where('client_id', '=', clientId)
+      .where('period', '=', period)
+      .executeTakeFirst();
+    // No pipeline row (client has none for this period) → nothing to project onto.
+    if (!pipeline) return;
+    // Manual override wins — never clobber it (guard mirrors calendar M-04).
+    if (pipeline.coming_shoot_source === 'manual') return;
+    // Idempotent no-op: value already correct and already sourced 'trigger'.
+    if (pipeline.coming_shoot_date === nextDate && pipeline.coming_shoot_source === 'trigger') return;
 
-      // Automated write → System Actor + changed_by_source 'system' (C-04).
-      await this.audit.log({
-        actorId: null,
-        action: 'UPDATE',
-        entity: 'content_pipelines',
-        entityId: pipeline.id,
-        before: { coming_shoot_date: pipeline.coming_shoot_date },
-        after: { coming_shoot_date: nextDate, coming_shoot_source: 'trigger' },
-        trx,
-      });
+    // Orthogonal write — NO version bump, NO optimisticUpdate (ADR-012).
+    const changes: Record<string, unknown> = {
+      coming_shoot_date: nextDate,
+      coming_shoot_source: 'trigger',
+    };
+    await trx
+      .updateTable('content_pipelines')
+      .set(changes)
+      .where('period', '=', period)
+      .where('client_id', '=', clientId)
+      .execute();
+
+    // Automated write → System Actor + changed_by_source 'system' (C-04).
+    await this.audit.log({
+      actorId: null,
+      action: 'UPDATE',
+      entity: 'content_pipelines',
+      entityId: pipeline.id,
+      before: { coming_shoot_date: pipeline.coming_shoot_date },
+      after: { coming_shoot_date: nextDate, coming_shoot_source: 'trigger' },
+      trx,
     });
   }
 

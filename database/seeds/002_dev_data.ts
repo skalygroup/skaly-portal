@@ -1,7 +1,7 @@
 import { Kysely } from 'kysely';
 
 import { datesInPeriod, isSunday } from '../../apps/api/src/lib/period-days.js';
-import { currentIstPeriod } from '../../apps/api/src/services/BaseService.js';
+import { currentIstPeriod, monthLabel } from '../../apps/api/src/services/BaseService.js';
 import { generatePeriodRows } from '../../apps/api/src/services/period-generation.js';
 
 import type { DB } from '@skaly/shared';
@@ -127,13 +127,5 @@ function priorPeriod(period: string): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-/** Human label for a period, e.g. '2026-06' → 'June 2026'. */
-function monthLabel(period: string): string {
-  const year = Number(period.slice(0, 4));
-  const month = Number(period.slice(5, 7)); // 1-based
-  const name = new Date(Date.UTC(year, month - 1, 1)).toLocaleString('en-US', {
-    month: 'long',
-    timeZone: 'UTC',
-  });
-  return `${name} ${year}`;
-}
+// monthLabel moved to BaseService — the rollover writes months rows too (ADR-037),
+// and two copies drift into two label formats in one column.

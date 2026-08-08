@@ -170,8 +170,8 @@ describe('every registry entry is complete', () => {
   });
 });
 
-describe('the deferred five are asserted by name, not merely commented', () => {
-  test('⭐ exactly 5 types have no producer as of Sprint 11', () => {
+describe('the deferred list is asserted by name, not merely commented', () => {
+  test('⭐ ADR-020 closed — no type is deferred as of Sprint 13', () => {
     // Bumping SHIPPED_THROUGH_SPRINT makes this FAIL until every producer that
     // sprint owes exists in src. That failure is the intended workflow — it is how
     // the deferral stays honest.
@@ -185,36 +185,30 @@ describe('the deferred five are asserted by name, not merely commented', () => {
     // are the rollover set, which Sprint 13 ships together. Those four claimed
     // sprint 12 until this census ran; Sprint 12 builds the recompute that runs
     // inside rollover, not rollover itself.
-    expect(DEFERRED_NOTIFICATION_TYPES).toHaveLength(4);
-    expect(DEFERRED_NOTIFICATION_TYPES).toEqual(
-      [
-        'month_ready',
-        'rollover_failed',
-        'rollover_success',
-        'rollover_view_refresh_failed',
-      ].sort(),
-    );
+    //
+    // ⭐ SPRINT 13: four becomes ZERO. RolloverService produces all four
+    // (ADR-035/036/037) and ADR-020 is closed. 7 → 5 → 4 → 0.
+    expect(DEFERRED_NOTIFICATION_TYPES).toEqual([]);
   });
 
   test('each deferred type names the sprint that owns its producer', () => {
-    const owners: Record<string, number> = {
-      month_ready: 13,
-      rollover_success: 13,
-      rollover_failed: 13,
-      rollover_view_refresh_failed: 13,
-    };
+    // Empty as of Sprint 13, so this loop asserts nothing today — kept because it
+    // is the guard that re-arms the moment a NEW type is added with a future
+    // producerSprint. A deleted test would have to be remembered; this one fires
+    // by itself.
+    const owners: Record<string, number> = {};
     for (const type of DEFERRED_NOTIFICATION_TYPES) {
       expect(NOTIFICATION_REGISTRY[type].producerSprint, type).toBe(owners[type]);
     }
   });
 
-  test('the other 14 are claimed by a sprint at or before 12', () => {
+  test('all 18 are claimed by a sprint at or before 13', () => {
     const withProducers = NOTIFICATION_TYPES.filter(
       (t) => !DEFERRED_NOTIFICATION_TYPES.includes(t),
     );
-    expect(withProducers).toHaveLength(14);
+    expect(withProducers).toHaveLength(18);
     for (const t of withProducers) {
-      expect(NOTIFICATION_REGISTRY[t].producerSprint, t).toBeLessThanOrEqual(12);
+      expect(NOTIFICATION_REGISTRY[t].producerSprint, t).toBeLessThanOrEqual(13);
     }
   });
 });

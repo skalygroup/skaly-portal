@@ -9,5 +9,7 @@
  */
 export interface JobLogger {
   info: (obj: object, msg?: string) => void;
+  /** Rollover's resume path: not an error (it recovered), but not routine either. */
+  warn: (obj: object, msg?: string) => void;
   error: (obj: object, msg?: string) => void;
 }

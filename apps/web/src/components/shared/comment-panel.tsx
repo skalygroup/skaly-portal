@@ -7,19 +7,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { create } from 'zustand';
 
-import { MessageContent } from '@/components/modules/chat/message-content';
+import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
+import type { CommentModule } from '@skaly/shared/schemas/comments';
+
 import {
   applyMention,
   findMentionQuery,
   matchStaff,
 } from '@/components/modules/chat/mention-autocomplete';
+import { MessageContent } from '@/components/modules/chat/message-content';
 import { SlidePanel } from '@/components/modules/tasks/slide-panel';
 import { api } from '@/lib/api';
 import { handleMutationError } from '@/lib/mutation-errors';
 import { useNotifySocket } from '@/lib/socket';
 
-import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
-import type { CommentModule } from '@skaly/shared/schemas/comments';
 
 /**
  * Comments on a grid row (07-API-CONTRACT §Comments, ADR-032).

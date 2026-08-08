@@ -60,18 +60,18 @@ async function producersByType(): Promise<Map<NotificationType, string[]>> {
   return found;
 }
 
-/** The 14 with a producer as of Sprint 12 — the complement of the deferred list. */
+/** All 18 as of Sprint 13 — the complement of a now-empty deferred list. */
 const WITH_PRODUCERS = NOTIFICATION_TYPES.filter((t) => !DEFERRED_NOTIFICATION_TYPES.includes(t));
 
 describe('every type the census claims has a producer, has one in src', () => {
-  test('⭐ all 14 resolve to a real emitter', async () => {
+  test('⭐ all 18 resolve to a real emitter', async () => {
     const producers = await producersByType();
     const missing = WITH_PRODUCERS.filter((t) => !producers.has(t));
 
     // A failure here means a producer was deleted or renamed. The type stays valid
     // everywhere else, so nothing else in the suite would notice.
     expect(missing, 'types claiming a producer that src does not emit').toEqual([]);
-    expect(WITH_PRODUCERS).toHaveLength(14);
+    expect(WITH_PRODUCERS).toHaveLength(18);
   });
 
   test('each producer lives where the census says it does', async () => {
@@ -95,6 +95,13 @@ describe('every type the census claims has a producer, has one in src', () => {
       report_ready: 'services/ReportService.ts',
       // Sprint 12 (ADR-032) — the fifth deferred type to get a producer.
       new_comment: 'services/CommentService.ts',
+      // ⭐ Sprint 13 (ADR-035/036/037) — the last four, all from one service. Two
+      // fire on Tier 1's commit, two on a failure; the census only cares that the
+      // emitter exists and lives where it says.
+      month_ready: 'services/RolloverService.ts',
+      rollover_success: 'services/RolloverService.ts',
+      rollover_failed: 'services/RolloverService.ts',
+      rollover_view_refresh_failed: 'services/RolloverService.ts',
     };
 
     for (const type of WITH_PRODUCERS) {
@@ -103,20 +110,24 @@ describe('every type the census claims has a producer, has one in src', () => {
     }
   });
 
-  test('⭐ the deferred four emit NOTHING — no invented emitters', async () => {
+  test('⭐ ADR-020 CLOSED — the deferred list is ZERO', async () => {
     const producers = await producersByType();
 
     // ADR-020 decision 4: a type with no producer is named and dated, never invented.
-    // If one of these acquires an emitter, it has stopped being deferred and both this
-    // test and DEFERRED_NOTIFICATION_TYPES must be updated deliberately.
+    // Anything still listed here must still emit nothing — the assertion survives at
+    // length 0 so a NEW deferred type re-arms it rather than silently passing.
     for (const type of DEFERRED_NOTIFICATION_TYPES) {
       expect(producers.get(type) ?? [], `${type} should have no producer yet`).toEqual([]);
     }
-    // The four left are the rollover set, and Sprint 13 ships them together.
-    expect(DEFERRED_NOTIFICATION_TYPES).toHaveLength(4);
+
+    // ⭐ THE ASSERTION THAT CLOSES THE NOTIFICATION ARC. Started at 7 in Sprint 10,
+    // → 5 (Sprint 11) → 4 (Sprint 12) → 0 here. Every one of the 18 enum values now
+    // has a real emitter in src, and there is nothing left to defer.
+    expect(DEFERRED_NOTIFICATION_TYPES, 'ADR-020 deferred list').toEqual([]);
+    expect(DEFERRED_NOTIFICATION_TYPES).toHaveLength(0);
   });
 
-  test('14 + 4 accounts for the whole enum, with nothing double-counted', () => {
+  test('18 + 0 accounts for the whole enum, with nothing double-counted', () => {
     expect(WITH_PRODUCERS.length + DEFERRED_NOTIFICATION_TYPES.length).toBe(18);
     const overlap = WITH_PRODUCERS.filter((t) => DEFERRED_NOTIFICATION_TYPES.includes(t));
     expect(overlap).toEqual([]);
