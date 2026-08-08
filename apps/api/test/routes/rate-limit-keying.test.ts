@@ -188,3 +188,97 @@ describe('ADR-024 — rate limiting is keyed per user', () => {
     expect(anonAfter).toBe(anonBefore - 1); // only the two anonymous calls counted
   });
 });
+
+/**
+ * ⭐ Sprint 13 STEP 8 — the per-route budgets API-Contract §2 specifies.
+ *
+ * The sweep found three routes with NO route-level limit, silently inheriting the
+ * global 150/min: `/auth/signup/request` (the only public unauthenticated write in
+ * the product, and it takes a file), `/auth/invite`, and `/auth/signup/invite` —
+ * the invite-REDEMPTION path, i.e. the one that turns a token into an account.
+ *
+ * Behavioural, like everything above: a config-reading test passes against a route
+ * whose `config.rateLimit` is present but never consulted, which is exactly the
+ * failure the file's header warns about.
+ */
+describe('API-Contract §2 — the per-route budgets are actually enforced', () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = await buildApp();
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  /** The advertised ceiling for a route, read off the first response's headers. */
+  async function limitFor(url: string, body: object, ip: string): Promise<number> {
+    const res = await app.inject({ method: 'POST', url, payload: body, remoteAddress: ip });
+    return Number((res.headers as Record<string, string | undefined>)['x-ratelimit-limit']);
+  }
+
+  /** A SCHEMA-VALID redemption body. Anything less 400s during validation, which
+   *  runs BEFORE the preHandler the limiter is on — so a malformed payload never
+   *  reaches the limiter and the headers come back undefined. A real attacker walking
+   *  tokens sends valid bodies, so the limit does apply to the case that matters. */
+  const redemption = (token: string) => ({
+    token,
+    password: 'Sufficiently-Long-Pw1!',
+    name: 'Redeemer',
+    dateOfBirth: '1995-05-05',
+    mobileNumber: '+919876543210',
+  });
+
+  test('POST /auth/signup/invite is 10 per window, not the global 150', async () => {
+    const limit = await limitFor('/v1/auth/signup/invite', redemption('t'.repeat(40)), '203.0.113.10');
+    expect(limit).toBe(10);
+  });
+
+  test('⭐ signup/invite is keyed by TOKEN + IP — one office IP cannot 429 the agency', async () => {
+    // The §2 key-design note in one assertion: Skaly's staff share an address, so
+    // two people redeeming invites from the same desk must have separate budgets.
+    const office = '203.0.113.20';
+    const spend = (token: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/v1/auth/signup/invite',
+        payload: redemption(token),
+        remoteAddress: office,
+      });
+
+    let last = 0;
+    // 11, not 10: `max: 10` ALLOWS ten and rejects the eleventh.
+    for (let i = 0; i < 11; i += 1) last = (await spend('a'.repeat(40))).statusCode;
+    expect(last, "the first invite's budget is spent").toBe(429);
+
+    // Same IP, same instant, a different invite.
+    const other = await spend('b'.repeat(40));
+    expect(other.statusCode, 'a colleague must not inherit that exhaustion').not.toBe(429);
+  });
+
+  test('POST /auth/signup/request is 3 per window — the public unauthenticated write', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/signup/request',
+      payload: 'not-multipart',
+      headers: { 'content-type': 'text/plain' },
+      remoteAddress: '203.0.113.30',
+    });
+    // 415 (not multipart) — the limiter still advertises the route's budget, which
+    // is what is under test; the handler's own rejection is irrelevant here.
+    expect(Number(res.headers['x-ratelimit-limit'])).toBe(3);
+  });
+
+  test('POST /auth/invite is 5 per hour, keyed off the caller not the address', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/invite',
+      payload: { email: 'x@skaly.in', role: 'team_member' },
+      headers: { authorization: 'Bearer token-a' },
+      remoteAddress: '203.0.113.40',
+    });
+    expect(Number(res.headers['x-ratelimit-limit'])).toBe(5);
+  });
+});

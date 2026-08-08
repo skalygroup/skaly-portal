@@ -33,6 +33,11 @@ export async function signupRequestRoutes(app: FastifyInstance) {
   app.post(
     '/auth/signup/request',
     {
+      // API-Contract §2: IP, 3 requests / 24 hours. Found missing by Sprint 13's
+      // STEP 8 sweep — it had been inheriting the global 150/min, which is 72,000
+      // uploads a day into an admin queue from one address. This is the only fully
+      // public, unauthenticated WRITE in the product, and it accepts a file.
+      config: { rateLimit: { max: 3, timeWindow: '24 hours' } },
       schema: {
         description:
           'Public self-signup (multipart/form-data). Text fields: name, email, ' +
