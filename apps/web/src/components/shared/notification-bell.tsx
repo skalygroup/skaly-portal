@@ -372,16 +372,17 @@ function Row({ n, onOpen }: { n: NotificationDTO; onOpen: (n: NotificationDTO) =
   // rollover_failed renders in full with no truncation (FR-NOTIF-04). Driven by the
   // registry's severity, not by a type name check, so the next critical type inherits it.
   const critical = specFor(n.type)?.severity === 'critical';
+  // The inline action comes from the PAYLOAD, not from the type: a notification is
+  // actionable because its producer said so (ADR-036 §4), and the next type that
+  // needs a recovery button gets one without another branch here.
+  const action = typeof n.payload?.action === 'string' ? n.payload.action : null;
 
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(n)}
-      data-testid="notification-row"
+    <div
+      data-testid="notification-item"
       data-unread={!n.isRead}
-      className="flex w-full gap-3 border-b px-4 py-3 text-left transition-colors"
+      className="border-b"
       style={{
-        minHeight: 64,
         borderColor: 'var(--border-subtle, #262b33)',
         background: critical
           ? 'color-mix(in srgb, var(--status-error, #ef4444) 10%, transparent)'
@@ -390,6 +391,16 @@ function Row({ n, onOpen }: { n: NotificationDTO; onOpen: (n: NotificationDTO) =
             : 'color-mix(in srgb, var(--accent-gold) 6%, transparent)',
       }}
     >
+      {/* The testid stays on the CLICKABLE element, not on the wrapper — a testid
+          on a div that only paints the tint makes every click test pass silently
+          against something that has no handler. */}
+      <button
+        type="button"
+        data-testid="notification-row"
+        onClick={() => onOpen(n)}
+        className="flex w-full gap-3 px-4 py-3 text-left transition-colors"
+        style={{ minHeight: 64 }}
+      >
       <span className="mt-0.5 shrink-0">
         <TypeIcon type={n.type} />
       </span>
@@ -406,13 +417,75 @@ function Row({ n, onOpen }: { n: NotificationDTO; onOpen: (n: NotificationDTO) =
           </span>
         )}
       </span>
-      <time
-        dateTime={n.createdAt}
-        className="shrink-0 text-[11px]"
-        style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted, #6b7280)' }}
+        <time
+          dateTime={n.createdAt}
+          className="shrink-0 text-[11px]"
+          style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted, #6b7280)' }}
+        >
+          {relativeTime(n.createdAt)}
+        </time>
+      </button>
+      {/* Outside the button above, not inside it: a nested <button> is invalid HTML
+          and the inner one never receives a click in any browser. */}
+      {action === 'manual_rollover' && <ManualRolloverAction payload={n.payload} />}
+    </div>
+  );
+}
+
+/**
+ * ⭐ The inline [Manual rollover] action (Error-Handling §7, ADR-036 §4).
+ *
+ * POSTs to the SAME endpoint the cron uses (ADR-037 §4) — there is no force path,
+ * so the guard cannot be skipped by clicking. That is what makes a double-click
+ * safe; the disable-on-click below is belt and braces, not the mechanism.
+ *
+ * Admin-only at the server (`requireRole('admin')` on the route). This component
+ * renders the button for anyone whose bell holds the notification, and the only
+ * bells that do are admins' — the producer fans out to `roles: ['admin']`.
+ */
+function ManualRolloverAction({ payload }: { payload: Record<string, unknown> }) {
+  const [state, setState] = useState<'idle' | 'pending' | 'done' | 'error'>('idle');
+  const period = typeof payload.period === 'string' ? payload.period : null;
+
+  const run = async () => {
+    setState('pending');
+    try {
+      await api(period ? `/v1/internal/rollover?period=${period}` : '/v1/internal/rollover', {
+        method: 'POST',
+      });
+      setState('done');
+    } catch {
+      // Re-show the failure rather than a new error surface: the notification the
+      // button sits in already explains what went wrong, and a second competing
+      // message would only tell the admin the same thing twice.
+      setState('error');
+    }
+  };
+
+  if (state === 'done') {
+    return (
+      <p className="px-4 pb-3 text-xs" style={{ color: 'var(--status-success, #22c55e)' }}>
+        Rollover completed{period ? ` for ${period}` : ''}.
+      </p>
+    );
+  }
+
+  return (
+    <div className="px-4 pb-3">
+      <button
+        type="button"
+        data-testid="manual-rollover"
+        disabled={state === 'pending'}
+        onClick={() => void run()}
+        className="rounded px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-60"
+        style={{
+          background: 'color-mix(in srgb, var(--status-error, #ef4444) 18%, transparent)',
+          color: 'var(--status-error, #ef4444)',
+          border: '1px solid color-mix(in srgb, var(--status-error, #ef4444) 45%, transparent)',
+        }}
       >
-        {relativeTime(n.createdAt)}
-      </time>
-    </button>
+        {state === 'pending' ? 'Running…' : state === 'error' ? 'Retry rollover' : 'Manual rollover'}
+      </button>
+    </div>
   );
 }

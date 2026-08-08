@@ -323,3 +323,136 @@ describe('the panel', () => {
     expect(body.className).not.toContain('line-clamp-2');
   });
 });
+
+/**
+ * ⭐ Sprint 13 — the four rollover types and the inline recovery action (ADR-036).
+ *
+ * Every payload below is shaped like the SERVER's row, not like the component's
+ * props: snake_case `is_read`/`created_at`, the jsonb under `payload`. That is the
+ * bug caught twice already (report_ready, live comments) — a test that fires the
+ * handler's assumed shape passes against a feature that is dead in production.
+ */
+describe('the rollover notifications (Sprint 13)', () => {
+  const rolloverFailure = (over: Record<string, unknown> = {}) =>
+    notification({
+      id: 'rf-1',
+      type: 'rollover_failed',
+      title: 'Rollover failed',
+      body: 'Rollover for July 2094 failed at step audit. The previous month is intact — data was not affected. A detailed summary is being generated.',
+      payload: { period: '2094-07', failedStep: 'audit', action: 'manual_rollover' },
+      ...over,
+    });
+
+  test('month_ready and rollover_success render as ordinary rows, with no action', async () => {
+    const user = userEvent.setup();
+    apiMock.mockResolvedValue(
+      listResponse([
+        notification({ id: 'mr', type: 'month_ready', title: 'July 2094 is ready', payload: { period: '2094-07' } }),
+        notification({ id: 'rs', type: 'rollover_success', title: 'Rollover completed', payload: { period: '2094-07' } }),
+      ]),
+    );
+    renderBell();
+
+    await user.click(await screen.findByRole('button', { name: /Notifications/ }));
+    expect(await screen.findByText('July 2094 is ready')).not.toBeNull();
+    expect(screen.getByText('Rollover completed')).not.toBeNull();
+    // No recovery button on a success — the payload carries no `action`.
+    expect(screen.queryByTestId('manual-rollover')).toBeNull();
+  });
+
+  test('a TEMPLATED failure body (the AI summary failed) renders fine on its own', async () => {
+    const user = userEvent.setup();
+    apiMock.mockResolvedValue(listResponse([rolloverFailure()]));
+    renderBell();
+
+    await user.click(await screen.findByRole('button', { name: /Notifications/ }));
+    // The component must assume nothing about enrichment: the templated body IS a
+    // complete notification (ADR-036 §2), and it is what an admin sees whenever
+    // Anthropic was down at 00:01.
+    const body = await screen.findByText(/The previous month is intact/);
+    expect(body.className).not.toContain('line-clamp-2');
+    expect(screen.getByTestId('manual-rollover')).not.toBeNull();
+  });
+
+  test('an ENRICHED failure body renders in full, untruncated', async () => {
+    const user = userEvent.setup();
+    const summary =
+      'The system could not finish setting up the new month last night. None of your existing data was changed or lost. You can retry it from this notification, and if it fails again the team should be told.';
+    apiMock.mockResolvedValue(listResponse([rolloverFailure({ body: summary })]));
+    renderBell();
+
+    await user.click(await screen.findByRole('button', { name: /Notifications/ }));
+    const body = await screen.findByText(/could not finish setting up/);
+    expect(body.textContent).toBe(summary);
+    expect(body.className).not.toContain('line-clamp-2');
+  });
+
+  test('⭐ [Manual rollover] POSTs the shared idempotent endpoint and disables on click', async () => {
+    const user = userEvent.setup();
+    apiMock.mockResolvedValue(listResponse([rolloverFailure()]));
+    renderBell();
+
+    await user.click(await screen.findByRole('button', { name: /Notifications/ }));
+    const button = await screen.findByTestId('manual-rollover');
+
+    // Never resolves during the assertion window, so the pending state is observable.
+    let release: (() => void) | undefined;
+    apiMock.mockImplementationOnce(
+      () => new Promise<never>((_, reject) => { release = () => reject(new Error('done')); }),
+    );
+    await user.click(button);
+
+    // The SAME endpoint the cron hits (ADR-037 §4) — not a force path.
+    expect(apiMock).toHaveBeenCalledWith('/v1/internal/rollover?period=2094-07', { method: 'POST' });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    release?.();
+  });
+
+  test('a failed manual rollover offers a retry rather than a second error surface', async () => {
+    const user = userEvent.setup();
+    apiMock.mockResolvedValue(listResponse([rolloverFailure()]));
+    renderBell();
+
+    await user.click(await screen.findByRole('button', { name: /Notifications/ }));
+    apiMock.mockRejectedValueOnce(new Error('still broken'));
+    await user.click(await screen.findByTestId('manual-rollover'));
+
+    await waitFor(() => expect(screen.getByTestId('manual-rollover').textContent).toBe('Retry rollover'));
+    // The notification above it already says what went wrong; a competing toast
+    // would tell the admin the same thing twice.
+    expect(screen.getByText(/The previous month is intact/)).not.toBeNull();
+  });
+
+  test('a successful manual rollover reports completion in place', async () => {
+    const user = userEvent.setup();
+    apiMock.mockResolvedValue(listResponse([rolloverFailure()]));
+    renderBell();
+
+    await user.click(await screen.findByRole('button', { name: /Notifications/ }));
+    apiMock.mockResolvedValueOnce({ data: { period: '2094-07', status: 'completed' } });
+    await user.click(await screen.findByTestId('manual-rollover'));
+
+    await waitFor(() => expect(screen.getByText(/Rollover completed for 2094-07/)).not.toBeNull());
+  });
+
+  test('⭐ a rollover notification arriving over the SERVER emit lands in the panel', async () => {
+    const user = userEvent.setup();
+    renderBell();
+    await screen.findByTestId('notification-badge');
+    await user.click(screen.getByRole('button', { name: /Notifications/ }));
+
+    // The server's row shape, over notify:new — a TYPE, not an event of its own.
+    await emit('notify:new', {
+      id: 'rf-live',
+      type: 'rollover_view_refresh_failed',
+      title: 'Dashboard refresh failed',
+      message: 'Rollover for July 2094 failed at step view_refresh. The previous month is intact.',
+      payload: { period: '2094-07', failedStep: 'view_refresh', action: 'manual_rollover' },
+      is_read: false,
+      created_at: new Date().toISOString(),
+    });
+
+    expect(await screen.findByText('Dashboard refresh failed')).not.toBeNull();
+    expect(screen.getByTestId('manual-rollover')).not.toBeNull();
+  });
+});

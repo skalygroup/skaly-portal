@@ -3,6 +3,7 @@ import { ConnectionBanner } from '@/components/shared/connection-banner';
 import { MonthLockSync } from '@/components/shared/month-lock-sync';
 import { NotificationBell } from '@/components/shared/notification-bell';
 import { PermissionSync } from '@/components/shared/permission-sync';
+import { RolloverBanner } from '@/components/shared/rollover-banner';
 import { SearchPalette } from '@/components/shared/search-palette';
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
@@ -38,6 +39,11 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
             belong to Sprint 11's Settings/Dashboard chrome. */}
         {/* Non-blocking, fixed to the top of the viewport (Error-Handling §5.4). */}
         <ConnectionBanner />
+        {/* Informational only (NFR §3.1 — the API stays fully operational through
+            00:01–00:05; Tier 2's CONCURRENTLY refresh is what makes that true).
+            Sits one z-layer below the connection banner: if the socket is also
+            down, "reconnecting" is the more urgent of the two. */}
+        <RolloverBanner />
         {/* ADR-029. Mounted here, not in the settings shell: a revoked module
             has to leave the nav of whatever page the user is idling on, and
             that is usually not Settings. Renders nothing. */}
