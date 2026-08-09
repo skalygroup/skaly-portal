@@ -394,3 +394,102 @@ Record, in the repo:
 
 Then set the recurring reminder for the monthly restore drill
 (`docs/POST-LAUNCH-BACKLOG.md`).
+
+---
+
+# SPRINT 13 CLOSE-OUT
+
+`[x]` = verified in this repo, with the evidence named. `[ ]` = needs infrastructure
+only you can reach. Nothing is ticked on the strength of "it should work".
+
+```
+LAUNCH
+  [x] ADR-035/036/037 committed; POST-LAUNCH-BACKLOG.md seeded
+  [x] Idempotency migration run (033), additive, reversible (rolled back and re-applied)
+  [x] The view unique indexes CONCURRENTLY needs already existed (024) — confirmed,
+      not assumed, and now COMMENTed so an index audit cannot drop them
+  [ ] Push backlog cleared: ADR-031 staging pass, then Sprints 11 → 12 → 13 to main
+      ⚠️ origin/main is still at Sprint 10. THIS IS THE OUTSTANDING BLOCKER.
+
+ROLLOVER (ADR-035/036/037)
+  [x] Tier 1 (months row + period rows + recompute + audit + both success
+      notifications) is ONE transaction; the commit is the boundary
+  [x] Tier 2 refreshes both matviews CONCURRENTLY post-commit, never rolls Tier 1
+      back (TESTED — Tier 2 injected to fail; period rows persist, endpoint 200s)
+  [x] Tier 1 failure rolls back FULLY at every step — period_rows, recompute and
+      audit each injected; all three assert ZERO partial state, not just an error
+  [x] Recompute called, not reimplemented; System Actor; source='manual' honoured
+  [x] Retention stays a temporally separate neighbour (03:00 IST monthly)
+  [x] Four types fire to the right audiences over notify:new, payload under `payload`
+  [x] Failure notification written FIRST with the templated body, then enriched
+      (TESTED both ways: Anthropic throwing past its retries still leaves a
+      complete notification; succeeding replaces the body)
+  [x] AI summary uses the SDK's built-in retry; no hand loop, no retry-in-retry
+  [x] [Manual rollover] is idempotent, shares the cron's core, admin-gated
+  [x] Running rollover twice creates rows ONCE, month_ready ONCE (TESTED, and again
+      end-to-end over HTTP)
+  [x] Retry-after-partial RESUMES Tier 2 only (TESTED, unit + E2E)
+  [x] Timing-safe internal-secret compare (pre-existing; a wrong secret never
+      falls through to the session path — TESTED)
+  [x] ADR-020 CLOSED — all 18 types have producers, deferred list = 0 (ASSERTED)
+
+HARDENING
+  [x] CSP enforcing (was Report-Only with no report-uri — a no-op header)
+  [x] Per-module error boundaries, one error.tsx per segment (Next's own isolation)
+  [x] Rate limits per API-Contract §2 — three missing ones added and asserted
+      behaviourally; internal-rollover is secret-gated, not rate-limited
+  [x] No secret in the web bundle; no dangerouslySetInnerHTML (grep clean)
+  [x] Sentry wired behind an OPTIONAL DSN; unset = provably inert (TESTED)
+  [ ] CSP verified against the real deployed app — it fails QUIETLY, and only a
+      browser console on production proves it (STEP 12.2 item 2)
+
+NFRs (MEASURED, not asserted)
+  [x] Rollover 580ms at 20 clients, against a 5-minute budget
+  [x] API operational during the window: view reads p95 2ms / max 3ms WHILE the
+      rollover ran — the CONCURRENTLY proof
+  [x] k6 50 VUs, realistic profile: every §1.2 budget passes (attendance p95 44ms)
+  [x] Stress profile ceiling recorded (attendance 449ms at 147 req/s) — one Node
+      process's CPU, which is the 11.3 instance-count lever
+  [x] Report perf: Sprint 12's p95 3796ms / p99 4784ms vs 10s/20s
+  [ ] Re-confirm report perf on merged code (11.2) — the harness is ready
+  [ ] Re-measure on STAGING. Every number above is a Windows dev laptop against
+      Docker Postgres. Treat them as a floor.
+
+PRE-LAUNCH GATE  (all four need real infrastructure — see STEP 11 above)
+  [ ] Backup restore drill — a REAL R2 backup, ON_ERROR_STOP=1  (HARD BLOCKER)
+  [ ] Report perf confirmed
+  [ ] Instance count decided; Redis adapter deferred if single-instance
+  [ ] Recovery-code redemption on staging — REDEEMED, and the second use REFUSED
+
+DEPLOY
+  [ ] v1.0.0 tagged; deployed via the release-tag pipeline, not by hand
+  [ ] Migrations run on production; health check green
+  [ ] Live smoke passed; portal.skaly.in live
+
+SUITES, at close-out
+  [x] 977 API tests · 76 files
+  [x] 310 web tests · 38 files
+  [x] 154 Playwright, 10 skipped, 0 failed (chromium + webkit, 52.6m)
+  [x] typecheck + lint clean across the workspace
+```
+
+## The three defects this sprint's own tests found
+
+Recorded because each one would have reached production, and none would have been
+caught by review:
+
+1. **`entityId: period` into `audit_log.record_id`, a UUID column.** `months` is
+   keyed `CHAR(7)`. Tier 1 would have thrown at the *audit* step — every night,
+   after generating every row. The transaction rolled back correctly, so the
+   symptom was "rollover always fails" with no data damage and no obvious cause.
+2. **The notification census reported a producer that did not exist.** An inline
+   union *type annotation* matched its `type: 'x'` producer grep, so
+   `rollover_failed` looked wired while its real emitter went unfound — precisely
+   the false positive the census exists to catch.
+3. **`/auth/signup/invite` had no rate limit.** The path that turns a token into an
+   account, inheriting the global 150/min.
+
+And one measurement defect, worth as much as the three: the first k6 run reported
+two NFR misses that were **the harness**, not the API — a ~200ms IPv6 loopback
+penalty on `localhost` plus a load model 14× real usage. A perf number nobody
+double-checks is a perf number that misdirects a whole launch.
