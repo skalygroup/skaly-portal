@@ -22,6 +22,7 @@ import { pool, db } from './lib/db.js';
 import { env } from './lib/env.js';
 import { AppError } from './lib/errors.js';
 import { logger } from './lib/logger.js';
+import { captureError } from './lib/observability.js';
 import { redis } from './lib/redis.js';
 import { registerSwagger } from './lib/swagger.js';
 import authPlugin from './middleware/auth.plugin.js';
@@ -145,6 +146,10 @@ export async function buildApp(
     // Unexpected — sanitise, log with a correlation id, never leak internals.
     const traceId = randomUUID();
     request.log.error({ err: error, traceId, url: request.url }, 'Unhandled error');
+    // A no-op unless SENTRY_DSN is set (H-07). The traceId is tagged, not just
+    // logged: it is the only thing joining the id a user reads off their screen
+    // to the stack trace, and without it Sentry is a second inbox.
+    captureError(error, { traceId }, { path: request.url, method: request.method });
     return reply.status(500).send({
       error: {
         code: 'INTERNAL_ERROR',

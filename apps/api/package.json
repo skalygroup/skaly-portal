@@ -31,6 +31,7 @@
     "@fastify/swagger": "^9",
     "@fastify/swagger-ui": "^5",
     "@react-pdf/renderer": "^4.5.1",
+    "@sentry/node": "^10.69.0",
     "@skaly/shared": "workspace:*",
     "@socket.io/redis-adapter": "^8",
     "@supabase/supabase-js": "^2",

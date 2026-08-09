@@ -41,6 +41,7 @@ import { ContentDropperService } from './ContentDropperService.js';
 import { NotificationService } from './NotificationService.js';
 import { generatePeriodRows } from './period-generation.js';
 import { transactionWithEmits } from '../lib/emit-after-commit.js';
+import { captureError } from '../lib/observability.js';
 import { summariseRolloverFailure } from '../lib/rollover-summary.js';
 
 import type { JobLogger } from '../jobs/job-logger.js';
@@ -164,6 +165,10 @@ export class RolloverService {
     } catch (err) {
       const failedStep = err instanceof RolloverFailure ? err.step : 'period_rows';
       logger?.error({ err, period, failedStep }, 'rollover Tier 1 failed — rolled back fully');
+      // A no-op without SENTRY_DSN (H-07). This is the unattended midnight path —
+      // nobody is watching, the admin's notification says WHAT failed in plain
+      // language, and this is the only place the stack behind it survives.
+      captureError(err, { rollover: 'tier1', period, failedStep });
       await this.notifyFailure(db, { type: 'rollover_failed', period, failedStep, error: err }, logger);
       throw err;
     }

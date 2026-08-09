@@ -2,6 +2,7 @@ import { buildApp } from './app.js';
 import { pool } from './lib/db.js';
 import { env } from './lib/env.js';
 import { logger } from './lib/logger.js';
+import { initSentry } from './lib/observability.js';
 import { redis } from './lib/redis.js';
 import { registerSockets } from './sockets/index.js';
 
@@ -12,6 +13,9 @@ import { registerSockets } from './sockets/index.js';
  */
 const start = async () => {
   try {
+    // Before anything that can throw, and a no-op without SENTRY_DSN (H-07).
+    initSentry();
+
     const app = await buildApp({ loggerInstance: logger });
 
     await app.listen({ port: env.PORT, host: '0.0.0.0' });

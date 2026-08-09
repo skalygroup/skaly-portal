@@ -1,6 +1,9 @@
 'use client';
 
+import { useEffect } from 'react';
+
 import { ApiError } from '@/lib/api';
+import { captureError, initSentry } from '@/lib/observability';
 
 /**
  * The module error boundary body (09-ERROR-HANDLING §5.2).
@@ -28,6 +31,16 @@ export interface ModuleErrorProps {
 }
 
 export function ModuleError({ module, error, reset }: ModuleErrorProps) {
+  // Report ADDITIVELY (H-07): a no-op without NEXT_PUBLIC_SENTRY_DSN, and the
+  // boundary renders and isolates identically either way. Initialised here rather
+  // than in the root layout because this is the only place the web SDK is used —
+  // a boundary that never fires costs nothing, and a layout-level init would run
+  // the SDK on every page load to catch errors this component already has.
+  useEffect(() => {
+    initSentry();
+    captureError(error, { module });
+  }, [error, module]);
+
   // §5.2 wants the traceId from the API envelope's error.details. It is only there
   // when the failure came from the API at all; a render-time TypeError has none, and
   // Next's own `digest` is the closest equivalent for those.

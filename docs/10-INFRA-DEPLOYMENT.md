@@ -235,6 +235,14 @@ REDIS_URL=rediss://default:password@upstash.io:6379
 # Internal
 CRON_SECRET=long-random-string-minimum-32-chars
 
+# Observability — OPTIONAL (audit H-07, added Sprint 13)
+# Unset = Sentry is completely disabled: no init, no network, no behavioural
+# change. §8's Railway alerts remain the PRIMARY monitor; Sentry is opt-in
+# diagnostics for the incident a p95 alert tells you about but not where.
+# When set, every unhandled 500 is captured tagged with the same traceId the
+# user was shown (Error-Handling §4), which is the only join between the two.
+SENTRY_DSN=
+
 # Phase 2 — Mobile Push (add when mobile is deployed)
 EXPO_PROJECT_ID=
 FCM_SERVER_KEY=
@@ -249,8 +257,14 @@ NEXT_PUBLIC_API_URL=https://api.skaly.in/v1
 NEXT_PUBLIC_WS_URL=wss://api.skaly.in
 NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+
+# Observability — OPTIONAL (audit H-07, added Sprint 13). Same contract as the
+# API's SENTRY_DSN: unset = entirely disabled. Wired with @sentry/react and a
+# manual init, deliberately NOT @sentry/nextjs — that SDK's build-time plugin
+# rewrites the Vercel build, and the build must not change at launch.
+NEXT_PUBLIC_SENTRY_DSN=
 ```
-**Only `NEXT_PUBLIC_` variables are exposed to the browser. No API keys or secrets ever use `NEXT_PUBLIC_` prefix.**
+**Only `NEXT_PUBLIC_` variables are exposed to the browser. No API keys or secrets ever use `NEXT_PUBLIC_` prefix.** A Sentry DSN is a public, write-only ingest key by design — it is not a secret, which is why the browser one carries the prefix.
 
 ---
 
