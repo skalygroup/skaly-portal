@@ -153,3 +153,34 @@ The enum is the count. Any doc that disagrees is patched, not worked around.
 
 A type with no producer is named and dated, never invented. If a coverage test can only pass
 by writing an emitter that no feature calls, the test is wrong, not the feature.
+
+---
+
+## ⭐ CLOSED — Sprint 13
+
+**Every one of the 18 types now has a producer in `src`. The deferred list is `[]`.**
+
+The table above is the Sprint 10 snapshot, kept as the record of what was decided then.
+This is where it ended:
+
+| Sprint | Deferred | What landed |
+|---|---|---|
+| 10 | **7** | The census found five real gaps *and* `account_reactivated`, which had no write path at all |
+| 11 | **5** | `account_reactivated` (ADR-026 reinstate), `report_ready` (ADR-027) |
+| 12 | **4** | `new_comment` (ADR-032) |
+| 13 | **0** | `month_ready`, `rollover_success`, `rollover_failed`, `rollover_view_refresh_failed` — all four from `RolloverService` (ADR-035/036/037) |
+
+Decision 4 said the deferred list is *asserted, not commented*, and that updating the
+assertion each sprint is the intended workflow. That worked exactly as designed for three
+sprints. At zero it stops being a countdown and becomes a **ratchet**: any new type added
+with a `producerSprint` beyond `SHIPPED_THROUGH_SPRINT` re-opens the list and fails the
+suite until its producer exists. The assertion is deliberately kept at length 0 rather than
+deleted, so nothing has to be remembered for it to fire again.
+
+Decision 3's other half held too. Sprint 13's census caught a *false positive* rather than a
+missing emitter: an inline union type annotation (`type: 'rollover_failed' | …`) on a
+parameter matched the `type:\s*'X'` producer grep, so the census would have reported a
+producer for `rollover_failed` on the strength of an annotation while the real emitter went
+unfound. The union is now a named type and the literals appear only at genuine call sites.
+A static grep can be fooled by anything that looks like a call — which is why the location
+table in `NotificationCensus.test.ts` exists beside it.

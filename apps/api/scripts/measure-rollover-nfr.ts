@@ -60,8 +60,17 @@ function probeDashboard(stop: { now: boolean }): Promise<number[]> {
   return (async () => {
     while (!stop.now) {
       const t = performance.now();
-      await sql`SELECT * FROM dashboard_org_stats LIMIT 50`.execute(db);
-      samples.push(performance.now() - t);
+      try {
+        await sql`SELECT * FROM dashboard_org_stats LIMIT 50`.execute(db);
+        samples.push(performance.now() - t);
+      } catch {
+        // The pool is closing, or the rollover path errored and took the process
+        // down with it. Either way: stop sampling. Without this the loop keeps
+        // issuing queries against a destroyed pool and the script never exits —
+        // a hang that looks exactly like "the rollover is slow", which is the one
+        // thing this script exists to measure.
+        return samples;
+      }
       await new Promise((r) => setTimeout(r, 25));
     }
     return samples;
@@ -95,10 +104,18 @@ async function main(): Promise<void> {
 
   const svc = new RolloverService();
   const started = performance.now();
-  const result = await svc.run(db, PERIOD, logger);
-  const totalMs = performance.now() - started;
-
-  stop.now = true;
+  // The stop flag is set in a `finally`, not after the await: a throwing rollover
+  // would otherwise leave the probe looping forever and the script hanging on
+  // db.destroy() — a hang indistinguishable from "the rollover is slow", which is
+  // precisely the thing being measured.
+  const { result, totalMs } = await (async () => {
+    try {
+      const r = await svc.run(db, PERIOD, logger);
+      return { result: r, totalMs: performance.now() - started };
+    } finally {
+      stop.now = true;
+    }
+  })();
   const samples = await probe;
 
   // Tier 2's own cost, measured by re-running just the refresh — the run above
