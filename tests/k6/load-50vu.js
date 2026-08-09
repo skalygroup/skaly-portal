@@ -33,15 +33,47 @@
  *    come back 429 and what you measure is the limiter, not the endpoint:
  *      PORT=3002 RATE_LIMIT_MAX=1000000 pnpm --filter @skaly/api dev
  *    The check below FAILS the run on a 429 rather than letting it look fast.
+ *    Verify: the response's x-ratelimit-limit must not be 150.
  * 3. Supply a real admin token — never hardcode one here.
+ * 4. ⚠️ USE 127.0.0.1, NEVER `localhost` — see below.
  *
- *   K6_BASE_URL=http://localhost:3002 K6_TOKEN="Bearer eyJ..." k6 run tests/k6/load-50vu.js
+ *   K6_BASE_URL=http://127.0.0.1:3002 K6_TOKEN="Bearer eyJ..." k6 run tests/k6/load-50vu.js
+ *
+ * ── ⚠️ THE `localhost` TRAP (Windows), which cost a whole measurement ────────
+ * The API listens on 0.0.0.0, i.e. IPv4 only. On Windows `localhost` resolves to
+ * ::1 FIRST, so every connection waits out a ~200ms IPv6 failure before falling
+ * back to IPv4. Measured, on this repo:
+ *
+ *      localhost   → connect 202ms, /v1/health total 205ms
+ *      127.0.0.1   → connect 0.7ms, /v1/health total   2.6ms
+ *
+ * A flat ~200ms is then added to EVERY endpoint, which reads as "the whole API
+ * is uniformly slow" — the most misleading shape a perf result can have, because
+ * it looks like a real systemic problem and points at nothing. The tell is that
+ * an unauthenticated /v1/health costs the same as a 516KB authenticated grid.
+ * If you ever see that, check the host before you profile anything.
  */
 import { check, sleep } from 'k6';
 import http from 'k6/http';
 
-const BASE = __ENV.K6_BASE_URL || 'http://localhost:3001';
+const BASE = __ENV.K6_BASE_URL || 'http://127.0.0.1:3001';
 const TOKEN = __ENV.K6_TOKEN || '';
+
+/**
+ * `stress` hammers all five modules every iteration; the default models a real
+ * user. Both are legitimate — they answer different questions, and quoting one
+ * against the other's budget is how a perf result becomes a lie.
+ *
+ * NFR §1.2's 300ms is a budget for NORMAL OPERATION at NFR §2.1's 50 users. A
+ * real user opens ONE grid and then reads it for half a minute while ADR-022's
+ * socket patches keep it fresh — the app deliberately does not poll. So the
+ * realistic profile is one module read per user per think-cycle.
+ *
+ * The stress profile issues ~3.5 req/s/user, roughly a hundred times that. It is
+ * worth running (it locates the ceiling, and the ceiling is one Node process's
+ * CPU), but its p95 is a saturation number, not a §1.2 number.
+ */
+const STRESS = __ENV.K6_PROFILE === 'stress';
 
 // k6's runtime has NO Intl — the formatter used everywhere else in this repo
 // throws "Intl is not defined" and the script dies before its first request.
@@ -104,14 +136,25 @@ function read(path, endpoint) {
   return res;
 }
 
+const MODULES = [
+  [`/v1/attendance?period=${PERIOD}`, 'attendance'],
+  [`/v1/tasks?period=${PERIOD}`, 'tasks'],
+  [`/v1/content-calendar?period=${PERIOD}`, 'calendar'],
+  [`/v1/shoot-planner?period=${PERIOD}`, 'shoot'],
+  [`/v1/content-dropper?period=${PERIOD}`, 'dropper'],
+];
+
 export default function () {
-  // Read-heavy, as the product is: staff sit on a grid and occasionally toggle a
-  // cell. Weighting this the other way would measure a workload nobody performs.
-  read(`/v1/attendance?period=${PERIOD}`, 'attendance');
-  read(`/v1/tasks?period=${PERIOD}`, 'tasks');
-  read(`/v1/content-calendar?period=${PERIOD}`, 'calendar');
-  read(`/v1/shoot-planner?period=${PERIOD}`, 'shoot');
-  read(`/v1/content-dropper?period=${PERIOD}`, 'dropper');
+  if (STRESS) {
+    // Every module, every iteration. Finds the ceiling; is not §1.2's workload.
+    for (const [path, endpoint] of MODULES) read(path, endpoint);
+  } else {
+    // ONE module, then think. A person opens a grid and reads it — the socket
+    // keeps it current (ADR-022), so there is no polling to model. Which module
+    // is spread across VUs so all five stay represented in the percentiles.
+    const [path, endpoint] = MODULES[__VU % MODULES.length];
+    read(path, endpoint);
+  }
 
   // One write per iteration. Deliberately a request that 409s on a stale version
   // rather than one that mutates: the LATENCY is the measurement, and 50 VUs
@@ -126,5 +169,9 @@ export default function () {
     'attendance_patch: reached the handler': (r) => r.status !== 429 && r.status < 500,
   });
 
-  sleep(1);
+  // Think time. 1s under stress (back-to-back, deliberately punishing); ~8s in the
+  // realistic profile, which is still far busier than someone actually reading a
+  // grid, and jittered so 50 VUs do not arrive in a synchronised thundering herd —
+  // a lockstep pattern manufactures a p95 that no real arrival distribution has.
+  sleep(STRESS ? 1 : 6 + Math.random() * 4);
 }
