@@ -1,3 +1,4 @@
+import { AppSidebar } from '@/components/shared/app-sidebar';
 import { CommentPanelHost } from '@/components/shared/comment-panel';
 import { ConnectionBanner } from '@/components/shared/connection-banner';
 import { MonthLockSync } from '@/components/shared/month-lock-sync';
@@ -5,8 +6,15 @@ import { NotificationBell } from '@/components/shared/notification-bell';
 import { PermissionSync } from '@/components/shared/permission-sync';
 import { RolloverBanner } from '@/components/shared/rollover-banner';
 import { SearchPalette } from '@/components/shared/search-palette';
+import { getStaffMe } from '@/lib/get-staff-me';
+import { visibleModules } from '@/lib/modules';
 
-export default function PortalLayout({ children }: { children: React.ReactNode }) {
+export default async function PortalLayout({ children }: { children: React.ReactNode }) {
+  // Server-side, so a person's HTML never contains a link to a module they
+  // cannot open — the same derivation the settings shell already uses.
+  const me = await getStaffMe();
+  const modules = visibleModules(me);
+
   return (
     <>
       {/* Mobile fallback — shown on screens < 768px (M-02 fix) */}
@@ -28,8 +36,12 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
         </div>
       </div>
 
-      {/* Portal content — visible on md+ screens */}
-      <div className="hidden md:block min-h-screen">
+      {/* Portal content — visible on md+ screens.
+          Padded to clear the FIXED sidebar (56px, 220px from xl). Fixed rather
+          than a grid column because every module renders its own full-height
+          scrolling <main>; a grid would put the nav inside that scroll context
+          and it would slide away up the page on a long attendance grid. */}
+      <div className="hidden min-h-screen pl-14 md:block xl:pl-[220px]">
         {/* The topbar UIUX §16 assumes ("panel slides down from topbar") did not
             exist — pages render their own <main> and the only shared chrome was the
             CMD+K palette. This is the minimum that makes the spec true: one row, one
@@ -52,6 +64,10 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
             go read-only on whatever grid the user is idling on, which is never
             Settings → Months. Renders nothing. */}
         <MonthLockSync />
+        {/* UIUX §4.1. Mounted here, once, beside the bell — the nav has to be on
+            every portal route, and a per-page copy would drift the moment one
+            page forgot it. Items are pre-filtered above. */}
+        <AppSidebar items={modules} />
         <header className="flex h-14 items-center justify-end gap-2 px-8">
           <NotificationBell />
         </header>
