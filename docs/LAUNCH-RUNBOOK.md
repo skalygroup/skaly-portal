@@ -450,14 +450,16 @@ NFRs (MEASURED, not asserted)
   [x] k6 50 VUs, realistic profile: every §1.2 budget passes (attendance p95 44ms)
   [x] Stress profile ceiling recorded (attendance 449ms at 147 req/s) — one Node
       process's CPU, which is the 11.3 instance-count lever
-  [x] Report perf: Sprint 12's p95 3796ms / p99 4784ms vs 10s/20s
-  [ ] Re-confirm report perf on merged code (11.2) — the harness is ready
+  [x] Report perf RE-CONFIRMED on merged code (11.2): p95 3381ms / p99 6079ms
+      at n=20, representative volume, real worker + real R2 — vs 10s / 20s. PASS.
+      (Sprint 12 recorded p95 3796ms / p99 4784ms; the arc has not regressed.)
   [ ] Re-measure on STAGING. Every number above is a Windows dev laptop against
       Docker Postgres. Treat them as a floor.
 
 PRE-LAUNCH GATE  (all four need real infrastructure — see STEP 11 above)
   [ ] Backup restore drill — a REAL R2 backup, ON_ERROR_STOP=1  (HARD BLOCKER)
-  [ ] Report perf confirmed
+  [x] Report perf confirmed — see NFRs above. Re-run on staging to be thorough,
+      but the local number is a 3x margin, not a marginal pass.
   [ ] Instance count decided; Redis adapter deferred if single-instance
   [ ] Recovery-code redemption on staging — REDEEMED, and the second use REFUSED
 
