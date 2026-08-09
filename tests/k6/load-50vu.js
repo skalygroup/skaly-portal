@@ -6,13 +6,24 @@
  * under one 50-VU load, because they share a connection pool and a p95 measured
  * one endpoint at a time is a p95 nobody will ever experience.
  *
- *   GET  module data   p95 < 300ms
+ *   GET  module data   p95 < 300ms   ← attendance, tasks, calendar, shoot planner, dropper
  *   PATCH cell write   p95 < 200ms
- *   GET  dashboard     p95 < 200ms
  *
- * The bot's TTFT < 2s budget is deliberately NOT here: it streams, costs real
- * Anthropic tokens per request, and 50 VUs against it for 90 seconds is a bill
- * rather than a measurement. It is asserted in the API suite instead.
+ * ⚠️ TWO BUDGETS FROM §1.2 ARE DELIBERATELY ABSENT, and both absences are findings
+ * rather than omissions:
+ *
+ *   GET dashboard p95 < 200ms — THERE IS NO DASHBOARD ENDPOINT. `/v1/dashboard`
+ *     does not exist and `app/(portal)/dashboard/page.tsx` is a stub returning
+ *     `<h1>Dashboard</h1>`. The materialised views the budget is really about
+ *     (`dashboard_org_stats`, `dashboard_staff_task_stats`) exist and are read
+ *     today only by the report worker. They ARE measured, directly, by
+ *     `apps/api/scripts/measure-rollover-nfr.ts`, which probes the view while a
+ *     rollover refreshes it — the number that actually matters for NFR §3.1.
+ *     Add a target here the moment a dashboard endpoint lands.
+ *
+ *   bot TTFT < 2s — it streams and costs real Anthropic tokens per request. Fifty
+ *     VUs against it for ninety seconds is a bill, not a measurement. Asserted in
+ *     the API suite instead.
  *
  * ── BEFORE YOU TRUST A RUN ──────────────────────────────────────────────────
  * 1. Seed representative volume:
@@ -57,16 +68,22 @@ export const options = {
     'http_req_duration{endpoint:attendance}': ['p(95)<300'],
     'http_req_duration{endpoint:tasks}': ['p(95)<300'],
     'http_req_duration{endpoint:calendar}': ['p(95)<300'],
-    'http_req_duration{endpoint:dashboard}': ['p(95)<200'],
+    'http_req_duration{endpoint:shoot}': ['p(95)<300'],
+    'http_req_duration{endpoint:dropper}': ['p(95)<300'],
     // Writes get their own, tighter budget (§1.2 "PATCH cell").
     'http_req_duration{endpoint:attendance_patch}': ['p(95)<200'],
-    http_req_failed: ['rate<0.01'],
+    // Scoped to READS. The write below deliberately targets a row that does not
+    // exist so it measures latency without 50 VUs contending on one cell — it
+    // answers 404 by design, and an unscoped http_req_failed therefore reports a
+    // flat 1-in-6 failure rate that is purely this script's shape. A threshold
+    // that is always red teaches everyone to ignore it.
+    'http_req_failed{kind:read}': ['rate<0.01'],
   },
 };
 
 /** A read, checked for the two ways a fast response can still be meaningless. */
 function read(path, endpoint) {
-  const res = http.get(`${BASE}${path}`, { headers, tags: { endpoint } });
+  const res = http.get(`${BASE}${path}`, { headers, tags: { endpoint, kind: 'read' } });
   check(res, {
     [`${endpoint}: 200`]: (r) => r.status === 200,
     // A 429 answers in microseconds and would drag every percentile DOWN — the
@@ -93,7 +110,8 @@ export default function () {
   read(`/v1/attendance?period=${PERIOD}`, 'attendance');
   read(`/v1/tasks?period=${PERIOD}`, 'tasks');
   read(`/v1/content-calendar?period=${PERIOD}`, 'calendar');
-  read(`/v1/dashboard?period=${PERIOD}`, 'dashboard');
+  read(`/v1/shoot-planner?period=${PERIOD}`, 'shoot');
+  read(`/v1/content-dropper?period=${PERIOD}`, 'dropper');
 
   // One write per iteration. Deliberately a request that 409s on a stale version
   // rather than one that mutates: the LATENCY is the measurement, and 50 VUs
@@ -102,7 +120,7 @@ export default function () {
   const patch = http.patch(
     `${BASE}/v1/attendance/00000000-0000-4000-8000-000000000000`,
     JSON.stringify({ present: true, version: 1 }),
-    { headers, tags: { endpoint: 'attendance_patch' } },
+    { headers, tags: { endpoint: 'attendance_patch', kind: 'write' } },
   );
   check(patch, {
     'attendance_patch: reached the handler': (r) => r.status !== 429 && r.status < 500,

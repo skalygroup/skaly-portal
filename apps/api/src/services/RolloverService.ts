@@ -202,6 +202,14 @@ export class RolloverService {
       // b. Every active client's rows. The generator is Sprint 5's, shared with the
       //    dev seed, and idempotent per-insert — so a resume that somehow reached
       //    here twice fills gaps rather than duplicating (ADR-035).
+      //
+      //    NO assertPeriodNotLocked, deliberately. The lock means "no user edits to
+      //    this month"; rollover is not a user edit, it is the provisioning that
+      //    makes the month exist at all. An admin who pre-emptively locked a future
+      //    period (ADR-037 §3's second branch) would otherwise get a month that can
+      //    never be created — and the failure would arrive at 00:01 as a
+      //    PERIOD_LOCKED they could not act on, because unlocking it is only
+      //    possible for a month that already exists.
       await step('period_rows', () => generatePeriodRows(period, trx));
 
       // c. The recompute (ADR-034), enrolled in THIS transaction (ADR-035's
