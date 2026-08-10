@@ -85,7 +85,7 @@ The operational portal is complete. Sprint 11 gives admins the controls, and eve
 | `docs/11-THIRD-PARTY-INTEGRATIONS.md` | §2.2 (`inviteUserByEmail`, `admin.createUser`, `signOut`), §2.3 (MFA enroll/verify), §4.3 (**`REPORT_EXPIRY_SECONDS` = 24h**) | Supabase + R2 call shapes |
 | `docs/10-INFRA-DEPLOYMENT.md` | §4 (**`healthcheckTimeout = 30`** — why PDFs must leave the event loop), §6 (env vars) | The constraint behind ADR-027 |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §14 | Sprint 11 checklist |
-| `docs/adr/` | **ADR-011, 014, 017, 021, 022**, + **023–027** (created STEP 1) | The rulings this sprint must not violate |
+| `docs/decisions/` | **ADR-011, 014, 017, 021, 022**, + **023–027** (created STEP 1) | The rulings this sprint must not violate |
 
 ---
 
@@ -167,7 +167,7 @@ Both must be present. `trustProxy` alone still lets one office NAT share a bucke
 **A2/A3 — Sprint 10.1 (ADR-025):**
 ```bash
 grep -rn "refetchOnReconnect\|refetchOnMount\|subscribe.*before.*fetch\|replayBuffer" apps/web/src
-ls docs/adr/ADR-025*.md
+ls docs/decisions/ADR-025*.md
 grep -rn "x-ratelimit" tests/e2e/global-setup* playwright.config.ts   # A3's environment assertion
 ```
 Sprint 11's permission push (ADR-029) rides A2's self-healing mechanism. If 10.1 hasn't landed, you would build the same fix twice.
@@ -206,11 +206,11 @@ Write down what you find. Several Sprint-11 endpoints were partially built in Sp
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 1.3. Recording the five pre-Sprint-11 rulings. Read `docs/adr/ADR-025` for the house format, plus `docs/08-AUTH-MATRIX.md` §4, `docs/13-NFRS.md` §1.2 + §3.1, `docs/10-INFRA-DEPLOYMENT.md` §4, and `docs/05-BACKEND-SCHEMA.md` (`staff`, `messages`, migration 030).
+> Sprint 11, STEP 1.3. Recording the five pre-Sprint-11 rulings. Read `docs/decisions/ADR-025` for the house format, plus `docs/08-AUTH-MATRIX.md` §4, `docs/13-NFRS.md` §1.2 + §3.1, `docs/10-INFRA-DEPLOYMENT.md` §4, and `docs/05-BACKEND-SCHEMA.md` (`staff`, `messages`, migration 030).
 >
 > My STEP 1.2 census found: **[paste it]**.
 >
-> **WHAT TO BUILD** — five files in `docs/adr/`:
+> **WHAT TO BUILD** — five files in `docs/decisions/`:
 >
 > **`ADR-026-re-onboarding.md`**
 > ```
@@ -370,8 +370,8 @@ Write down what you find. Several Sprint-11 endpoints were partially built in Sp
 **Verify:**
 
 ```bash
-ls docs/adr/ADR-02{3,4,5,6,7}*.md
-git add docs/adr/ && git commit -m "docs(adr): ADR-026 re-onboarding, 024 async reports, 025 streaming export, 026 permission push, 027 message retention FK"
+ls docs/decisions/ADR-02{3,4,5,6,7}*.md
+git add docs/decisions/ && git commit -m "docs(adr): ADR-026 re-onboarding, 024 async reports, 025 streaming export, 026 permission push, 027 message retention FK"
 ```
 
 ### 1.4 — Branch
@@ -390,7 +390,7 @@ git checkout -b sprint-11-settings-reports
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 2. Two migrations. Read `docs/adr/ADR-026` and `ADR-027`, `docs/05-BACKEND-SCHEMA.md` (`staff`, **migration 030** — the partial-index precedent for `holidays`), and `docs/13-NFRS.md` §3.1.
+> Sprint 11, STEP 2. Two migrations. Read `docs/decisions/ADR-026` and `ADR-027`, `docs/05-BACKEND-SCHEMA.md` (`staff`, **migration 030** — the partial-index precedent for `holidays`), and `docs/13-NFRS.md` §3.1.
 >
 > My STEP 1.2 census found: **[paste — especially whether a `reports` table exists]**.
 >
@@ -448,7 +448,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 3. Making soft-deleted identities recoverable. Read `docs/adr/ADR-026` (follow it exactly), `docs/08-AUTH-MATRIX.md` §4 (**`PUT /v1/staff/:id/reactivate` is already specified**), `apps/api/src/services/ClientService.ts` (Sprint 9's `create` — its three-way backfill is what reactivate reuses), and the signup-approval path.
+> Sprint 11, STEP 3. Making soft-deleted identities recoverable. Read `docs/decisions/ADR-026` (follow it exactly), `docs/08-AUTH-MATRIX.md` §4 (**`PUT /v1/staff/:id/reactivate` is already specified**), `apps/api/src/services/ClientService.ts` (Sprint 9's `create` — its three-way backfill is what reactivate reuses), and the signup-approval path.
 >
 > **WHAT TO BUILD**
 >
@@ -507,7 +507,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 4. The settings API surface. Read `docs/08-AUTH-MATRIX.md` §4 (the endpoint map — **build exactly these**), §5–§6 (what the Permissions UI toggles, key naming, the Redis cache), `docs/adr/ADR-029`, `docs/07-API-CONTRACT.md`, `docs/09-ERROR-HANDLING.md` §2, and `docs/11-THIRD-PARTY-INTEGRATIONS.md` §2.2.
+> Sprint 11, STEP 4. The settings API surface. Read `docs/08-AUTH-MATRIX.md` §4 (the endpoint map — **build exactly these**), §5–§6 (what the Permissions UI toggles, key naming, the Redis cache), `docs/decisions/ADR-029`, `docs/07-API-CONTRACT.md`, `docs/09-ERROR-HANDLING.md` §2, and `docs/11-THIRD-PARTY-INTEGRATIONS.md` §2.2.
 >
 > My STEP 1.2 census showed these already exist: **[paste]**. Complete what is partial; build what is missing.
 >
@@ -564,7 +564,7 @@ pnpm --filter @skaly/api dev    # /docs lists every Auth-Matrix §4 endpoint
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 5. The audit log panel's API. Read `docs/adr/ADR-028`, `docs/13-NFRS.md` §2.2 + §4.2 + §5.3, `docs/05-BACKEND-SCHEMA.md` (`audit_log`), and `docs/07-API-CONTRACT.md`.
+> Sprint 11, STEP 5. The audit log panel's API. Read `docs/decisions/ADR-028`, `docs/13-NFRS.md` §2.2 + §4.2 + §5.3, `docs/05-BACKEND-SCHEMA.md` (`audit_log`), and `docs/07-API-CONTRACT.md`.
 >
 > **WHAT TO BUILD**
 >
@@ -615,7 +615,7 @@ curl -sD - "http://localhost:3001/v1/audit-log/export?from=2026-01-01" -H "Autho
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 6. Report generation. Read `docs/adr/ADR-027` (follow it exactly), `docs/13-NFRS.md` §1.2 (p95 < 10s / p99 < 20s), `docs/10-INFRA-DEPLOYMENT.md` §4 (`healthcheckTimeout = 30` — the reason this must leave the main thread), `docs/11-THIRD-PARTY-INTEGRATIONS.md` §4.3 (`REPORT_EXPIRY_SECONDS` = 86400), `docs/07-API-CONTRACT.md` (report types + payload), and `docs/03-UIUX.md` (brand — the PDF must look like the portal).
+> Sprint 11, STEP 6. Report generation. Read `docs/decisions/ADR-027` (follow it exactly), `docs/13-NFRS.md` §1.2 (p95 < 10s / p99 < 20s), `docs/10-INFRA-DEPLOYMENT.md` §4 (`healthcheckTimeout = 30` — the reason this must leave the main thread), `docs/11-THIRD-PARTY-INTEGRATIONS.md` §4.3 (`REPORT_EXPIRY_SECONDS` = 86400), `docs/07-API-CONTRACT.md` (report types + payload), and `docs/03-UIUX.md` (brand — the PDF must look like the portal).
 >
 > **HARD CONSTRAINT:** `@react-pdf/renderer` renders **synchronously**. Returning 202 while still rendering on the request event loop moves *when* the block happens, not *whether*. The render must leave the main thread. This is the trap and it passes code review.
 >
@@ -793,7 +793,7 @@ pnpm dev   # /settings as admin vs manager — different nav, no forbidden panel
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 10. Four more panels, all admin-only except Holidays. Read `docs/08-AUTH-MATRIX.md` §5 + §6, `docs/adr/ADR-029`, `docs/04-APPFLOW.md`, `docs/09-ERROR-HANDLING.md` §2.
+> Sprint 11, STEP 10. Four more panels, all admin-only except Holidays. Read `docs/08-AUTH-MATRIX.md` §5 + §6, `docs/decisions/ADR-029`, `docs/04-APPFLOW.md`, `docs/09-ERROR-HANDLING.md` §2.
 >
 > **WHAT TO BUILD**
 >
@@ -832,7 +832,7 @@ pnpm --filter @skaly/web test
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 11. The last two panels. Read `docs/adr/ADR-027` + `ADR-028`, `docs/03-UIUX.md`, `docs/13-NFRS.md` §2.2.
+> Sprint 11, STEP 11. The last two panels. Read `docs/decisions/ADR-027` + `ADR-028`, `docs/03-UIUX.md`, `docs/13-NFRS.md` §2.2.
 >
 > **WHAT TO BUILD**
 >

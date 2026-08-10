@@ -6,6 +6,15 @@
 **Same Goal / Prompt / Verify framework as Sprints 0–10**
 **Tooling interfaces verified as of July 2026** — Fastify 5 (`trustProxy`, hook ordering), `@fastify/rate-limit` (`keyGenerator`, `hook`), socket.io v4 (**emit acknowledgements**), TanStack Query v5 (`enabled` gating, `dataUpdatedAt`, no `onSuccess` on `useQuery`), Playwright (`globalSetup`, `page.on('request')`).
 
+> **⚠️ ADR NUMBERS IN THIS GUIDE RUN THREE LOW — and the paths around them are now
+> correct, which makes that MORE dangerous, not less.** `docs/adr/` was a path that
+> did not exist, so a wrong number failed loudly. It is `docs/decisions/` now, so a
+> wrong number resolves confidently to the wrong ruling. The mapping here:
+> **019 → 022** (patch-vs-invalidate matrix), **021 → 024** (rate-limit keying),
+> **022 → 025** (subscription ordering + the self-healing seam). Verified by subject,
+> not assumed from the offset. The numbers themselves are NOT yet rewritten in this
+> file — read them through this table until they are.
+>
 > **This is a patch, not a sprint.** Scope is fixed by `SPRINT-10-AUDIT.md` plus the close-out defect Sprint 10 was deliberately held on. No new features. If something isn't in the findings table below, it isn't in this patch.
 
 ---
@@ -62,7 +71,7 @@ One consequence worth noting: **A1's proper fix substantially dissolves A3's fra
 | `docs/07-API-CONTRACT.md` | **§2 (rate limit table + the `keyGenerator` note)** | A1's intended design — already written down |
 | `docs/08-AUTH-MATRIX.md` | **§3 rate-limiting note** ("keyed by `email + IP`, not IP alone… prevents a shared office IP from blocking all staff at 9am") | The spec already solved this for login and never generalised it |
 | `docs/09-ERROR-HANDLING.md` | **§5.4 (network drop + WebSocket reconnect)** | The section this patch amends — it currently prescribes the fix that doesn't work |
-| `docs/adr/ADR-019` | All | The patch-vs-invalidate matrix whose reducers STEP 4 reuses |
+| `docs/decisions/ADR-019` | All | The patch-vs-invalidate matrix whose reducers STEP 4 reuses |
 | `docs/13-NFRS.md` | §1.3, §4.3 | Delivery + reconnect budgets |
 | `docs/10-INFRA-DEPLOYMENT.md` | §4 (Railway, `healthcheckTimeout`), §8 | Where `trustProxy` matters |
 | `apps/api/src/app.ts` | The Fastify constructor + plugin registration order | A1's fix, and the hook-ordering trap |
@@ -287,7 +296,7 @@ Record the outcome — STEP 4's prompt needs it.
 
 > **WHERE WE ARE**
 >
-> Sprint 10.1, STEP 4. Building the realtime subscription seam. Read `SPRINT-10-AUDIT.md` A2, `SPRINT-10-DETAILED.md` close-out §5b/§5c, `docs/adr/ADR-019`, `docs/09-ERROR-HANDLING.md` §5.4, `apps/web/lib/socket.ts`, and `apps/web/providers.tsx`.
+> Sprint 10.1, STEP 4. Building the realtime subscription seam. Read `SPRINT-10-AUDIT.md` A2, `SPRINT-10-DETAILED.md` close-out §5b/§5c, `docs/decisions/ADR-019`, `docs/09-ERROR-HANDLING.md` §5.4, `apps/web/lib/socket.ts`, and `apps/web/providers.tsx`.
 >
 > My STEP 3.3 finding: **[paste — how many surfaces exhibit the window]**.
 >
@@ -424,7 +433,7 @@ pnpm exec playwright test tests/e2e/notifications.spec.ts:116 --repeat-each=10  
 
 > **WHERE WE ARE**
 >
-> Sprint 10.1, STEP 6. Reconnect, and the doc that currently prescribes the broken fix. Read `docs/09-ERROR-HANDLING.md` §5.4, `docs/adr/ADR-022`, `docs/13-NFRS.md` §1.3.
+> Sprint 10.1, STEP 6. Reconnect, and the doc that currently prescribes the broken fix. Read `docs/09-ERROR-HANDLING.md` §5.4, `docs/decisions/ADR-022`, `docs/13-NFRS.md` §1.3.
 >
 > **WHAT TO BUILD**
 >

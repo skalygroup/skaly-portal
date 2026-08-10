@@ -27,7 +27,7 @@ Sprint 3 proved the module pattern. Sprint 4 reuses the whole chassis and adds t
 **Prerequisites from Sprint 3** (all green — stop and fix if any is not):
 
 - Sprint 3 close-out fully checked; PR merged to `main`; CI green.
-- `docs/adr/ADR-003/004/005` committed; the **five new ADRs from the pre-Sprint-4 gate (006–010)** are on disk ready to commit (STEP 1 commits them).
+- `docs/decisions/ADR-003/004/005` committed; the **five new ADRs from the pre-Sprint-4 gate (006–010)** are on disk ready to commit (STEP 1 commits them).
 - The portal chassis exists and works: `(portal)` layout + RBAC sidebar, `MonthContext` with `?period=` URL sync, `lib/api.ts` (envelope parsing + 401 refresh), `handleMutationError`, the TanStack Query provider, `useColumnHighlight` (Sprint 0), `softDelete`/`softDeletable`, `optimisticUpdate`, `AuditService`, `NotificationService`, `lib/r2.ts` presign helpers, the `/ws/notify` **backend** broadcast path.
 - `pnpm typecheck`, `pnpm lint`, and the full suite green on `main`.
 
@@ -61,7 +61,7 @@ These were ruled at the pre-Sprint-4 gate and are **inputs** to this sprint. STE
 | `docs/09-ERROR-HANDLING.md` | §2 (`DEPENDENCY_UNRESOLVED`, file errors), §3 (`DEPENDENCY_UNRESOLVED` example), §5.1 (mutation routing) | Error shapes the FE routes on |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §7 | Sprint 4 checklist |
 | `docs/12-TESTING-STRATEGY.md` | §4.2 (dependency tests), §5 (RBAC/isolation tests) | The tests you must reproduce |
-| `docs/adr/` | **ADR-006 → ADR-010** | The five rulings this sprint executes |
+| `docs/decisions/` | **ADR-006 → ADR-010** | The five rulings this sprint executes |
 
 ---
 
@@ -134,7 +134,7 @@ The ADR files (`ADR-006` … `ADR-010`) from the pre-Sprint-4 gate belong in the
 
 ```bash
 ls docs/adr    # expect ADR-001..010; if 006-010 are missing, drop them in from the gate output
-git add docs/adr/ADR-006-*.md docs/adr/ADR-007-*.md docs/adr/ADR-008-*.md docs/adr/ADR-009-*.md docs/adr/ADR-010-*.md
+git add docs/decisions/ADR-006-*.md docs/decisions/ADR-007-*.md docs/decisions/ADR-008-*.md docs/decisions/ADR-009-*.md docs/decisions/ADR-010-*.md
 git commit -m "docs(adr): record pre-Sprint-4 rulings ADR-006..010"
 ```
 
@@ -182,7 +182,7 @@ git checkout -b sprint-4-tasks
 
 > **WHERE WE ARE**
 >
-> Sprint 4, STEP 2. Chassis and services from Sprints 2–3 exist. Building `TaskService`. Read `docs/07-API-CONTRACT.md` §7 (shapes + the H-03 multi-assignee note), `docs/05-BACKEND-SCHEMA.md` (`tasks` / `task_assignees` — note the SINGLE `dependency_id` self-FK and that `tasks` has **no `version` column**), `docs/08-AUTH-MATRIX.md` §4, `docs/09-ERROR-HANDLING.md` §3, and `docs/adr/ADR-006`, `ADR-008`, `ADR-009`.
+> Sprint 4, STEP 2. Chassis and services from Sprints 2–3 exist. Building `TaskService`. Read `docs/07-API-CONTRACT.md` §7 (shapes + the H-03 multi-assignee note), `docs/05-BACKEND-SCHEMA.md` (`tasks` / `task_assignees` — note the SINGLE `dependency_id` self-FK and that `tasks` has **no `version` column**), `docs/08-AUTH-MATRIX.md` §4, `docs/09-ERROR-HANDLING.md` §3, and `docs/decisions/ADR-006`, `ADR-008`, `ADR-009`.
 >
 > **HARD CONSTRAINTS FROM THE ADRs (do not deviate):**
 > - **ADR-008:** `tasks` has no `version`. Never call `BaseService.optimisticUpdate` for tasks. Task updates are plain guarded `UPDATE ... WHERE id = ? AND deleted_at IS NULL`, last-write-wins. No `version` param anywhere in this service; no `STALE_DATA`. (If you saw `version` in the API-Contract PATCH example or a `updateStatus(...,1)` test signature — those are copy-paste artifacts; ignore them.)
@@ -247,7 +247,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 4, STEP 3. `TaskService` core is in. Now attachments. Read `docs/07-API-CONTRACT.md` §7 (presign/confirm/download shapes), `docs/09-ERROR-HANDLING.md` §2 (`FILE_TOO_LARGE`, `INVALID_FILE_TYPE`, `TASK_ATTACHMENT_LIMIT_EXCEEDED`), `docs/adr/ADR-007`, and `apps/api/src/lib/r2.ts` (the presign helpers + TTL constants from Sprint 2).
+> Sprint 4, STEP 3. `TaskService` core is in. Now attachments. Read `docs/07-API-CONTRACT.md` §7 (presign/confirm/download shapes), `docs/09-ERROR-HANDLING.md` §2 (`FILE_TOO_LARGE`, `INVALID_FILE_TYPE`, `TASK_ATTACHMENT_LIMIT_EXCEEDED`), `docs/decisions/ADR-007`, and `apps/api/src/lib/r2.ts` (the presign helpers + TTL constants from Sprint 2).
 >
 > **HARD CONSTRAINTS (ADR-007):** a presigned **PUT** cannot enforce content-length at R2, so validate at **both** ends — never UI-only.
 >
@@ -433,7 +433,7 @@ git add -A && git commit -m "Sprint 4 backend: TaskService + attachments + route
 
 > **WHERE WE ARE**
 >
-> Sprint 4, STEP 7. Grid renders. Now interactions + create + attachments. Read `docs/04-APPFLOW.md` §5, `docs/03-UIUX.md` §4.4 (gold highlight full spec), §4.5 (modal/panel), `docs/09-ERROR-HANDLING.md` §5.1 + §5.4, and `docs/adr/ADR-008` (no version → no stale-conflict UI for tasks) + `ADR-010` (no socket client — own-mutation refresh only). Reuse `handleMutationError`, `useColumnHighlight`, the api client.
+> Sprint 4, STEP 7. Grid renders. Now interactions + create + attachments. Read `docs/04-APPFLOW.md` §5, `docs/03-UIUX.md` §4.4 (gold highlight full spec), §4.5 (modal/panel), `docs/09-ERROR-HANDLING.md` §5.1 + §5.4, and `docs/decisions/ADR-008` (no version → no stale-conflict UI for tasks) + `ADR-010` (no socket client — own-mutation refresh only). Reuse `handleMutationError`, `useColumnHighlight`, the api client.
 >
 > **WHAT TO BUILD**
 >

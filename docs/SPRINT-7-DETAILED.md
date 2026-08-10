@@ -77,7 +77,7 @@ Ruled at the pre-Sprint-7 gate; **inputs** to this sprint.
 | `docs/13-NFRS.md` | §1.1 (calendar <1.5s FCP / <2.0s TTI), §1.4 (60fps scroll) | The perf bar |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §10 | Sprint 7 checklist |
 | `docs/12-TESTING-STRATEGY.md` | §5.1 (Trigger 2 test — passes now), §5.2 (409 test), §6 (overlay E2E), the k6 `content-calendar.js` script | The tests you must reproduce |
-| `docs/adr/` | **ADR-010, ADR-012, ADR-013** (created STEP 1) | Real-time deferral + both trigger write semantics |
+| `docs/decisions/` | **ADR-010, ADR-012, ADR-013** (created STEP 1) | Real-time deferral + both trigger write semantics |
 
 ---
 
@@ -177,13 +177,13 @@ If missing, note it — STEP 4 adds them (one line each in `ContentDropperServic
 
 > **WHERE WE ARE**
 >
-> Sprint 7, STEP 1.4. Two ADR housekeeping items before building. Read `docs/adr/ADR-012`, `docs/07-API-CONTRACT.md` (Content Calendar section), and `docs/14-PRE-BUILD-AUDIT.md` §M-04.
+> Sprint 7, STEP 1.4. Two ADR housekeeping items before building. Read `docs/decisions/ADR-012`, `docs/07-API-CONTRACT.md` (Content Calendar section), and `docs/14-PRE-BUILD-AUDIT.md` §M-04.
 >
 > **WHAT TO DO**
 >
 > 1. **Amend ADR-012's cross-ref.** It currently cites "Audit M-04 (calendar manual guard)". That ID collides: `14-PRE-BUILD-AUDIT.md` §M-04 is "Concurrent bot session conflict across devices (Phase 2)", while `07-API-CONTRACT.md` labels the calendar auto-reset "(audit M-04)". Replace the cross-ref with: `the calendar manual-source guard (APPFLOW §8 / API-Contract §Content Calendar / content_calendar_source CHECK)`, and add a one-line note recording the ID collision so nobody chases the wrong finding.
 >
-> 2. **Create `docs/adr/ADR-013-system-write-version-semantics.md`:**
+> 2. **Create `docs/decisions/ADR-013-system-write-version-semantics.md`:**
 > ```
 > # ADR-013 — Version semantics for system (trigger) writes
 > Status: Accepted • Pre-Sprint 7 (build impact: Sprints 6, 7, 12)
@@ -212,8 +212,8 @@ If missing, note it — STEP 4 adds them (one line each in `ContentDropperServic
 **Verify:**
 
 ```bash
-ls docs/adr/ADR-013*.md
-git add docs/adr/ && git commit -m "docs(adr): ADR-013 system-write version semantics; amend ADR-012 cross-ref"
+ls docs/decisions/ADR-013*.md
+git add docs/decisions/ && git commit -m "docs(adr): ADR-013 system-write version semantics; amend ADR-012 cross-ref"
 ```
 `▶ /ponytail` — checkpoint the ADRs + green baseline before the build.
 
@@ -283,7 +283,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 7, STEP 3. `ContentCalendarService` exists. Now the Trigger 2 consumer. Read `docs/adr/ADR-013` (version semantics), `docs/04-APPFLOW.md` §7–§8, `docs/07-API-CONTRACT.md` §6 (`content-calendar:updated`), and `apps/api/src/events/listeners.ts` (where Trigger 1 is registered).
+> Sprint 7, STEP 3. `ContentCalendarService` exists. Now the Trigger 2 consumer. Read `docs/decisions/ADR-013` (version semantics), `docs/04-APPFLOW.md` §7–§8, `docs/07-API-CONTRACT.md` §6 (`content-calendar:updated`), and `apps/api/src/events/listeners.ts` (where Trigger 1 is registered).
 >
 > **HARD CONSTRAINTS — all three are non-obvious and each one silently breaks the trigger if missed:**
 > - **Null-safe guard:** write only when **`source IS DISTINCT FROM 'manual'`**. `source` is nullable and untouched cells are NULL; `source != 'manual'` evaluates to NULL for them and would skip nearly every cell.
@@ -408,7 +408,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 7, STEP 6. Now the full backend suite. Read `docs/12-TESTING-STRATEGY.md` §5.1 (the Trigger 2 test) + §5.2 (the 409 test) and `docs/adr/ADR-013`. Real local Postgres, `NODE_ENV=test`. Register the EventBus listeners in test setup so triggers actually fire.
+> Sprint 7, STEP 6. Now the full backend suite. Read `docs/12-TESTING-STRATEGY.md` §5.1 (the Trigger 2 test) + §5.2 (the 409 test) and `docs/decisions/ADR-013`. Real local Postgres, `NODE_ENV=test`. Register the EventBus listeners in test setup so triggers actually fire.
 >
 > **WHAT TO BUILD**
 >

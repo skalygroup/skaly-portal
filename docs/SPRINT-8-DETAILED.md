@@ -76,7 +76,7 @@ Ruled at the pre-Sprint-8 gate; **inputs** to this sprint.
 | `docs/13-NFRS.md` | §1.2–§1.3 (bot TTFT < 2s / full < 8s; the streaming clarification) | The latency bar |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §11 | Sprint 8 checklist |
 | `docs/12-TESTING-STRATEGY.md` | bot integration + permission-filter tests | The tests you must reproduce |
-| `docs/adr/` | **ADR-002, ADR-005, ADR-010 (amend), ADR-011** | MFA, bot namespace, socket scope, freelancer isolation |
+| `docs/decisions/` | **ADR-002, ADR-005, ADR-010 (amend), ADR-011** | MFA, bot namespace, socket scope, freelancer isolation |
 
 ---
 
@@ -174,9 +174,9 @@ docker compose exec postgres psql -U skaly -d skaly_dev -c "\dt" | grep -iE "^\s
 
 > **WHERE WE ARE**
 >
-> Sprint 8, STEP 1.4. Recording the pre-Sprint-8 socket-scope decision. Read `docs/adr/ADR-010` and `docs/07-API-CONTRACT.md` §Bot (the C-01 clarification).
+> Sprint 8, STEP 1.4. Recording the pre-Sprint-8 socket-scope decision. Read `docs/decisions/ADR-010` and `docs/07-API-CONTRACT.md` §Bot (the C-01 clarification).
 >
-> **WHAT TO DO** — append a dated amendment to `docs/adr/ADR-010`:
+> **WHAT TO DO** — append a dated amendment to `docs/decisions/ADR-010`:
 >
 > ```
 > ## Amendment (pre-Sprint 8) — socket client scope revised
@@ -200,7 +200,7 @@ docker compose exec postgres psql -U skaly -d skaly_dev -c "\dt" | grep -iE "^\s
 **Verify:**
 
 ```bash
-git add docs/adr/ADR-010-*.md && git commit -m "docs(adr): amend ADR-010 — minimal socket client into Sprint 8"
+git add docs/decisions/ADR-010-*.md && git commit -m "docs(adr): amend ADR-010 — minimal socket client into Sprint 8"
 ```
 `▶ /ponytail` — checkpoint the model-verify result + ADR before building.
 
@@ -411,7 +411,7 @@ git add -A && git commit -m "Sprint 8 backend: resolvePermission + BotService + 
 
 > **WHERE WE ARE**
 >
-> Sprint 8, STEP 6. Backend done. Now the frontend socket client — **minimal**. Read `docs/02-TRD.md` §8 (client reconnection + the C-05 refresh handshake), `docs/07-API-CONTRACT.md` §6 (`bot:token` we added + `bot:message`), and `docs/adr/ADR-010` (the amendment — build ONLY the connection + C-05 + bot subscriptions; grid subs + bell UI are Sprint 10).
+> Sprint 8, STEP 6. Backend done. Now the frontend socket client — **minimal**. Read `docs/02-TRD.md` §8 (client reconnection + the C-05 refresh handshake), `docs/07-API-CONTRACT.md` §6 (`bot:token` we added + `bot:message`), and `docs/decisions/ADR-010` (the amendment — build ONLY the connection + C-05 + bot subscriptions; grid subs + bell UI are Sprint 10).
 >
 > **WHAT TO BUILD** — `apps/web/lib/socket.ts` (the singleton the whole app will share):
 >
@@ -484,7 +484,7 @@ pnpm --filter @skaly/web test
 
 > **WHERE WE ARE**
 >
-> Sprint 8, STEP 8. Parallel track: fixing MFA enrollment. Read `docs/11-THIRD-PARTY-INTEGRATIONS.md` §2.3 (the client-side `auth.mfa.enroll` / `challengeAndVerify`), `docs/08-AUTH-MATRIX.md` §10 (MFA enforcement) and §2 (the middleware redirect), and `docs/adr/ADR-002`. The Sprint-1 blocker: the `@supabase/auth-js` **admin** client can't enroll factors — enrollment must run in the **user's browser session** via the Supabase client SDK.
+> Sprint 8, STEP 8. Parallel track: fixing MFA enrollment. Read `docs/11-THIRD-PARTY-INTEGRATIONS.md` §2.3 (the client-side `auth.mfa.enroll` / `challengeAndVerify`), `docs/08-AUTH-MATRIX.md` §10 (MFA enforcement) and §2 (the middleware redirect), and `docs/decisions/ADR-002`. The Sprint-1 blocker: the `@supabase/auth-js` **admin** client can't enroll factors — enrollment must run in the **user's browser session** via the Supabase client SDK.
 >
 > **WHAT TO BUILD**
 >

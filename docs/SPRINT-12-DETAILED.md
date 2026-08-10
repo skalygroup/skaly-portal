@@ -4,7 +4,7 @@
 
 **Companion to `MASTER-BUILD-GUIDE-V2-FINAL.md` PART 9 and `SPRINT-1..11-DETAILED.md` + `SPRINT-8_1` / `SPRINT-10_1` patches**
 **Same Goal / Prompt / Verify framework as Sprints 0–11**
-**Tooling interfaces verified as of July 2026** — Fastify 5, Kysely (`.stream()` via `pg-query-stream`, CTEs, `sql` template for batched deletes), Socket.io v4 (`notify:new` typed delivery — **not** bespoke events), TanStack Query v5 (shared query keys, `setQueryData` patch), `@aws-sdk/client-s3` (`ListObjectsV2Command`, `DeleteObjectsCommand`, `HeadObjectCommand`), DOMPurify, Framer Motion 11, Playwright latest. **ADR series lives in `docs/decisions/`, not `docs/adr/`.**
+**Tooling interfaces verified as of July 2026** — Fastify 5, Kysely (`.stream()` via `pg-query-stream`, CTEs, `sql` template for batched deletes), Socket.io v4 (`notify:new` typed delivery — **not** bespoke events), TanStack Query v5 (shared query keys, `setQueryData` patch), `@aws-sdk/client-s3` (`ListObjectsV2Command`, `DeleteObjectsCommand`, `HeadObjectCommand`), DOMPurify, Framer Motion 11, Playwright latest. **ADR series lives in `docs/decisions/`, not `docs/decisions/`.**
 
 > **Risk note:** Sprint 12 is deceptively split. The comment system (STEPS 3–4, 9) is ordinary CRUD with one sharp edge — the visibility predicate that Sprint 9's search has been waiting three sprints for. The three background jobs (STEPS 5–7) are where the danger lives: each writes to shared state on a schedule with no user watching, and each has a specific way to become a silent outage — an unscoped R2 sweep deleting backups, a duplicate recompute erasing a manual override, a monster DELETE locking the messages table during live chat. Test the jobs against their failure modes, not their happy paths.
 

@@ -61,7 +61,7 @@ Ruled at the pre-Sprint-5 gate; **inputs** to this sprint. STEP 1 commits ADR-01
 | `docs/09-ERROR-HANDLING.md` | §2 (`SHOOT_RESET_CONFIRMATION_REQUIRED`, `PERIOD_LOCKED`, `RESOURCE_NOT_FOUND`) | Error shapes |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §8 | Sprint 5 checklist |
 | `docs/12-TESTING-STRATEGY.md` | §5.3 (freelancer isolation / M-07), §4.2 (shoot/trigger tests), the "no `week_number`" test | The tests you must reproduce |
-| `docs/adr/` | **ADR-006 → ADR-011** | The rulings this sprint executes |
+| `docs/decisions/` | **ADR-006 → ADR-011** | The rulings this sprint executes |
 
 ---
 
@@ -142,8 +142,8 @@ docker compose exec postgres psql -U skaly -d skaly_dev -c "\d content_pipelines
 ### 1.3 — Commit ADR-011
 
 ```bash
-ls docs/adr/ADR-011*.md || echo "drop ADR-011 (freelancer isolation) in first"
-git add docs/adr/ADR-011-*.md
+ls docs/decisions/ADR-011*.md || echo "drop ADR-011 (freelancer isolation) in first"
+git add docs/decisions/ADR-011-*.md
 git commit -m "docs(adr): record ADR-011 freelancer row-level isolation"
 ```
 
@@ -151,7 +151,7 @@ git commit -m "docs(adr): record ADR-011 freelancer row-level isolation"
 
 > **WHERE WE ARE**
 >
-> Sprint 5, STEP 1.4. Executing a pre-sprint ruling: the Sprint 2 EventBus declares `shoot:confirmed` and `pipeline:posted`; I need to add a `shoot:reset` event before `ShootPlannerService` uses it. Read `apps/api/src/lib/EventBus.ts` and `docs/adr/ADR-010`.
+> Sprint 5, STEP 1.4. Executing a pre-sprint ruling: the Sprint 2 EventBus declares `shoot:confirmed` and `pipeline:posted`; I need to add a `shoot:reset` event before `ShootPlannerService` uses it. Read `apps/api/src/lib/EventBus.ts` and `docs/decisions/ADR-010`.
 >
 > **WHAT TO BUILD**
 >
@@ -188,7 +188,7 @@ git checkout -b sprint-5-shoot-planner
 
 > **WHERE WE ARE**
 >
-> Sprint 5, STEP 2. Chassis + EventBus (`shoot:confirmed`, `shoot:reset`) ready. Building `ShootPlannerService`. Read `docs/04-APPFLOW.md` §6 (the definitive lifecycle), `docs/07-API-CONTRACT.md` §8, `docs/08-AUTH-MATRIX.md` §4 + §8, `docs/05-BACKEND-SCHEMA.md` (`shoot_schedules` — **no `version`**, `slot_status ∈ ('Unset','Scheduled','Confirmed','Completed')`), and `docs/adr/ADR-010`, `ADR-011`.
+> Sprint 5, STEP 2. Chassis + EventBus (`shoot:confirmed`, `shoot:reset`) ready. Building `ShootPlannerService`. Read `docs/04-APPFLOW.md` §6 (the definitive lifecycle), `docs/07-API-CONTRACT.md` §8, `docs/08-AUTH-MATRIX.md` §4 + §8, `docs/05-BACKEND-SCHEMA.md` (`shoot_schedules` — **no `version`**, `slot_status ∈ ('Unset','Scheduled','Confirmed','Completed')`), and `docs/decisions/ADR-010`, `ADR-011`.
 >
 > **HARD CONSTRAINTS FROM THE ADRs:**
 > - **ADR-011:** freelancer isolation is **query-level** — add `WHERE freelancer_id = currentUser.staffId` to `getGrid` **before** execution; never post-filter. Unassigned slots are invisible to freelancers. A freelancer requesting a non-owned slot → **404**. Freelancer PATCH/reset never reaches here (route-blocked), but assert defensively.

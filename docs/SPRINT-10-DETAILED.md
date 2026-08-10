@@ -28,9 +28,11 @@
 >   recorded pre-Sprint 11, built Sprint 12) — it is the FK addendum to ADR-021 §4,
 >   not part of 021 itself. The second mention in the same bullet, about `SET NULL`
 >   re-orphaning bot replies, IS ADR-021 and is deliberately unchanged.
-> - **`docs/adr/` is not a real path.** The READ FIRST table pointed at it; ADRs live
->   in `docs/decisions/`. Other mentions of that path elsewhere in this guide are
->   still uncorrected.
+> - **`docs/adr/` is not a real path.** ADRs live in `docs/decisions/`. Every mention
+>   across every sprint guide is corrected — 75 of them, Sprints 3 through 12. The
+>   only three left are deliberate: the two close-out tables that record this very
+>   correction as "from → to" (rewriting those would erase the fact) and the line
+>   you are reading.
 
 ---
 
@@ -306,11 +308,11 @@ If absent, note it — MVP is single-instance so nothing breaks today, but Infra
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 1.6. Recording the four pre-Sprint-10 rulings before any code references them. Read `docs/adr/ADR-016` for the house format, `docs/05-BACKEND-SCHEMA.md` (`messages`, `notifications`, `bot_sessions`), `docs/11-THIRD-PARTY-INTEGRATIONS.md` §5.2, and `docs/02-TRD.md` §8 + §9.4.
+> Sprint 10, STEP 1.6. Recording the four pre-Sprint-10 rulings before any code references them. Read `docs/decisions/ADR-016` for the house format, `docs/05-BACKEND-SCHEMA.md` (`messages`, `notifications`, `bot_sessions`), `docs/11-THIRD-PARTY-INTEGRATIONS.md` §5.2, and `docs/02-TRD.md` §8 + §9.4.
 >
 > My STEP 1.3 census found: **[paste the producer table]**. My STEP 1.4 finding is: **[A / B / C — paste the query output]**.
 >
-> **WHAT TO BUILD** — four files in `docs/adr/`:
+> **WHAT TO BUILD** — four files in `docs/decisions/`:
 >
 > **`ADR-020-notification-type-count.md`**
 > ```
@@ -443,7 +445,7 @@ If absent, note it — MVP is single-instance so nothing breaks today, but Infra
 **Verify:**
 
 ```bash
-ls docs/adr/ADR-0{17,18,19,20}*.md
+ls docs/decisions/ADR-0{17,18,19,20}*.md
 grep -n "14 event types\|all 14 types" docs/01-PRD.md docs/06-IMPLEMENTATION-PLAN.md   # expect: nothing
 grep -n "presence:{staffId}" docs/11-THIRD-PARTY-INTEGRATIONS.md                       # expect: nothing
 git add docs/ && git commit -m "docs(adr): ADR-020 notification count, ADR-021 bot archive, ADR-022 realtime cache, ADR-023 presence hash; patch PRD/IMPL-PLAN/THIRD-PARTY"
@@ -467,7 +469,7 @@ git checkout -b sprint-10-chat-notifications
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 2. Fixing the bot archive before common chat becomes a second writer to `messages`. Read `docs/adr/ADR-021` (follow it exactly), `docs/05-BACKEND-SCHEMA.md` (`messages`, `bot_sessions`), `docs/02-TRD.md` §9.4, `docs/13-NFRS.md` §5.2, and `apps/api/src/services/BotService.ts`.
+> Sprint 10, STEP 2. Fixing the bot archive before common chat becomes a second writer to `messages`. Read `docs/decisions/ADR-021` (follow it exactly), `docs/05-BACKEND-SCHEMA.md` (`messages`, `bot_sessions`), `docs/02-TRD.md` §9.4, `docs/13-NFRS.md` §5.2, and `apps/api/src/services/BotService.ts`.
 >
 > My STEP 1.4 finding was **[A: nothing in messages / B: both turns, no parent_id / C: bot replies only]**. Here is the current state: **[paste the SQL output]**.
 >
@@ -560,7 +562,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 3. Replacing `KEYS presence:*` with a single hash. Read `docs/adr/ADR-023`, `docs/02-TRD.md` §8, `docs/11-THIRD-PARTY-INTEGRATIONS.md` §5.2 (patched in STEP 1.6), and `docs/13-NFRS.md` §1.3 (presence propagation < 2s).
+> Sprint 10, STEP 3. Replacing `KEYS presence:*` with a single hash. Read `docs/decisions/ADR-023`, `docs/02-TRD.md` §8, `docs/11-THIRD-PARTY-INTEGRATIONS.md` §5.2 (patched in STEP 1.6), and `docs/13-NFRS.md` §1.3 (presence propagation < 2s).
 >
 > **WHAT TO BUILD** — `apps/api/src/services/PresenceService.ts`:
 >
@@ -615,7 +617,7 @@ redis-cli HGETALL presence
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 4. Completing notifications. Read `docs/adr/ADR-020`, `docs/02-TRD.md` §10, `docs/05-BACKEND-SCHEMA.md` (`notifications` — the 18-value enum), `docs/07-API-CONTRACT.md` (`/v1/notifications/*`), and the existing `NotificationService` from Sprint 2.
+> Sprint 10, STEP 4. Completing notifications. Read `docs/decisions/ADR-020`, `docs/02-TRD.md` §10, `docs/05-BACKEND-SCHEMA.md` (`notifications` — the 18-value enum), `docs/07-API-CONTRACT.md` (`/v1/notifications/*`), and the existing `NotificationService` from Sprint 2.
 >
 > My STEP 1.3 census: **[paste the producer table]**.
 >
@@ -770,7 +772,7 @@ pnpm --filter @skaly/api test routes/chat
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 8. Rounding out backend tests. Read `docs/12-TESTING-STRATEGY.md` and `docs/adr/ADR-020`.
+> Sprint 10, STEP 8. Rounding out backend tests. Read `docs/12-TESTING-STRATEGY.md` and `docs/decisions/ADR-020`.
 >
 > **WHAT TO BUILD**
 >
@@ -806,7 +808,7 @@ git add -A && git commit -m "Sprint 10 backend: bot archive (ADR-021), presence 
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 9. Attaching all deferred grid subscriptions. Read `docs/adr/ADR-022` (follow the matrix exactly), `docs/adr/ADR-012` + `ADR-013` (the triggers whose side effects decide patch-vs-invalidate), `docs/02-TRD.md` §8, and `apps/web/lib/socket.ts`.
+> Sprint 10, STEP 9. Attaching all deferred grid subscriptions. Read `docs/decisions/ADR-022` (follow the matrix exactly), `docs/decisions/ADR-012` + `ADR-013` (the triggers whose side effects decide patch-vs-invalidate), `docs/02-TRD.md` §8, and `apps/web/lib/socket.ts`.
 >
 > First, find every marker:
 > ```bash

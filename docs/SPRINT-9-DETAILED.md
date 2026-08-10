@@ -93,7 +93,7 @@ Ruled at the pre-Sprint-9 gate; **inputs** to this sprint. STEP 1 records the th
 | `docs/14-PRE-BUILD-AUDIT.md` | **M-05 (search query strategy)**, M-08 (bot tool execution errors) | The two findings this sprint closes |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §12 | Sprint 9 checklist |
 | `docs/12-TESTING-STRATEGY.md` | §6.2 (the bot-mutation E2E — **extend it**), §7 (CMD+K p95 < 150ms) | The tests you must reproduce |
-| `docs/adr/` | **ADR-006, 008, 009, 011, 012, 013**, + **014/015/016** (created STEP 1) | The rulings the tools must not violate |
+| `docs/decisions/` | **ADR-006, 008, 009, 011, 012, 013**, + **014/015/016** (created STEP 1) | The rulings the tools must not violate |
 
 ---
 
@@ -233,9 +233,9 @@ curl -s https://api.anthropic.com/v1/models \
 
 > **WHERE WE ARE**
 >
-> Sprint 9, STEP 1.5. Recording the three pre-Sprint-9 rulings before any code references them. Read `docs/adr/ADR-013` for the house format, `docs/02-TRD.md` §9.2, `docs/08-AUTH-MATRIX.md` §4–§5, and `docs/05-BACKEND-SCHEMA.md` (`audit_log` — the `changed_by_source` comment).
+> Sprint 9, STEP 1.5. Recording the three pre-Sprint-9 rulings before any code references them. Read `docs/decisions/ADR-013` for the house format, `docs/02-TRD.md` §9.2, `docs/08-AUTH-MATRIX.md` §4–§5, and `docs/05-BACKEND-SCHEMA.md` (`audit_log` — the `changed_by_source` comment).
 >
-> **WHAT TO BUILD** — three files in `docs/adr/`:
+> **WHAT TO BUILD** — three files in `docs/decisions/`:
 >
 > **`ADR-014-bot-mutation-confirmation.md`**
 > ```
@@ -328,8 +328,8 @@ curl -s https://api.anthropic.com/v1/models \
 **Verify:**
 
 ```bash
-ls docs/adr/ADR-01{4,5,6}*.md
-git add docs/adr/ && git commit -m "docs(adr): record ADR-014 confirmation machine, ADR-015 search scoping, ADR-016 bot write attribution"
+ls docs/decisions/ADR-01{4,5,6}*.md
+git add docs/decisions/ && git commit -m "docs(adr): record ADR-014 confirmation machine, ADR-015 search scoping, ADR-016 bot write attribution"
 ```
 
 ### 1.6 — Branch
@@ -411,7 +411,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 9, STEP 3. Building the two-turn confirmation state machine. Read `docs/adr/ADR-014` (the ruling — follow it exactly), `docs/02-TRD.md` §9.2, `docs/04-APPFLOW.md` §9 (the turn-1 / turn-2 / cancel flows), and `apps/api/src/services/BotService.ts` (the Sprint 8 session handling).
+> Sprint 9, STEP 3. Building the two-turn confirmation state machine. Read `docs/decisions/ADR-014` (the ruling — follow it exactly), `docs/02-TRD.md` §9.2, `docs/04-APPFLOW.md` §9 (the turn-1 / turn-2 / cancel flows), and `apps/api/src/services/BotService.ts` (the Sprint 8 session handling).
 >
 > **HARD CONSTRAINTS (ADR-014) — each of these is the difference between a gate and a suggestion:**
 > - **Consent is never model-classified.** No LLM call decides whether the user said yes.
@@ -500,7 +500,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 9, STEP 4. Building the 11 mutation tools. Read `docs/02-TRD.md` §9.3 (the list), `docs/08-AUTH-MATRIX.md` §5 (per-role defaults — note the 🔧 rows), `docs/adr/ADR-014` (version capture), `docs/adr/ADR-016` (attribution), and the Sprint 8 query-tool descriptor shape in `apps/api/src/lib/bot/tools/queries/`.
+> Sprint 9, STEP 4. Building the 11 mutation tools. Read `docs/02-TRD.md` §9.3 (the list), `docs/08-AUTH-MATRIX.md` §5 (per-role defaults — note the 🔧 rows), `docs/decisions/ADR-014` (version capture), `docs/decisions/ADR-016` (attribution), and the Sprint 8 query-tool descriptor shape in `apps/api/src/lib/bot/tools/queries/`.
 >
 > **HARD CONSTRAINTS:**
 > - Each tool **calls the existing mutating service method** with the JWT-authenticated `currentUser`. No raw queries. No re-implemented validation. Every 403 / 423 / 409 / 400 the REST layer produces must pass through unchanged.
@@ -581,7 +581,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 9, STEP 5. Wiring the confirmation machine into `BotService.handleMessage`. Read `docs/adr/ADR-014`, `apps/api/src/lib/bot/confirmation.ts` (STEP 3), `docs/04-APPFLOW.md` §9, and the existing `handleMessage` tool loop.
+> Sprint 9, STEP 5. Wiring the confirmation machine into `BotService.handleMessage`. Read `docs/decisions/ADR-014`, `apps/api/src/lib/bot/confirmation.ts` (STEP 3), `docs/04-APPFLOW.md` §9, and the existing `handleMessage` tool loop.
 >
 > **WHAT TO BUILD**
 >
@@ -712,7 +712,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 9, STEP 7. The full bot test suite. Read `docs/12-TESTING-STRATEGY.md`, `docs/adr/ADR-014`, `docs/adr/ADR-016`. Real local Postgres, `NODE_ENV=test`. Mock the Anthropic client with canned `tool_use` responses — never hit the live API in unit tests.
+> Sprint 9, STEP 7. The full bot test suite. Read `docs/12-TESTING-STRATEGY.md`, `docs/decisions/ADR-014`, `docs/decisions/ADR-016`. Real local Postgres, `NODE_ENV=test`. Mock the Anthropic client with canned `tool_use` responses — never hit the live API in unit tests.
 >
 > **WHAT TO BUILD**
 >
@@ -783,7 +783,7 @@ git add -A && git commit -m "Sprint 9 bot: mutation tools + two-turn confirmatio
 
 > **WHERE WE ARE**
 >
-> Sprint 9, STEP 8. Building search + the activity feed. Read `docs/adr/ADR-015` (follow it exactly), `docs/14-PRE-BUILD-AUDIT.md` M-05, `docs/07-API-CONTRACT.md` (Search & Activity Feed), `docs/05-BACKEND-SCHEMA.md` §8 (**what indexes actually exist**), `docs/08-AUTH-MATRIX.md` §4, and `docs/04-APPFLOW.md` §3 + §12.
+> Sprint 9, STEP 8. Building search + the activity feed. Read `docs/decisions/ADR-015` (follow it exactly), `docs/14-PRE-BUILD-AUDIT.md` M-05, `docs/07-API-CONTRACT.md` (Search & Activity Feed), `docs/05-BACKEND-SCHEMA.md` §8 (**what indexes actually exist**), `docs/08-AUTH-MATRIX.md` §4, and `docs/04-APPFLOW.md` §3 + §12.
 >
 > **HARD CONSTRAINTS (ADR-015):**
 > - **There is no `search_indexes` table.** Migration 025 creates indexes.

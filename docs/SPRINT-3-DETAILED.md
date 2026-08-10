@@ -162,7 +162,7 @@ Read it:
 
 ### 1.4 — Write ADR-003 (decision #1)
 
-Create `docs/adr/ADR-003-audit-log-write-path.md` (or append to your ADR log alongside ADR-001/ADR-002):
+Create `docs/decisions/ADR-003-audit-log-write-path.md` (or append to your ADR log alongside ADR-001/ADR-002):
 
 ```
 ADR-003 — audit_log write path

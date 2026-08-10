@@ -70,7 +70,7 @@ Ruled at the pre-Sprint-6 gate; **inputs** to this sprint. STEP 1 records ADR-01
 | `docs/09-ERROR-HANDLING.md` | §2 (`STAGE_SEQUENCE_VIOLATION`, `STALE_DATA`, `PERIOD_LOCKED`), §3 | Error shapes |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §9 | Sprint 6 checklist |
 | `docs/12-TESTING-STRATEGY.md` | §4.2 (Trigger 1 coming_shoot_date test — passes now; Trigger 2), §5.4 (lock tests) | The tests you must reproduce |
-| `docs/adr/` | **ADR-010, ADR-012** (created STEP 1) | Real-time deferral + recompute semantics |
+| `docs/decisions/` | **ADR-010, ADR-012** (created STEP 1) | Real-time deferral + recompute semantics |
 
 ---
 
@@ -153,9 +153,9 @@ docker compose exec postgres psql -U skaly -d skaly_dev -c "SELECT count(*) FROM
 
 > **WHERE WE ARE**
 >
-> Sprint 6, STEP 1.3. Recording the pre-Sprint-6 ruling before building. Read `docs/adr/ADR-010` and `docs/05-BACKEND-SCHEMA.md` (`content_pipelines`).
+> Sprint 6, STEP 1.3. Recording the pre-Sprint-6 ruling before building. Read `docs/decisions/ADR-010` and `docs/05-BACKEND-SCHEMA.md` (`content_pipelines`).
 >
-> **WHAT TO BUILD** — create `docs/adr/ADR-012-trigger1-recompute.md`:
+> **WHAT TO BUILD** — create `docs/decisions/ADR-012-trigger1-recompute.md`:
 >
 > ```
 > # ADR-012 — Trigger 1 recompute: orthogonal write + rollover refresh
@@ -195,8 +195,8 @@ docker compose exec postgres psql -U skaly -d skaly_dev -c "SELECT count(*) FROM
 **Verify:**
 
 ```bash
-ls docs/adr/ADR-012*.md
-git add docs/adr/ADR-012-*.md && git commit -m "docs(adr): record ADR-012 Trigger 1 recompute semantics"
+ls docs/decisions/ADR-012*.md
+git add docs/decisions/ADR-012-*.md && git commit -m "docs(adr): record ADR-012 Trigger 1 recompute semantics"
 ```
 `▶ /ponytail` — checkpoint the ADR + green baseline before starting the build.
 
@@ -218,7 +218,7 @@ git checkout -b sprint-6-content-dropper
 
 > **WHERE WE ARE**
 >
-> Sprint 6, STEP 2. Chassis + EventBus ready. Building `ContentDropperService`. Read `docs/04-APPFLOW.md` §7 (the definitive stage flow — status derived, sequence, Trigger 2), `docs/07-API-CONTRACT.md` §9, `docs/08-AUTH-MATRIX.md` §3–§4 (admin/manager only), `docs/05-BACKEND-SCHEMA.md` (`content_pipelines` — **has `version`**, timestamp columns, `coming_shoot_source`), and `docs/adr/ADR-012`.
+> Sprint 6, STEP 2. Chassis + EventBus ready. Building `ContentDropperService`. Read `docs/04-APPFLOW.md` §7 (the definitive stage flow — status derived, sequence, Trigger 2), `docs/07-API-CONTRACT.md` §9, `docs/08-AUTH-MATRIX.md` §3–§4 (admin/manager only), `docs/05-BACKEND-SCHEMA.md` (`content_pipelines` — **has `version`**, timestamp columns, `coming_shoot_source`), and `docs/decisions/ADR-012`.
 >
 > **HARD CONSTRAINTS:**
 > - **Table is `content_pipelines`** (UI "Content Dropper"; route `/v1/content-dropper`; service `ContentDropperService`).
@@ -272,7 +272,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 6, STEP 3. `ContentDropperService` exists. Now the Trigger 1 consumer. Read `docs/adr/ADR-012` (the exact recompute rules), `docs/05-BACKEND-SCHEMA.md` (`shoot_schedules` + `content_pipelines`), and `apps/api/src/lib/EventBus.ts`.
+> Sprint 6, STEP 3. `ContentDropperService` exists. Now the Trigger 1 consumer. Read `docs/decisions/ADR-012` (the exact recompute rules), `docs/05-BACKEND-SCHEMA.md` (`shoot_schedules` + `content_pipelines`), and `apps/api/src/lib/EventBus.ts`.
 >
 > **HARD CONSTRAINTS (ADR-012):**
 > - **Recompute, never push:** `coming_shoot_date = MIN(slot_date)` over `shoot_schedules WHERE client_id, period, slot_status='Confirmed', slot_date >= CURRENT_DATE`; `NULL` if none. Never `SET = eventPayload.slotDate`.
@@ -359,7 +359,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 6, STEP 5. Services + routes + listener exist. Now the full backend suite. Read `docs/12-TESTING-STRATEGY.md` §4.2 (Trigger 1 coming_shoot_date test + Trigger 2) + §5.4 (locks), and `docs/adr/ADR-012`. Real local Postgres, `NODE_ENV=test`. Register the EventBus listeners in the test setup so triggers actually fire.
+> Sprint 6, STEP 5. Services + routes + listener exist. Now the full backend suite. Read `docs/12-TESTING-STRATEGY.md` §4.2 (Trigger 1 coming_shoot_date test + Trigger 2) + §5.4 (locks), and `docs/decisions/ADR-012`. Real local Postgres, `NODE_ENV=test`. Register the EventBus listeners in the test setup so triggers actually fire.
 >
 > **WHAT TO BUILD**
 >
