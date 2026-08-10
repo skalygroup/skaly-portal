@@ -24,7 +24,7 @@ The last feature, the hardening, and the launch. By the end of this week the por
 
 - **The three pre-Sprint-13 decisions are recorded** as **ADR-035** (rollover atomicity), **ADR-036** (rollover notifications + AI summary), **ADR-037** (rollover idempotency).
 - **Rollover runs as a two-tier transaction** — Tier 1 (period-row creation for every client + the `coming_shoot_date` recompute + the `months` idempotency row) is one atomic transaction that fully commits or fully rolls back; Tier 2 (the materialised-view refresh) is a **separate, post-commit** step, `CONCURRENTLY`, whose failure degrades the dashboard but **never** undoes the rollover.
-- **All four rollover notification types fire** — `month_ready` (all), `rollover_success` (admins), `rollover_failed` and `rollover_view_refresh_failed` (admins). These are the **last** of ADR-017's deferred six: after this, **all 18 types have producers and the coverage test's deferred list is zero** — the assertion that closes the entire notification arc.
+- **All four rollover notification types fire** — `month_ready` (all), `rollover_success` (admins), `rollover_failed` and `rollover_view_refresh_failed` (admins). These are the **last** of ADR-020's deferred six: after this, **all 18 types have producers and the coverage test's deferred list is zero** — the assertion that closes the entire notification arc.
 - **The failure notification is unconditional** — written first with a **templated** body, then *enriched* by the Claude-generated incident summary (Error-Handling §7) if the API succeeds. A rollover that fails silently because the *summary* also failed is the worst case in the product; the notification never depends on the summary.
 - **The failure notification is actionable** — the inline, idempotent **`[Manual rollover]`** action (Error-Handling §7), sharing one idempotent core with the cron.
 - **Rollover is safe to run twice** — the `months` row inside Tier 1's transaction as the create-if-absent key; post-commit steps guarded on row state so a retry resumes rather than re-runs; the manual button and the cron hit the same idempotent endpoint.
@@ -38,7 +38,7 @@ The last feature, the hardening, and the launch. By the end of this week the por
 
 - **⚠️ Sprints 11 and 12 are pushed and merged.** Both were tagged locally and gated on the **same** thing — **ADR-031's staging MFA verification** (the server-enroll/verify flow against real Supabase, which genuinely can't run locally). That one manual step has been the long pole holding two finished sprints. STEP 1 clears it once, pushes Sprint 11 → `main`, then Sprint 12 → `main`, before any Sprint 13 code.
 - The atomic-transaction discipline from every prior sprint (`BaseService`, `AuditService` with the System Actor); the recompute is a single extracted function (ADR-034, Sprint 12); retention is a temporally-separate neighbor (03:00 IST monthly), never a rollover passenger.
-- `NotificationService` with the 18-type registry (ADR-017), the `notify:new` **typed** delivery invariant now pinned on `useNotifySocket` (a type is not an event; the payload arrives under `payload` — pinned commit; do not reintroduce a bespoke event).
+- `NotificationService` with the 18-type registry (ADR-020), the `notify:new` **typed** delivery invariant now pinned on `useNotifySocket` (a type is not an event; the payload arrives under `payload` — pinned commit; do not reintroduce a bespoke event).
 - The Anthropic SDK client with built-in retry (the Sprint 8 amendment — `maxRetries`, respects `Retry-After`).
 - A `dashboard`/reporting materialised view exists (Sprints 4/7 dashboard work) — STEP 1 confirms it has the unique index `CONCURRENTLY` requires.
 - The Railway cron service firing the rollover endpoint with `X-Internal-Secret` (Infra §4).
@@ -53,7 +53,7 @@ The last feature, the hardening, and the launch. By the end of this week the por
 | **Rollover atomicity = two tiers** | Tier 1 (period rows + recompute + `months` insert) one atomic transaction; Tier 2 (materialised-view refresh) post-commit, `CONCURRENTLY`, independently failable, **never rolls back the rollover**. Retention stays a temporally-separate neighbor. → **ADR-035** | STEP 1 (record) + STEP 3 |
 | **↳ Commit is the boundary** | `rollover_success`/`month_ready` fire on Tier 1 commit; the refresh outcome fires its own notification. `rollover_view_refresh_failed` without a preceding `rollover_success` = tiers entangled = bug. | STEP 3 + STEP 4 |
 | **↳ Refresh is CONCURRENTLY** | Or it takes `ACCESS EXCLUSIVE` and blocks dashboard reads. Requires a unique index on the view — confirm before wiring. | STEP 1 + STEP 3 |
-| **Four notification types + AI summary** | Last of ADR-017's six → deferred list hits **zero**. Failure notification **written first with a templated body**, *enriched* by the AI summary, never dependent on it. SDK retry then template. → **ADR-036** | STEP 1 (record) + STEP 4 |
+| **Four notification types + AI summary** | Last of ADR-020's six → deferred list hits **zero**. Failure notification **written first with a templated body**, *enriched* by the AI summary, never dependent on it. SDK retry then template. → **ADR-036** | STEP 1 (record) + STEP 4 |
 | **↳ Actionable failure** | Inline, idempotent `[Manual rollover]` action (Error-Handling §7). A failure summary with no recovery action is a dead-end. | STEP 4 |
 | **Idempotency + retry** | `months` row inserted **inside Tier 1's transaction** as create-if-absent key; post-commit steps guarded on row state so a retry resumes; manual button + cron share one idempotent core. → **ADR-037** | STEP 1 (record) + STEP 2 + STEP 5 |
 | **Launch gate — triage** | Backup restore drill = **hard blocker**. Report perf = **confirm the Sprint 12 number** (blocker if missed). Redis adapter = **deferred if single-instance**. Recovery-code redemption = **verify on staging**. | STEP 11 |
@@ -90,7 +90,8 @@ The last feature, the hardening, and the launch. By the end of this week the por
 7. **The manual-rollover button and the cron share one idempotent endpoint** (ADR-037). Not a separate "force" path that skips the guard. Two entry points, one idempotent core.
 8. **The recompute runs INSIDE Tier 1** (ADR-034/035) with the System Actor, all active clients, honouring `source='manual'`, no version bump. Retention does **not** run inside or adjacent to rollover's transaction — it is 03:00 IST monthly (ADR-030), a separate schedule with no overlap.
 9. **Rollover timing is 00:01 IST = 18:31 UTC** (`31 18 * * *`, Infra §4). `TZ=Asia/Kolkata` on the API (Infra §6) — the recompute's "today" and the period math depend on it. Confirm the env before testing.
-10. **The four rollover types close ADR-017's deferred list to zero.** Confirm the running count in the coverage test and drive it to **zero deferred** this sprint. Every one of the 18 enum values now has a producer.
+10. **The four rollover types close ADR-020's deferred list to zero.** Confirm the running count in the coverage test and drive it to **zero deferred** this sprint. Every one of the 18 enum values now has a producer.
+    - ⚠️ **This guide originally cited "ADR-017" for the 18-type registry throughout; every one of those is now ADR-020.** In `docs/decisions/`, **ADR-020** is `notification-type-count` and **ADR-017** is `client-onboarding-atomicity` — an unrelated ruling. Following the guide as written sent a reader to the wrong document. Same class as the Sprint 11 renumbering, and the same resolution: `docs/decisions/` wins over a guide's shorthand.
 11. **Production deploy is release-tag-gated** (Infra §3): tag → Railway deploys API + runs migrations → Vercel promotes → health check → smoke test. Do not hand-deploy; follow the pipeline.
 12. **The backup restore drill uses a REAL backup** (Infra §7), not a synthetic dump. A backup never restored is a hypothesis.
 
@@ -103,7 +104,7 @@ The last feature, the hardening, and the launch. By the end of this week the por
 | **ADR-035 (new)** | Two-tier rollover; view refresh post-commit + `CONCURRENTLY`; never rolls back rollover. | STEP 1 + 3 |
 | **ADR-036 (new)** | Four notification types (deferred list → 0); templated-first, AI-enriched failure notification; idempotent manual-rollover action. | STEP 1 + 4 |
 | **ADR-037 (new)** | `months`-row idempotency inside Tier 1; post-commit steps resume-not-rerun; one idempotent core. | STEP 1 + 2 + 5 |
-| **ADR-017 (closed)** | All 18 notification types have producers; deferred list = 0. | STEP 4 + STEP 6 |
+| **ADR-020 (closed)** | All 18 notification types have producers; deferred list = 0. | STEP 4 + STEP 6 |
 | **ADR-034 (inherited)** | Recompute (one function) runs inside Tier 1 with the System Actor. | STEP 3 |
 | **NFR §3.1** | Rollover < 5 min, API fully operational during the window (hence `CONCURRENTLY`). | STEP 3 + STEP 10 |
 | **NFR §3.2 / Infra §7** | Backup restore drill proves RTO/RPO — the launch blocker. | STEP 11 |
@@ -233,11 +234,11 @@ Determine whether `months` already has state columns (a `rollover_completed_at` 
 > **`ADR-036-rollover-notifications.md`**
 > ```
 > # ADR-036 — Rollover notifications: templated-first, AI-enriched, actionable
-> Status: Accepted • Pre-Sprint 13 (closes ADR-017's deferred list to zero)
-> Cross-refs: ADR-017 (18 types), ERROR-HANDLING §7, THIRD-PARTY §3 (SDK retry),
+> Status: Accepted • Pre-Sprint 13 (closes ADR-020's deferred list to zero)
+> Cross-refs: ADR-020 (18 types), ERROR-HANDLING §7, THIRD-PARTY §3 (SDK retry),
 >             ADR-022 (notify:new self-heal), 02-TRD §8 (typed delivery)
 >
-> Context: the four rollover types are the last of ADR-017's deferred six. The failure
+> Context: the four rollover types are the last of ADR-020's deferred six. The failure
 >   summary calls Anthropic from inside a cron with no user waiting.
 >
 > Decision:
@@ -425,11 +426,11 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 13, STEP 4. Rollover notifications and the failure path. Read `docs/decisions/ADR-036` (follow it exactly), `docs/09-ERROR-HANDLING.md` §7 (the summary prompt + delivery + the `[Manual rollover]` button — verbatim), `docs/decisions/ADR-017` (the enum), `docs/11-THIRD-PARTY-INTEGRATIONS.md` §3 (the SDK retry), and `apps/api/src/services/NotificationService.ts` (the 18-type registry).
+> Sprint 13, STEP 4. Rollover notifications and the failure path. Read `docs/decisions/ADR-036` (follow it exactly), `docs/09-ERROR-HANDLING.md` §7 (the summary prompt + delivery + the `[Manual rollover]` button — verbatim), `docs/decisions/ADR-020` (the enum), `docs/11-THIRD-PARTY-INTEGRATIONS.md` §3 (the SDK retry), and `apps/api/src/services/NotificationService.ts` (the 18-type registry).
 >
 > **WHAT TO BUILD**
 >
-> 1. **Register the four types' producers** in the registry (they already have enum values + registry entries from ADR-017; wire the producers):
+> 1. **Register the four types' producers** in the registry (they already have enum values + registry entries from ADR-020; wire the producers):
 >    - `month_ready` → all staff, on Tier 1 commit.
 >    - `rollover_success` → admins, on Tier 1 commit.
 >    - `rollover_failed` → admins, on Tier 1 failure.
@@ -456,7 +457,7 @@ pnpm typecheck
 > - **⭐ Failure notification exists even when the AI call fails:** mock Anthropic to throw past retries → the notification row exists with the **templated** body, admins received it (the worst-case guard).
 > - AI success **enriches** the row (body updated to the summary).
 > - All four types fire to the correct audience on the correct trigger.
-> - **⭐ ADR-017 closed:** the coverage test's deferred list is now **zero** — every one of the 18 types has a producer (assert length 0).
+> - **⭐ ADR-020 closed:** the coverage test's deferred list is now **zero** — every one of the 18 types has a producer (assert length 0).
 > - The manual-rollover action hits the idempotent endpoint (STEP 5) and is admin-only.
 >
 > Show me the templated-first-then-enrich failure path first, then the four producers.
@@ -528,7 +529,7 @@ pnpm typecheck
 > 2. **⭐ Tier 2 isolation:** Tier 1 commits, Tier 2's `REFRESH` throws → period rows persist, `rollover_success` already fired, `rollover_view_refresh_failed` fires, endpoint returns success. The dashboard is stale; the month is intact.
 > 3. **⭐ Idempotency:** two sequential runs → rows created once, `month_ready` once. A resume-after-partial → Tier 2 only.
 > 4. **⭐ AI-summary independence:** Anthropic throws past retries → the failure notification exists with the templated body. Anthropic succeeds → the body is enriched.
-> 5. **⭐ Deferred-list-to-zero:** every one of the 18 notification types has a producer; the coverage test's deferred assertion is length 0 (ADR-017 closed).
+> 5. **⭐ Deferred-list-to-zero:** every one of the 18 notification types has a producer; the coverage test's deferred assertion is length 0 (ADR-020 closed).
 > 6. **The manual-rollover action** hits the idempotent core and is admin-only.
 > 7. **Timing sanity:** a representative rollover (20 clients) completes well under the NFR §3.1 5-min budget in the test environment.
 > 8. Full API suite + typecheck + lint.
@@ -541,7 +542,7 @@ pnpm typecheck
 ```bash
 pnpm --filter @skaly/api test
 pnpm typecheck && pnpm lint
-git add -A && git commit -m "Sprint 13: two-tier rollover (ADR-035) + four notification types + AI failure summary (ADR-036) + idempotency (ADR-037); ADR-017 closed (deferred list = 0)"
+git add -A && git commit -m "Sprint 13: two-tier rollover (ADR-035) + four notification types + AI failure summary (ADR-036) + idempotency (ADR-037); ADR-020 closed (deferred list = 0)"
 ```
 
 ---
@@ -769,7 +770,7 @@ ROLLOVER (ADR-035/036/037)
   [ ] ⭐ Running rollover twice creates rows ONCE, month_ready ONCE (TESTED)
   [ ] Retry-after-partial RESUMES Tier 2 only (TESTED)
   [ ] Timing-safe internal-secret compare
-  [ ] ⭐ ADR-017 CLOSED — all 18 types have producers, deferred list = 0 (TESTED)
+  [ ] ⭐ ADR-020 CLOSED — all 18 types have producers, deferred list = 0 (TESTED)
 
 HARDENING
   [ ] CSP on; every module works with it (TESTED)
@@ -855,4 +856,4 @@ Then it didn't pass. A synthetic dump proves the restore command's syntax, not t
 
 ## END OF SPRINT 13 DETAILED GUIDE — END OF BUILD
 
-*Companion to `MASTER-BUILD-GUIDE-V2-FINAL.md` PART 9 and `SPRINT-1..12-DETAILED.md`. Source-of-truth precedence when documents differ: the numbered spec docs (`01`–`14`) + the schema win, then this guide's reconciliations and the decisions it executes (in `docs/decisions/`, ADR-006–037), then the Master Build Guide's shorthand. This is the final sprint and the launch. Rollover is the highest-stakes transaction in the product because it runs unattended at midnight and its failure is discovered by the business owner the next morning — so every decision here favours a loud, recoverable, non-destructive failure over an elegant success: the two-tier boundary keeps a dashboard-refresh failure from undoing a month, the templated-first notification keeps a failed AI summary from swallowing the incident, and the idempotency keeps a retry from doubling the month. The pre-launch gate is a gate, not a checklist item — and its one unfakeable line is the backup restore drill, because a backup you have never restored is a hypothesis. When 11.1–11.5 pass and the release tag deploys clean, `portal.skaly.in` is live and the fourteen-week build is done. The last of ADR-017's eighteen notification types now has a producer; there is nothing deferred that isn't written down in the post-launch backlog. Ship it.*
+*Companion to `MASTER-BUILD-GUIDE-V2-FINAL.md` PART 9 and `SPRINT-1..12-DETAILED.md`. Source-of-truth precedence when documents differ: the numbered spec docs (`01`–`14`) + the schema win, then this guide's reconciliations and the decisions it executes (in `docs/decisions/`, ADR-006–037), then the Master Build Guide's shorthand. This is the final sprint and the launch. Rollover is the highest-stakes transaction in the product because it runs unattended at midnight and its failure is discovered by the business owner the next morning — so every decision here favours a loud, recoverable, non-destructive failure over an elegant success: the two-tier boundary keeps a dashboard-refresh failure from undoing a month, the templated-first notification keeps a failed AI summary from swallowing the incident, and the idempotency keeps a retry from doubling the month. The pre-launch gate is a gate, not a checklist item — and its one unfakeable line is the backup restore drill, because a backup you have never restored is a hypothesis. When 11.1–11.5 pass and the release tag deploys clean, `portal.skaly.in` is live and the fourteen-week build is done. The last of ADR-020's eighteen notification types now has a producer; there is nothing deferred that isn't written down in the post-launch backlog. Ship it.*
