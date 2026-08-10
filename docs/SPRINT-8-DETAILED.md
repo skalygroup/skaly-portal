@@ -76,7 +76,7 @@ Ruled at the pre-Sprint-8 gate; **inputs** to this sprint.
 | `docs/13-NFRS.md` | §1.2–§1.3 (bot TTFT < 2s / full < 8s; the streaming clarification) | The latency bar |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §11 | Sprint 8 checklist |
 | `docs/12-TESTING-STRATEGY.md` | bot integration + permission-filter tests | The tests you must reproduce |
-| `docs/decisions/` | **ADR-002, ADR-005, ADR-010 (amend), ADR-011** | MFA, bot namespace, socket scope, freelancer isolation |
+| `docs/decisions/` | **ADR-002, ADR-010 (amend), ADR-011** + `DECISIONS.md` § Bot streaming namespace | MFA, bot namespace, socket scope, freelancer isolation |
 
 ---
 
@@ -84,7 +84,7 @@ Ruled at the pre-Sprint-8 gate; **inputs** to this sprint.
 
 The Master Build Guide's Sprint 8 shorthand drifts from the canonical specs in several load-bearing places. The numbered specs + schema + the ADRs win:
 
-1. **Bot streams over `/ws/notify`, NOT a `/bot` namespace.** TRD §8 + API-Contract §6 define exactly three namespaces (`/ws/chat`, `/ws/presence`, `/ws/notify`); ADR-005 locked bot streaming to `/ws/notify`. The Master Guide's `/bot` namespace does not exist — the `bot:token`/`bot:message` events ride `/ws/notify`, room `user:{staffId}`.
+1. **Bot streams over `/ws/notify`, NOT a `/bot` namespace.** TRD §8 + API-Contract §6 define exactly three namespaces (`/ws/chat`, `/ws/presence`, `/ws/notify`); `DECISIONS.md` § Bot streaming namespace locked bot streaming to `/ws/notify`. The Master Guide's `/bot` namespace does not exist — the `bot:token`/`bot:message` events ride `/ws/notify`, room `user:{staffId}`.
 2. **Permission keys are `bot.tool.{tool_name}`** (Auth-Matrix §6.2), e.g. `bot.tool.get_attendance`. The Master Guide's `bot:can_query_attendance` / `getEffectivePermissions` naming is wrong — use `resolvePermission(staffId, 'bot.tool.get_attendance')`. (A batch helper that resolves all 11 `bot.tool.*` keys for filtering is fine, built on the single resolver.)
 3. **Two socket events, not one overloaded event** (pre-Sprint-8 ruling): **`bot:token { sessionId, delta }`** for streaming deltas + a **terminal `bot:message { sessionId, content, card?, toolsUsed? }`** on completion. API-Contract §6 lists `bot:message` as the terminal `{ content, card?, toolsUsed? }`; **add `bot:token`** to the registry (an addition, not a conflict). Overloading one event for deltas and the final card produces flickering half-rendered cards.
 4. **Tools reuse the isolating service methods with the JWT caller** (TRD §9.1 line 378: "Execute service method — same validation as direct REST API call"). Pass `currentUser` from the request context into every tool; **never expose a staffId in the tool's input schema** (a model could be prompted into impersonation). The 🔐 (own-data) scoping and the ADR-011 freelancer predicate live in the service, not the tool.

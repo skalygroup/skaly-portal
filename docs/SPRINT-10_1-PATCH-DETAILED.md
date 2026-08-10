@@ -6,14 +6,14 @@
 **Same Goal / Prompt / Verify framework as Sprints 0–10**
 **Tooling interfaces verified as of July 2026** — Fastify 5 (`trustProxy`, hook ordering), `@fastify/rate-limit` (`keyGenerator`, `hook`), socket.io v4 (**emit acknowledgements**), TanStack Query v5 (`enabled` gating, `dataUpdatedAt`, no `onSuccess` on `useQuery`), Playwright (`globalSetup`, `page.on('request')`).
 
-> **⚠️ ADR NUMBERS IN THIS GUIDE RUN THREE LOW — and the paths around them are now
-> correct, which makes that MORE dangerous, not less.** `docs/adr/` was a path that
-> did not exist, so a wrong number failed loudly. It is `docs/decisions/` now, so a
-> wrong number resolves confidently to the wrong ruling. The mapping here:
-> **019 → 022** (patch-vs-invalidate matrix), **021 → 024** (rate-limit keying),
-> **022 → 025** (subscription ordering + the self-healing seam). Verified by subject,
-> not assumed from the offset. The numbers themselves are NOT yet rewritten in this
-> file — read them through this table until they are.
+> **⚠️ ADR NUMBERING CORRECTED.** This guide's cross-refs ran three low:
+> **019 → 022** (the patch-vs-invalidate matrix), **021 → 024** (rate-limit keying),
+> **022 → 025** (subscription ordering + the self-healing seam). Every reference has
+> been shifted, verified by subject rather than assumed from the offset.
+>
+> `SPRINT-10_1-CLOSEOUT.md` is deliberately NOT shifted: it is the table that records
+> this drift, so it has to keep quoting the wrong numbers to explain them. The path
+> `docs/adr/` in the same table is kept for the same reason.
 >
 > **This is a patch, not a sprint.** Scope is fixed by `SPRINT-10-AUDIT.md` plus the close-out defect Sprint 10 was deliberately held on. No new features. If something isn't in the findings table below, it isn't in this patch.
 
@@ -46,8 +46,8 @@ One consequence worth noting: **A1's proper fix substantially dissolves A3's fra
 | Finding | Severity | What | Step |
 |---|---|---|---|
 | **A3** | Medium | The suite runs against an unasserted environment; a reverted rate limit produces plausible-looking wrong results | **STEP 1** |
-| **A1** | **Critical** | `trustProxy` absent + no `keyGenerator` → the whole org shares one 150/min bucket; 429s present as unrelated UI errors | **STEP 2** → ADR-021 |
-| **A2** + close-out §5b/§5c | High | A missed realtime event is **permanent** on every realtime surface — no ordering guarantee, and the global query config has no self-healing path | **STEPS 3–7** → ADR-022 |
+| **A1** | **Critical** | `trustProxy` absent + no `keyGenerator` → the whole org shares one 150/min bucket; 429s present as unrelated UI errors | **STEP 2** → ADR-024 |
+| **A2** + close-out §5b/§5c | High | A missed realtime event is **permanent** on every realtime surface — no ordering guarantee, and the global query config has no self-healing path | **STEPS 3–7** → ADR-025 |
 | **A6** | Low | Date-pinned fixtures (`${PERIOD}-15`) fail in the back half of a month | **STEP 8** |
 | — | — | Password-in-URL blast radius (raised at close-out; not in the audit) | **STEP 9** |
 | **A4** | Medium | Offboarded staff can never be re-hired (`staff_email_unique` has no partial predicate) | **Sprint 11** — decision carried below |
@@ -71,7 +71,7 @@ One consequence worth noting: **A1's proper fix substantially dissolves A3's fra
 | `docs/07-API-CONTRACT.md` | **§2 (rate limit table + the `keyGenerator` note)** | A1's intended design — already written down |
 | `docs/08-AUTH-MATRIX.md` | **§3 rate-limiting note** ("keyed by `email + IP`, not IP alone… prevents a shared office IP from blocking all staff at 9am") | The spec already solved this for login and never generalised it |
 | `docs/09-ERROR-HANDLING.md` | **§5.4 (network drop + WebSocket reconnect)** | The section this patch amends — it currently prescribes the fix that doesn't work |
-| `docs/decisions/ADR-019` | All | The patch-vs-invalidate matrix whose reducers STEP 4 reuses |
+| `docs/decisions/ADR-022` | All | The patch-vs-invalidate matrix whose reducers STEP 4 reuses |
 | `docs/13-NFRS.md` | §1.3, §4.3 | Delivery + reconnect budgets |
 | `docs/10-INFRA-DEPLOYMENT.md` | §4 (Railway, `healthcheckTimeout`), §8 | Where `trustProxy` matters |
 | `apps/api/src/app.ts` | The Fastify constructor + plugin registration order | A1's fix, and the hook-ordering trap |
@@ -86,8 +86,8 @@ One consequence worth noting: **A1's proper fix substantially dissolves A3's fra
 2. **The rate limiter's `keyGenerator` runs at `onRequest` by default — before auth populates `request.user`.** A `keyGenerator` of `req.user?.staffId ?? req.ip` registered at the default hook always falls through to IP. The config looks correct and the behaviour is unchanged — precisely the A3 class of failure. The registration hook must run **after** the auth plugin.
 3. **The spec already intended per-user limits.** Auth-Matrix §3's note explains the shared-office-IP problem and solves it for `/auth/login` with an `email + IP` key. A1 is not a missing design; it is a design applied to one route and never generalised. Fix it as a generalisation, not an invention.
 4. **Error-Handling §5.4 currently prescribes a broken fix.** "On reconnect: all stale TanStack Query data refetched" is invalidate-on-connect — the same race, on every reconnect. §5.4 gets amended in this patch (STEP 6), in the same commit as the code, or Sprint 11 reintroduces it from the doc.
-5. **ADR-019 is not superseded.** Its patch-vs-invalidate matrix stands. ADR-022 adds *ordering* and *reconciliation* around it. The `applyEvent` reducers STEP 4 introduces are the same logic ADR-019 already required — now named, and used twice.
-6. **`refetchOnWindowFocus: false` stays the global default.** Flipping it globally reintroduces the fan-out problem ADR-019 exists to prevent. It is enabled **only** on realtime-backed queries, where the refetch is bounded and the data is shared and mutable.
+5. **ADR-022 is not superseded.** Its patch-vs-invalidate matrix stands. ADR-025 adds *ordering* and *reconciliation* around it. The `applyEvent` reducers STEP 4 introduces are the same logic ADR-022 already required — now named, and used twice.
+6. **`refetchOnWindowFocus: false` stays the global default.** Flipping it globally reintroduces the fan-out problem ADR-022 exists to prevent. It is enabled **only** on realtime-backed queries, where the refetch is bounded and the data is shared and mutable.
 7. **A5 is closed.** All five grids write the server row back in `onSuccess`. Do not "fix" attendance's inline `.map` idiom — it is correct, and the audit already records the false positive.
 
 ---
@@ -97,9 +97,9 @@ One consequence worth noting: **A1's proper fix substantially dissolves A3's fra
 | # | Type | What |
 |---|---|---|
 | 1 | Manual + Prompt | **A3** — assert the test environment before measuring anything |
-| 2 | Prompt | **A1** — `trustProxy` hop count + per-user `keyGenerator` at the right hook → ADR-021 |
+| 2 | Prompt | **A1** — `trustProxy` hop count + per-user `keyGenerator` at the right hook → ADR-024 |
 | 3 | Manual | Reproduce `:116` deterministically; **size A2's blast radius** across every realtime surface |
-| 4 | Prompt | **ADR-022** + the shared seam — acked room join, `useRealtimeQuery`, one `applyEvent` reducer per surface |
+| 4 | Prompt | **ADR-025** + the shared seam — acked room join, `useRealtimeQuery`, one `applyEvent` reducer per surface |
 | 5 | Prompt | Migrate every consumer onto the seam; delete per-module improvisation |
 | 6 | Prompt | Reconnect path (the same mechanism, twice) + **amend Error-Handling §5.4** |
 | 7 | Prompt | Tests aimed at the window — mount and reconnect, per surface class |
@@ -155,7 +155,7 @@ pnpm exec playwright test --list                    # expect: a loud, actionable
 
 ---
 
-## STEP 2: Rate limiting (A1) — ADR-021
+## STEP 2: Rate limiting (A1) — ADR-024
 
 **Goal:** Per-user buckets, a trustworthy client IP, and the hook ordering that makes both real.
 
@@ -192,9 +192,9 @@ pnpm exec playwright test --list                    # expect: a loud, actionable
 >
 > 5. **Re-size the limit now that it means something different.** 150/min *per authenticated user* is generous where 150 org-wide was crippling; the audit's ~5 REST calls per page load makes it ~30 page loads per minute per person. Keep 150, and record the new sizing basis in the ADR so nobody re-reads the old number as tuned.
 >
-> 6. **`ADR-021-rate-limit-keying.md`:**
+> 6. **`ADR-024-rate-limit-keying.md`:**
 >    ```
->    # ADR-021 — Rate limiting is per-user, behind a trusted single proxy hop
+>    # ADR-024 — Rate limiting is per-user, behind a trusted single proxy hop
 >    Status: Accepted • Sprint 10.1 (deploy blocker)
 >    Cross-refs: SPRINT-10-AUDIT A1, API-CONTRACT §2, AUTH-MATRIX §3, INFRA §4
 >
@@ -288,7 +288,7 @@ Record the outcome — STEP 4's prompt needs it.
 
 ---
 
-## STEP 4: The shared seam (ADR-022)
+## STEP 4: The shared seam (ADR-025)
 
 **Goal:** One mechanism, correct at mount and at reconnect, small enough that nobody routes around it.
 
@@ -296,7 +296,7 @@ Record the outcome — STEP 4's prompt needs it.
 
 > **WHERE WE ARE**
 >
-> Sprint 10.1, STEP 4. Building the realtime subscription seam. Read `SPRINT-10-AUDIT.md` A2, `SPRINT-10-DETAILED.md` close-out §5b/§5c, `docs/decisions/ADR-019`, `docs/09-ERROR-HANDLING.md` §5.4, `apps/web/lib/socket.ts`, and `apps/web/providers.tsx`.
+> Sprint 10.1, STEP 4. Building the realtime subscription seam. Read `SPRINT-10-AUDIT.md` A2, `SPRINT-10-DETAILED.md` close-out §5b/§5c, `docs/decisions/ADR-022`, `docs/09-ERROR-HANDLING.md` §5.4, `apps/web/lib/socket.ts`, and `apps/web/providers.tsx`.
 >
 > My STEP 3.3 finding: **[paste — how many surfaces exhibit the window]**.
 >
@@ -329,15 +329,15 @@ Record the outcome — STEP 4's prompt needs it.
 >    - Gate with `enabled: subscribed && (opts.enabled ?? true)` — TanStack's own flag does the sequencing; no bespoke orchestration.
 >    - While `collecting` is true, the socket handler pushes to the buffer. Otherwise it patches the cache via `setQueryData`.
 >    - **Do not** drain in a `useEffect` on `dataUpdatedAt`. That leaves a gap between the fetch resolving and the drain running. Replaying inside `queryFn` closes it completely.
->    - Enable `refetchOnWindowFocus: true` **on this hook only**. It is the cheap self-healing net A2 says is missing, and scoping it here keeps `providers.tsx`'s global `false` intact so ADR-019's fan-out concern is untouched.
+>    - Enable `refetchOnWindowFocus: true` **on this hook only**. It is the cheap self-healing net A2 says is missing, and scoping it here keeps `providers.tsx`'s global `false` intact so ADR-022's fan-out concern is untouched.
 >
-> 3. **⭐ One `applyEvent` reducer per surface, used twice.** `(snapshot, event) => snapshot` — pure, no cache access. The **same** function does live patching and buffer replay. This is not new logic: it is exactly what ADR-019's matrix already required, now named and reused. Invalidate-only events (per ADR-019: the H-01 holiday cascade, task create/update/assign) return a sentinel that tells the hook to invalidate rather than patch, so the matrix stays in one place.
+> 3. **⭐ One `applyEvent` reducer per surface, used twice.** `(snapshot, event) => snapshot` — pure, no cache access. The **same** function does live patching and buffer replay. This is not new logic: it is exactly what ADR-022's matrix already required, now named and reused. Invalidate-only events (per ADR-022: the H-01 holiday cascade, task create/update/assign) return a sentinel that tells the hook to invalidate rather than patch, so the matrix stays in one place.
 >
-> 4. **`ADR-022-realtime-subscription-ordering.md`:**
+> 4. **`ADR-025-realtime-subscription-ordering.md`:**
 >    ```
->    # ADR-022 — Subscribe before fetch, and reconcile in flight
+>    # ADR-025 — Subscribe before fetch, and reconcile in flight
 >    Status: Accepted • Sprint 10.1
->    Cross-refs: SPRINT-10-AUDIT A2, ADR-019, ERROR-HANDLING §5.4 (amended), NFR §1.3
+>    Cross-refs: SPRINT-10-AUDIT A2, ADR-022, ERROR-HANDLING §5.4 (amended), NFR §1.3
 >
 >    Context: realtime consumers fetched on mount and joined their room after the
 >      handshake. Events in that gap reached nobody and were absent from the snapshot.
@@ -358,11 +358,11 @@ Record the outcome — STEP 4's prompt needs it.
 >         onto the snapshot INSIDE the query function, so reconciled data is what enters
 >         the cache. Draining in an effect after resolution leaves a gap.
 >      3. ONE applyEvent reducer per surface serves both live patching and replay. It is
->         the same logic ADR-019's matrix already required.
+>         the same logic ADR-022's matrix already required.
 >      4. Mount and reconnect are the SAME mechanism. Reconnect sets subscribed=false,
 >         rejoins with ack, and re-runs the gated query — which re-buffers and replays.
 >      5. refetchOnWindowFocus is enabled on realtime-backed queries only, as the
->         self-healing net. The global default stays false (ADR-019 fan-out).
+>         self-healing net. The global default stays false (ADR-022 fan-out).
 >      6. ERROR-HANDLING §5.4 is amended in the same commit: its "on reconnect, refetch
 >         all stale data" prescribes invalidate-on-connect, which has this exact race on
 >         every reconnect.
@@ -401,8 +401,8 @@ pnpm typecheck
 > **WHAT TO BUILD**
 >
 > 1. Convert each surface's `useQuery` to `useRealtimeQuery`, supplying its rooms and its `applyEvent` reducer.
-> 2. **Extract the existing patch logic into the reducer.** The bodies of the current `socket.on` handlers already contain it — move, don't rewrite, so ADR-019's matrix carries over unchanged and this patch introduces no behaviour drift.
-> 3. **Delete every per-module socket subscription** the hook now owns. Leaving one behind means double-applied patches, which is the failure mode ADR-019 rule (b) already warns about.
+> 2. **Extract the existing patch logic into the reducer.** The bodies of the current `socket.on` handlers already contain it — move, don't rewrite, so ADR-022's matrix carries over unchanged and this patch introduces no behaviour drift.
+> 3. **Delete every per-module socket subscription** the hook now owns. Leaving one behind means double-applied patches, which is the failure mode ADR-022 rule (b) already warns about.
 > 4. **Presence** takes the ordering fix (gate on `subscribed`) but not the buffering — it's a store, not a query, and its events are absolute state rather than deltas. Say so in a comment so the asymmetry reads as deliberate.
 > 5. Grep confirmation that no consumer subscribes outside the hook:
 >    ```bash
@@ -433,7 +433,7 @@ pnpm exec playwright test tests/e2e/notifications.spec.ts:116 --repeat-each=10  
 
 > **WHERE WE ARE**
 >
-> Sprint 10.1, STEP 6. Reconnect, and the doc that currently prescribes the broken fix. Read `docs/09-ERROR-HANDLING.md` §5.4, `docs/decisions/ADR-022`, `docs/13-NFRS.md` §1.3.
+> Sprint 10.1, STEP 6. Reconnect, and the doc that currently prescribes the broken fix. Read `docs/09-ERROR-HANDLING.md` §5.4, `docs/decisions/ADR-025`, `docs/13-NFRS.md` §1.3.
 >
 > **WHAT TO BUILD**
 >
@@ -449,12 +449,12 @@ pnpm exec playwright test tests/e2e/notifications.spec.ts:116 --repeat-each=10  
 >      1. Socket reconnects (backoff 1s → 2s → 4s → 8s, max 30s)
 >      2. Client re-emits room:join and AWAITS the server acknowledgement
 >      3. Only then are stale queries refetched — events arriving during the refetch are
->         buffered and replayed onto the result (ADR-022)
+>         buffered and replayed onto the result (ADR-025)
 >      4. The reconnecting banner clears on ack, not on connect
 >    Refetching before membership is confirmed reintroduces the mount-window race on
->    every reconnect. See ADR-022.
+>    every reconnect. See ADR-025.
 >    ```
->    Add a cross-ref to ADR-022 in §5.4's header.
+>    Add a cross-ref to ADR-025 in §5.4's header.
 > 4. **Same commit.** The code and the doc amendment ship together, or Sprint 11 reintroduces the race from a spec that still says to.
 >
 > **RULES:** one mechanism, two entry points. Don't reimplement backoff.
@@ -484,7 +484,7 @@ pnpm --filter @skaly/web test
 >    - The query does **not** fire before the room ack resolves.
 >    - An event delivered **during** the in-flight fetch is present in the cached result afterwards. *(The in-flight gap — the one ordering alone doesn't close.)*
 >    - A pre-join event, then the ack, then the fetch → the snapshot contains it (it was in the server's state).
->    - An invalidate-only event triggers `invalidateQueries`, not `setQueryData` (ADR-019 preserved).
+>    - An invalidate-only event triggers `invalidateQueries`, not `setQueryData` (ADR-022 preserved).
 >    - `applyEvent` is pure — same input, same output, no cache access.
 >    - On disconnect → reconnect, the query re-runs **after** the new ack, not before.
 >
@@ -553,7 +553,7 @@ Raised at close-out, not in the audit — so it needs an explicit disposition ra
 4. **Disposition, written down:**
    - Confined to a test helper with seeded credentials → record that and close it.
    - Reached a deployed environment with real credentials → rotate the affected passwords, invalidate the sessions (NFR §4.1: password reset invalidates all sessions for that user), and note the log-retention window.
-5. Add the finding and its disposition to `ADR-021` as a short "related" section, or its own note. *"We found it and it was contained"* is a materially different claim from *"we found it"*, and only one of them is closeable.
+5. Add the finding and its disposition to `ADR-024` as a short "related" section, or its own note. *"We found it and it was contained"* is a materially different claim from *"we found it"*, and only one of them is closeable.
 
 ---
 
@@ -581,7 +581,7 @@ A3 — ENVIRONMENT
   [ ] Two-user independent-counter assertion wired (STEP 2.4)
   [ ] Guard proven: a wrong API makes the suite refuse to start
 
-A1 — RATE LIMITING (ADR-021) — DEPLOY BLOCKER
+A1 — RATE LIMITING (ADR-024) — DEPLOY BLOCKER
   [ ] trustProxy is a HOP COUNT, configurable; NOT `true`
   [ ] keyGenerator prefers staffId, falls back to namespaced `ip:{ip}`
   [ ] ⚠️ Registered at a hook AFTER auth — justified in writing, asserted by behaviour
@@ -591,11 +591,11 @@ A1 — RATE LIMITING (ADR-021) — DEPLOY BLOCKER
   [ ] 150/min re-based as per-user in the ADR
   [ ] Staging confirmation of real client IP scheduled before launch
 
-A2 — REALTIME (ADR-022)
+A2 — REALTIME (ADR-025)
   [ ] Room membership ACKED; query gated on confirmed membership
   [ ] In-flight events buffered and replayed INSIDE queryFn (not in an effect)
   [ ] ⭐ One applyEvent reducer per surface, used for BOTH live patch and replay
-  [ ] ADR-019's matrix preserved — invalidate-only events still invalidate (TESTED)
+  [ ] ADR-022's matrix preserved — invalidate-only events still invalidate (TESTED)
   [ ] Reconnect reuses the mount path; no separate branch
   [ ] Banner clears on ACK, not on connect
   [ ] refetchOnWindowFocus enabled on realtime queries ONLY; global default still false
@@ -631,7 +631,7 @@ SUITE
 
 ```bash
 git add -A
-git commit -m "Sprint 10.1: per-user rate limiting behind a trusted proxy hop (ADR-021, A1 deploy blocker); subscribe-before-fetch with in-flight replay across all realtime surfaces (ADR-022, A2); assert the E2E environment (A3); date-derived fixtures (A6); amend ERROR-HANDLING §5.4"
+git commit -m "Sprint 10.1: per-user rate limiting behind a trusted proxy hop (ADR-024, A1 deploy blocker); subscribe-before-fetch with in-flight replay across all realtime surfaces (ADR-025, A2); assert the E2E environment (A3); date-derived fixtures (A6); amend ERROR-HANDLING §5.4"
 git push -u origin sprint-10-chat-notifications
 ```
 

@@ -27,7 +27,7 @@ Sprint 3 proved the module pattern. Sprint 4 reuses the whole chassis and adds t
 **Prerequisites from Sprint 3** (all green — stop and fix if any is not):
 
 - Sprint 3 close-out fully checked; PR merged to `main`; CI green.
-- `docs/decisions/ADR-003/004/005` committed; the **five new ADRs from the pre-Sprint-4 gate (006–010)** are on disk ready to commit (STEP 1 commits them).
+- `docs/decisions/ADR-001`, `ADR-002` and `ADR-003` committed (there is no ADR-004 or ADR-005 — the numbering skips them); the **five new ADRs from the pre-Sprint-4 gate (006–010)** are on disk ready to commit (STEP 1 commits them).
 - The portal chassis exists and works: `(portal)` layout + RBAC sidebar, `MonthContext` with `?period=` URL sync, `lib/api.ts` (envelope parsing + 401 refresh), `handleMutationError`, the TanStack Query provider, `useColumnHighlight` (Sprint 0), `softDelete`/`softDeletable`, `optimisticUpdate`, `AuditService`, `NotificationService`, `lib/r2.ts` presign helpers, the `/ws/notify` **backend** broadcast path.
 - `pnpm typecheck`, `pnpm lint`, and the full suite green on `main`.
 
