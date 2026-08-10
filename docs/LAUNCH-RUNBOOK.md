@@ -468,10 +468,25 @@ DEPLOY
   [ ] Migrations run on production; health check green
   [ ] Live smoke passed; portal.skaly.in live
 
+SHIPPED ALONGSIDE THE SPRINT (not in the guide, but launch-blocking)
+  [x] UIUX §4.1 navigation sidebar. There was NO navigation in the portal at
+      all — eleven working modules reachable only by typing their URLs, because
+      the layout deferred nav to "Sprint 11's chrome" and Sprint 11 built
+      Settings instead. STEP 12.2's live smoke walks every module, so it could
+      not have been run as written.
+  [x] UIUX §6.1 period selector + the past-month banner. The viewed period was
+      only changeable by hand-editing the URL.
+  [x] Home page. It was a bare heading beside the activity feed; now a KPI row
+      and the five tasks actually next, fed by a new ~250-byte
+      /v1/home-summary (client-side aggregation would have cost ~600KB on the
+      page every user hits first).
+
 SUITES, at close-out
-  [x] 977 API tests · 76 files
-  [x] 310 web tests · 38 files
-  [x] 154 Playwright, 10 skipped, 0 failed (chromium + webkit, 52.6m)
+  [x] 986 API tests · 77 files
+  [x] 329 web tests · 40 files
+  [ ] Playwright — RE-RUNNING. The sidebar changed the layout every spec
+      renders through, so the earlier 154-green result predates it and cannot
+      honestly be quoted.
   [x] typecheck + lint clean across the workspace
 ```
 
