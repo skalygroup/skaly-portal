@@ -53,9 +53,18 @@ async function openAs(
   return { page, context, close: () => context.close() };
 }
 
-/** The labels currently in the settings nav, minus the always-present General. */
+/**
+ * The labels currently in the settings nav, minus the always-present General.
+ *
+ * ⚠️ SCOPED BY NAME. This read `getByRole('navigation')` unscoped, which was
+ * unambiguous for exactly as long as the portal had one nav. The §4.1 sidebar
+ * made it two, and the unscoped query then collected the sidebar's module links
+ * as well — so an admin's "panels" came back containing Attendance and Tasks.
+ */
+const settingsNav = (page: Page) => page.getByRole('navigation', { name: 'Settings panels' });
+
 async function navPanels(page: Page): Promise<string[]> {
-  const labels = await page.getByRole('navigation').getByRole('link').allInnerTexts();
+  const labels = await settingsNav(page).getByRole('link').allInnerTexts();
   return labels.map((l) => l.trim()).filter((l) => l !== 'General');
 }
 
@@ -413,7 +422,7 @@ test.describe('settings', () => {
     const b = { page: bPage, context: bContext, close: () => bContext.close() };
 
     try {
-      await expect(b.page.getByRole('navigation')).toBeVisible();
+      await expect(settingsNav(b.page)).toBeVisible();
       expect(await navPanels(b.page)).toEqual([]);
 
       /**

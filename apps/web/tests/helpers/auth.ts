@@ -57,6 +57,26 @@ export async function login(page: Page, email: string, password: string): Promis
   await page.getByRole('button', { name: /Sign in/i }).click();
   await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 15_000 });
   await clearMfaChallenge(page);
+
+  /**
+   * ⚠️ SETTLE THE `/` → `/home` BOUNCE BEFORE HANDING BACK.
+   *
+   * `/` used to render a Sprint 1 placeholder; it became a redirect when the
+   * §4.1 sidebar landed and the placeholder stopped being a place anyone should
+   * stop. Post-login the app lands on `/`, which satisfies the "not /login"
+   * barrier above INSTANTLY and then navigates again a beat later. A spec that
+   * calls `page.goto()` on the next line therefore has its navigation cancelled
+   * by a redirect it never asked for.
+   *
+   * webkit surfaced it across most of the suite as
+   *   "Navigation to /attendance is interrupted by another navigation to /home"
+   * — which reads as a broken route, not as a race in the sign-in helper.
+   *
+   * Waiting here, once, is the same reasoning as the MFA barrier above: the
+   * alternative is teaching sixteen spec files about a redirect none of them
+   * are testing.
+   */
+  await page.waitForURL((u) => u.pathname !== '/', { timeout: 15_000 });
 }
 
 /**

@@ -124,9 +124,13 @@ test.describe('login (live auth flow)', () => {
     );
   });
 
-  test('valid credentials (team member) → redirects to /', async ({ page }) => {
+  test('valid credentials (team member) → lands on /home', async ({ page }) => {
     await login(page, MEMBER_EMAIL, MEMBER_PASSWORD);
-    await expect(page).toHaveURL(/\/$/);
+    // `/` was the landing route until the §4.1 sidebar shipped. It rendered a
+    // Sprint 1 placeholder with no links to anything, so it stopped being
+    // somewhere to leave a person and became a redirect to `/home` — the route
+    // that actually has content and is in the permission registry.
+    await expect(page).toHaveURL(/\/home$/);
   });
 
   test('invalid password → inline credential error', async ({ page }) => {

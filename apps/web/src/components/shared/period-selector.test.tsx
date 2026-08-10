@@ -77,7 +77,7 @@ describe('the list is a 12-month window ending at the current month', () => {
     const user = userEvent.setup();
     renderSelector();
 
-    await user.click(await screen.findByRole('button', { name: /Change period/ }));
+    await user.click(await screen.findByRole('button', { name: /Change month/ }));
     const options = await screen.findAllByRole('option');
     const labels = options.map((o) => o.textContent);
 
@@ -91,7 +91,7 @@ describe('the list is a 12-month window ending at the current month', () => {
     const user = userEvent.setup();
     renderSelector();
 
-    await user.click(await screen.findByRole('button', { name: /Change period/ }));
+    await user.click(await screen.findByRole('button', { name: /Change month/ }));
     const labels = (await screen.findAllByRole('option')).map((o) => o.textContent ?? '');
 
     expect(labels.some((l) => l.includes(shift(CURRENT, -18).slice(0, 4)))).toBe(false);
@@ -101,7 +101,7 @@ describe('the list is a 12-month window ending at the current month', () => {
     const user = userEvent.setup();
     renderSelector();
 
-    await user.click(await screen.findByRole('button', { name: /Change period/ }));
+    await user.click(await screen.findByRole('button', { name: /Change month/ }));
     const first = (await screen.findAllByRole('option'))[0];
     expect(first?.getAttribute('aria-selected')).toBe('true');
   });
@@ -115,7 +115,7 @@ describe('labels stay readable when the data is not', () => {
     const user = userEvent.setup();
     renderSelector();
 
-    await user.click(await screen.findByRole('button', { name: /Change period/ }));
+    await user.click(await screen.findByRole('button', { name: /Change month/ }));
     const labels = (await screen.findAllByRole('option')).map((o) => o.textContent ?? '');
     expect(labels[0]).toMatch(/[A-Z][a-z]+ \d{4}/);
     expect(labels[0]).not.toBe(CURRENT);
@@ -126,7 +126,7 @@ describe('labels stay readable when the data is not', () => {
     const user = userEvent.setup();
     renderSelector();
 
-    await user.click(await screen.findByRole('button', { name: /Change period/ }));
+    await user.click(await screen.findByRole('button', { name: /Change month/ }));
     expect((await screen.findAllByRole('option'))[0]?.textContent).toContain('August 2026');
   });
 
@@ -135,7 +135,7 @@ describe('labels stay readable when the data is not', () => {
     const user = userEvent.setup();
     renderSelector();
 
-    await user.click(await screen.findByRole('button', { name: /Change period/ }));
+    await user.click(await screen.findByRole('button', { name: /Change month/ }));
     await waitFor(() => expect(screen.getByLabelText('Locked')).toBeDefined());
   });
 });
@@ -145,7 +145,7 @@ describe('choosing a period', () => {
     const user = userEvent.setup();
     renderSelector();
 
-    await user.click(await screen.findByRole('button', { name: /Change period/ }));
+    await user.click(await screen.findByRole('button', { name: /Change month/ }));
     const options = await screen.findAllByRole('option');
     await user.click(options[1]!);
 

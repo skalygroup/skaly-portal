@@ -19,7 +19,15 @@ export function SettingsNav({ items }: { items: NavItem[] }) {
   const pathname = usePathname();
 
   return (
-    <nav className="flex flex-col gap-1">
+    /**
+     * The label is not decoration. Since the §4.1 sidebar landed there are TWO
+     * navigation landmarks on a settings page, and WCAG requires multiple
+     * landmarks of the same role to be distinguishable — a screen-reader user
+     * otherwise gets "navigation" twice with no way to tell which is which.
+     * It also un-breaks every `getByRole('navigation')` in the E2E suite, which
+     * had been unambiguous for exactly as long as there was only one nav.
+     */
+    <nav aria-label="Settings panels" className="flex flex-col gap-1">
       {items.map((item) => {
         const active = pathname === item.href;
         return (

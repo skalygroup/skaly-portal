@@ -104,7 +104,12 @@ export function PeriodSelector() {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-label={`Period: ${label}. Change period`}
+        // "month", not "period". The reports form has a field labelled "Period",
+        // and `getByLabel` matches on substring — so an accessible name of
+        // "Period: August 2026…" made this sidebar button collide with it and
+        // broke that page's tests with a strict-mode violation. "Month" is also
+        // the word the rest of this UI uses out loud ("Viewing", "August 2026").
+        aria-label={`Change month — currently ${label}`}
         className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 transition-colors"
         style={{ background: 'var(--bg-elevated, #1a1d23)' }}
       >
