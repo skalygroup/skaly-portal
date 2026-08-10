@@ -8,6 +8,17 @@
 
 > **Risk note:** Sprint 11 is the widest sprint by surface area — seven settings panels plus reports — but most of it is CRUD over services that already exist. The two genuinely hard parts are **off-loop PDF rendering** (STEP 6: the first CPU-bound work on the API server) and **streaming export** (STEP 5: the first unbounded response). Everything else is breadth, not depth. Budget accordingly: do not let seven easy panels eat the two hard days.
 
+
+> **⚠️ ADR NUMBERING CORRECTED.** This guide's cross-refs ran **three low**. The five
+> ADRs it creates were numbered 023–027 and are **026** (re-onboarding), **027**
+> (report-generation), **028** (audit-export-streaming), **029** (permission-change-push)
+> and **030** (message-retention-fk) in `docs/decisions/`. Its inherited references
+> shifted too: 017→**020**, 018→**021**, 019→**022**, 021→**024** (rate-limit keying),
+> 022→**025** (subscription ordering).
+>
+> `ADR-031` (recovery codes) was ALREADY correct and is deliberately unchanged, as are
+> 007, 011, 012, 014 and 015 — checked one by one rather than shifted wholesale.
+
 ---
 
 ## USING THE `/ponytail` PLUGIN IN THIS SPRINT
@@ -22,7 +33,7 @@ Placement as established in Sprint 9: **between the build prompt and the test pr
 
 The operational portal is complete. Sprint 11 gives admins the controls, and everyone the reports. By the end of this week:
 
-- **The five pre-Sprint-11 decisions are recorded** as **ADR-023** (re-onboarding), **ADR-024** (async off-loop reports), **ADR-025** (streaming export), **ADR-026** (permission push), **ADR-027** (message-retention FK — recorded now, built Sprint 12).
+- **The five pre-Sprint-11 decisions are recorded** as **ADR-026** (re-onboarding), **ADR-027** (async off-loop reports), **ADR-028** (streaming export), **ADR-029** (permission push), **ADR-030** (message-retention FK — recorded now, built Sprint 12).
 - **Audit finding A4 is fixed** — an offboarded employee can be re-hired. Today the signup-approval path finds the soft-deleted row, rejects with *"Account already exists at approval time"*, and that sentence is untrue: the account does not exist, it was deleted. Sprint 11 makes approval **detect and offer reinstatement**, and adds the partial unique index that migration 030 already established as the house pattern for soft-delete + uniqueness.
 - **Clients can be reactivated** — the one-way destructive action gets its undo, reusing `create`'s existing three-way period backfill.
 - **Reports generate without blocking the API** — 202 + `reportId`, rendered off the event loop, delivered via `report_ready` + a 24h presigned link. `report_ready` is the first of Sprint 10's six deferred notification types to get a real producer.
@@ -35,10 +46,10 @@ The operational portal is complete. Sprint 11 gives admins the controls, and eve
 
 **Prerequisites — the gate is wider than usual this sprint:**
 
-- **⚠️ The A1 hotfix is deployed** — `trustProxy: true` **and** a `staffId`-keyed `keyGenerator` with IP fallback (ADR-021). Without it the entire organisation shares one 150 req/min bucket, and Sprint 11 adds the most request-heavy screens in the product (seven panels, each polling lists). Sprint 11 will *look* broken without it, in exactly the misleading way the audit documented.
-- **⚠️ Sprint 10.1 has landed and Sprint 10 is merged.** 10.1 fixes A2 (a missed realtime event is permanent on every surface, because the global query config has no self-healing path — ADR-022 subscribe-before-fetch with in-flight replay) and A3 (E2E results untrustworthy because the raised rate limit silently reverted). Sprint 11's permission push (ADR-026) has the identical "what if the event is missed" property and **rides A2's mechanism** — building it first would mean building the same fix twice.
+- **⚠️ The A1 hotfix is deployed** — `trustProxy: true` **and** a `staffId`-keyed `keyGenerator` with IP fallback (ADR-024). Without it the entire organisation shares one 150 req/min bucket, and Sprint 11 adds the most request-heavy screens in the product (seven panels, each polling lists). Sprint 11 will *look* broken without it, in exactly the misleading way the audit documented.
+- **⚠️ Sprint 10.1 has landed and Sprint 10 is merged.** 10.1 fixes A2 (a missed realtime event is permanent on every surface, because the global query config has no self-healing path — ADR-025 subscribe-before-fetch with in-flight replay) and A3 (E2E results untrustworthy because the raised rate limit silently reverted). Sprint 11's permission push (ADR-029) has the identical "what if the event is missed" property and **rides A2's mechanism** — building it first would mean building the same fix twice.
 - Sprint 10's chat, notifications, presence, and grid subscriptions green; all `// TODO(Sprint 10)` markers gone.
-- `PermissionService` the single resolver (8.1); `ClientService.create` + `deactivate` (Sprint 9); `AuditService` writing on every mutation; `NotificationService` with the 18-type registry (ADR-017).
+- `PermissionService` the single resolver (8.1); `ClientService.create` + `deactivate` (Sprint 9); `AuditService` writing on every mutation; `NotificationService` with the 18-type registry (ADR-020).
 - R2 client configured with the named expiry constants (`UPLOAD_EXPIRY_SECONDS` 900, `DOWNLOAD_EXPIRY_SECONDS` 3600, `REPORT_EXPIRY_SECONDS` 86400).
 - `pnpm typecheck`, `pnpm lint`, and the full suite green on `main`.
 
@@ -48,14 +59,14 @@ The operational portal is complete. Sprint 11 gives admins the controls, and eve
 
 | Decision | Ruling | Executed in |
 |---|---|---|
-| **Client + staff re-onboarding** | Soft-deleted identity entities are re-onboardable. Clients → reactivate (no migration). Staff → reinstate + partial unique index (fixes **A4**). One principle, two levels. → **ADR-023** | STEP 1 (record) + STEP 2 + STEP 3 |
+| **Client + staff re-onboarding** | Soft-deleted identity entities are re-onboardable. Clients → reactivate (no migration). Staff → reinstate + partial unique index (fixes **A4**). One principle, two levels. → **ADR-026** | STEP 1 (record) + STEP 2 + STEP 3 |
 | **↳ Approval detects, not rejects** | The signup-approval path must surface *"previously employed — reinstate?"* rather than rejecting with a false statement. | STEP 3 |
 | **↳ `reactivate_client` bot tool** | A bot that can destroy but not undo is a footgun. Thin wrapper through the ADR-014 confirmation machine. | STEP 3 |
-| **↳ No new notification enum value for client reactivation** | Admins do it and see the result immediately. The enum stays at 18 (ADR-017). | STEP 3 |
-| **Reports: async + off the event loop** | 202 + `reportId`; render in a worker; `report_ready` + 24h presigned link; persisted record; documented concurrency cap. **202 alone is the trap** — it moves *when* the block happens, not *whether*. → **ADR-024** | STEP 1 (record) + STEP 2 + STEP 6 |
-| **Audit export streams CSV** | Cursor-based, no buffered response, safe because `audit_log` is append-only at the DB role level. → **ADR-025** | STEP 1 (record) + STEP 5 |
-| **Permission change pushes** | `permission_changed` → refetch `/v1/staff/me` → re-derive nav. **UX layer only** — backend per-request invalidation stays the boundary. Rides ADR-022's self-healing path. → **ADR-026** | STEP 1 (record) + STEP 4 |
-| **Message retention FK** | Keep `NO ACTION`; the Sprint 12 job is session-scoped and single-statement, bounded by `bot_sessions.last_activity_at`. **Recorded now, built Sprint 12.** → **ADR-027** | STEP 1 (record only) |
+| **↳ No new notification enum value for client reactivation** | Admins do it and see the result immediately. The enum stays at 18 (ADR-020). | STEP 3 |
+| **Reports: async + off the event loop** | 202 + `reportId`; render in a worker; `report_ready` + 24h presigned link; persisted record; documented concurrency cap. **202 alone is the trap** — it moves *when* the block happens, not *whether*. → **ADR-027** | STEP 1 (record) + STEP 2 + STEP 6 |
+| **Audit export streams CSV** | Cursor-based, no buffered response, safe because `audit_log` is append-only at the DB role level. → **ADR-028** | STEP 1 (record) + STEP 5 |
+| **Permission change pushes** | `permission_changed` → refetch `/v1/staff/me` → re-derive nav. **UX layer only** — backend per-request invalidation stays the boundary. Rides ADR-025's self-healing path. → **ADR-029** | STEP 1 (record) + STEP 4 |
+| **Message retention FK** | Keep `NO ACTION`; the Sprint 12 job is session-scoped and single-statement, bounded by `bot_sessions.last_activity_at`. **Recorded now, built Sprint 12.** → **ADR-030** | STEP 1 (record only) |
 | **Recovery-code redeem path** | No longer deferred. Built this sprint, beside admin MFA reset. | STEP 8 |
 
 ---
@@ -72,7 +83,7 @@ The operational portal is complete. Sprint 11 gives admins the controls, and eve
 | `docs/13-NFRS.md` | **§1.2 (reports p95 < 10s / p99 < 20s)**, §2.2 (~50k audit rows), §3.1 (**"additive changes only"** — read before STEP 2), §4.2 (audit append-only, CV access), §5.1–5.3 (retention, audit requirements) | The numbers and the constraints |
 | `docs/09-ERROR-HANDLING.md` | §2 — `UNLOCK_REASON_REQUIRED`, `ALREADY_PROCESSED`, `INVALID_ROLE`, `MFA_LOCKED`, `PERIOD_LOCKED` | The codes these panels throw |
 | `docs/11-THIRD-PARTY-INTEGRATIONS.md` | §2.2 (`inviteUserByEmail`, `admin.createUser`, `signOut`), §2.3 (MFA enroll/verify), §4.3 (**`REPORT_EXPIRY_SECONDS` = 24h**) | Supabase + R2 call shapes |
-| `docs/10-INFRA-DEPLOYMENT.md` | §4 (**`healthcheckTimeout = 30`** — why PDFs must leave the event loop), §6 (env vars) | The constraint behind ADR-024 |
+| `docs/10-INFRA-DEPLOYMENT.md` | §4 (**`healthcheckTimeout = 30`** — why PDFs must leave the event loop), §6 (env vars) | The constraint behind ADR-027 |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §14 | Sprint 11 checklist |
 | `docs/adr/` | **ADR-011, 014, 017, 021, 022**, + **023–027** (created STEP 1) | The rulings this sprint must not violate |
 
@@ -84,7 +95,7 @@ The operational portal is complete. Sprint 11 gives admins the controls, and eve
 2. **A4's real bug is a false message, not a crash.** Approval pre-checks by email with no `deleted_at` filter, finds the soft-deleted row, and marks the request `rejected` with *"Account already exists at approval time"*. It does not 500 (verified in the audit). The fix is product behaviour — detect and offer reinstatement — plus the partial index. Fixing only the index leaves the misleading rejection in place.
 3. **The partial index is non-additive but non-breaking.** NFR §3.1 says "additive changes only in MVP". Dropping `staff_email_unique` and recreating it as a partial index **relaxes** a constraint: no existing row can violate the new index that did not violate the old. It is safe without a maintenance window. Say so in the migration comment so nobody blocks on §3.1 or, worse, treats a weaker constraint as a breaking change.
 4. **Reinstatement must check for a live row first.** Once the index is partial, a soft-deleted row and an active row can share an email. Reinstating a soft-deleted row whose email is now held by an *active* row would violate the partial index — check and return a clear conflict rather than letting Postgres throw.
-5. **202 is not the fix for PDF blocking.** Returning early while `@react-pdf/renderer` still renders synchronously on the same event loop moves *when* the block happens, not *whether*. The render must leave the main thread (`worker_threads` or a separate service). ADR-024 is about the execution model; the 202 is just its contract.
+5. **202 is not the fix for PDF blocking.** Returning early while `@react-pdf/renderer` still renders synchronously on the same event loop moves *when* the block happens, not *whether*. The render must leave the main thread (`worker_threads` or a separate service). ADR-027 is about the execution model; the 202 is just its contract.
 6. **`rejection_note` is never transmitted** (NFR §4.2). It is stored, admin-visible in the settings panel, and must never appear in any API response reaching the rejected user. This is the one field in the whole sprint with an explicit non-transmission rule.
 7. **`audit_log` is append-only at the DB role level** (`REVOKE UPDATE, DELETE`, NFR §4.2). No settings panel may offer edit or delete, and the export is safe to stream precisely because rows are immutable.
 8. **`GET /v1/audit-log` is admin-only** and stays that way. The role-filtered `/v1/activity-feed` (Sprint 9) is the everyone-else surface. Do not merge them; the separation is a canonical requirement (PRD FR-SET-07 / APPFLOW §3).
@@ -101,11 +112,11 @@ The operational portal is complete. Sprint 11 gives admins the controls, and eve
 | ID | What | Where |
 |---|---|---|
 | **A4 (Sprint 10 audit)** | Offboarded employee can never be re-hired; approval rejects with a false reason. | STEP 2 + STEP 3 |
-| **ADR-023 (new)** | Re-onboarding principle; partial index on soft-deletable identity columns. | STEP 1 + 2 + 3 |
-| **ADR-024 (new)** | Reports async + off the event loop + persisted record + concurrency cap. | STEP 1 + 2 + 6 |
-| **ADR-025 (new)** | Streaming CSV export via cursor. | STEP 1 + 5 |
-| **ADR-026 (new)** | `permission_changed` push as a UX layer over per-request invalidation. | STEP 1 + 4 |
-| **ADR-027 (new)** | Message retention FK stays `NO ACTION`; job session-scoped + single-statement. **Recorded only.** | STEP 1 |
+| **ADR-026 (new)** | Re-onboarding principle; partial index on soft-deletable identity columns. | STEP 1 + 2 + 3 |
+| **ADR-027 (new)** | Reports async + off the event loop + persisted record + concurrency cap. | STEP 1 + 2 + 6 |
+| **ADR-028 (new)** | Streaming CSV export via cursor. | STEP 1 + 5 |
+| **ADR-029 (new)** | `permission_changed` push as a UX layer over per-request invalidation. | STEP 1 + 4 |
+| **ADR-030 (new)** | Message retention FK stays `NO ACTION`; job session-scoped + single-statement. **Recorded only.** | STEP 1 |
 | **Recovery codes** | Redeem path, carried since Sprint 8 STEP 8.4. | STEP 8 |
 | **NFR §1.2** | Reports p95 < 10s / p99 < 20s, **measured**, and the API stays responsive throughout. | STEP 6 + 13 |
 | **NFR §4.2** | `rejection_note` never transmitted; audit log immutable in the UI. | STEP 4 + 11 |
@@ -118,12 +129,12 @@ If you skip the test for any of these, Sprint 11 is not done.
 
 | # | Type | What |
 |---|---|---|
-| 1 | Manual | Pre-flight — **verify the A1 hotfix + 10.1 + Sprint 10 merged**, discover the `reports` table, record ADR-023..027, branch |
+| 1 | Manual | Pre-flight — **verify the A1 hotfix + 10.1 + Sprint 10 merged**, discover the `reports` table, record ADR-026..027, branch |
 | 2 | Prompt | Migrations — partial unique index on `staff.email` (A4), `reports` table if absent |
-| 3 | Prompt | ADR-023 — client reactivate, staff reinstate, approval detection, `reactivate_client` tool |
-| 4 | Prompt | Settings backend — staff admin ops, permissions toggle + **ADR-026 push**, months lock/unlock |
-| 5 | Prompt | ADR-025 — audit log query + streaming CSV export |
-| 6 | Prompt | ADR-024 — report generation off the event loop + `report_ready` |
+| 3 | Prompt | ADR-026 — client reactivate, staff reinstate, approval detection, `reactivate_client` tool |
+| 4 | Prompt | Settings backend — staff admin ops, permissions toggle + **ADR-029 push**, months lock/unlock |
+| 5 | Prompt | ADR-028 — audit log query + streaming CSV export |
+| 6 | Prompt | ADR-027 — report generation off the event loop + `report_ready` |
 | 7 | Prompt | Backend tests |
 | 8 | Prompt | ⭐ Recovery-code redeem path |
 | 9 | Prompt | Frontend — settings shell + Staff + Clients |
@@ -145,7 +156,7 @@ git checkout main && git pull
 git log --oneline -20 | grep -i "sprint 10\|10.1\|trustproxy\|rate.limit"
 ```
 
-**A1 — the deploy blocker (ADR-021):**
+**A1 — the deploy blocker (ADR-024):**
 ```bash
 grep -rn "trustProxy" apps/api/src            # expect: trustProxy: true on the Fastify instance
 grep -rn "keyGenerator" apps/api/src          # expect: staffId-keyed, IP fallback
@@ -153,13 +164,13 @@ curl -sD - -o /dev/null http://localhost:3001/v1/health | grep -i x-ratelimit
 ```
 Both must be present. `trustProxy` alone still lets one office NAT share a bucket; the keyGenerator alone can't see the real client IP for unauthenticated routes. Sprint 11 adds the most request-heavy screens in the product — without this, it will look broken in the misleading way the audit documented.
 
-**A2/A3 — Sprint 10.1 (ADR-022):**
+**A2/A3 — Sprint 10.1 (ADR-025):**
 ```bash
 grep -rn "refetchOnReconnect\|refetchOnMount\|subscribe.*before.*fetch\|replayBuffer" apps/web/src
-ls docs/adr/ADR-022*.md
+ls docs/adr/ADR-025*.md
 grep -rn "x-ratelimit" tests/e2e/global-setup* playwright.config.ts   # A3's environment assertion
 ```
-Sprint 11's permission push (ADR-026) rides A2's self-healing mechanism. If 10.1 hasn't landed, you would build the same fix twice.
+Sprint 11's permission push (ADR-029) rides A2's self-healing mechanism. If 10.1 hasn't landed, you would build the same fix twice.
 
 ```bash
 pnpm install && docker compose up -d
@@ -176,7 +187,7 @@ pnpm exec playwright test                     # green, and trustworthy now that 
 # A4 — the constraint
 psql "$DATABASE_URL" -c "\d staff" | grep -i -A2 "unique\|email"
 
-# does a reports table exist? (ADR-024 needs a persisted record)
+# does a reports table exist? (ADR-027 needs a persisted record)
 psql "$DATABASE_URL" -c "\dt" | grep -i report || echo "NO reports table — STEP 2 adds one"
 
 # which settings endpoints already exist from earlier sprints?
@@ -191,19 +202,19 @@ grep -rn "reactivate" apps/api/src/services/ClientService.ts || echo "NO client 
 
 Write down what you find. Several Sprint-11 endpoints were partially built in Sprints 1–2 (signup approval, staff deactivate); the prompts below say "build or complete", and which one it is depends on this census.
 
-### 1.3 — Record ADR-023 … ADR-027 (Prompt)
+### 1.3 — Record ADR-026 … ADR-030 (Prompt)
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 1.3. Recording the five pre-Sprint-11 rulings. Read `docs/adr/ADR-022` for the house format, plus `docs/08-AUTH-MATRIX.md` §4, `docs/13-NFRS.md` §1.2 + §3.1, `docs/10-INFRA-DEPLOYMENT.md` §4, and `docs/05-BACKEND-SCHEMA.md` (`staff`, `messages`, migration 030).
+> Sprint 11, STEP 1.3. Recording the five pre-Sprint-11 rulings. Read `docs/adr/ADR-025` for the house format, plus `docs/08-AUTH-MATRIX.md` §4, `docs/13-NFRS.md` §1.2 + §3.1, `docs/10-INFRA-DEPLOYMENT.md` §4, and `docs/05-BACKEND-SCHEMA.md` (`staff`, `messages`, migration 030).
 >
 > My STEP 1.2 census found: **[paste it]**.
 >
 > **WHAT TO BUILD** — five files in `docs/adr/`:
 >
-> **`ADR-023-re-onboarding.md`**
+> **`ADR-026-re-onboarding.md`**
 > ```
-> # ADR-023 — Soft-deleted identity entities are re-onboardable
+> # ADR-026 — Soft-deleted identity entities are re-onboardable
 > Status: Accepted • Pre-Sprint 11 (fixes Sprint 10 audit A4)
 > Cross-refs: 05-BACKEND-SCHEMA (staff, clients, migration 030), AUTH-MATRIX §4, ADR-014
 >
@@ -234,18 +245,18 @@ Write down what you find. Several Sprint-11 endpoints were partially built in Sp
 >   6. Bot parity: add reactivate_client through the ADR-014 confirmation machine. A bot
 >      that can destroy but not undo is its own footgun.
 >   7. NO new notification enum value for client reactivation — admins act and see the
->      result immediately. The enum stays at 18 (ADR-017). account_reactivated already
+>      result immediately. The enum stays at 18 (ADR-020). account_reactivated already
 >      covers the staff case.
 >
 > Rule: soft delete means recoverable. If a delete is soft, some path must undo it.
 > ```
 >
-> **`ADR-024-report-generation.md`**
+> **`ADR-027-report-generation.md`**
 > ```
-> # ADR-024 — Report generation is asynchronous AND off the event loop
+> # ADR-027 — Report generation is asynchronous AND off the event loop
 > Status: Accepted • Pre-Sprint 11
 > Cross-refs: NFR §1.2, INFRA §4 (healthcheckTimeout = 30), THIRD-PARTY §4.3
->             (REPORT_EXPIRY_SECONDS = 86400), ADR-017 (report_ready)
+>             (REPORT_EXPIRY_SECONDS = 86400), ADR-020 (report_ready)
 >
 > Context: @react-pdf/renderer renders SYNCHRONOUSLY on the event loop. A 10-15s render on
 >   the single Railway instance blocks every other request, including the health check.
@@ -269,11 +280,11 @@ Write down what you find. Several Sprint-11 endpoints were partially built in Sp
 >   such work in the product and it sets the precedent for every later one.
 > ```
 >
-> **`ADR-025-audit-export-streaming.md`**
+> **`ADR-028-audit-export-streaming.md`**
 > ```
-> # ADR-025 — Audit log export streams CSV via cursor
+> # ADR-028 — Audit log export streams CSV via cursor
 > Status: Accepted • Pre-Sprint 11
-> Cross-refs: NFR §2.2 (~50k rows at 12mo), §4.2 (append-only), §5.3, ADR-024
+> Cross-refs: NFR §2.2 (~50k rows at 12mo), §4.2 (append-only), §5.3, ADR-027
 >
 > Decision: export streams — Kysely .stream() (requires pg-query-stream) -> CSV transform
 >   -> chunked response. No buffered array, no Content-Length, no memory ceiling.
@@ -288,11 +299,11 @@ Write down what you find. Several Sprint-11 endpoints were partially built in Sp
 >   paginating an export, not more.
 > ```
 >
-> **`ADR-026-permission-change-push.md`**
+> **`ADR-029-permission-change-push.md`**
 > ```
-> # ADR-026 — Permission changes push to the affected session (UX layer only)
+> # ADR-029 — Permission changes push to the affected session (UX layer only)
 > Status: Accepted • Pre-Sprint 11 (completes 8.1 STEP 3.4's deferral)
-> Cross-refs: AUTH-MATRIX §6.3, ADR-022, 8.1 STEP 3.4
+> Cross-refs: AUTH-MATRIX §6.3, ADR-025, 8.1 STEP 3.4
 >
 > Context: perms:{staffId} has a 5-min TTL AND invalidation-on-write. Enforcement is
 >   already correct and immediate — the key is deleted on write, so the user's NEXT request
@@ -310,16 +321,16 @@ Write down what you find. Several Sprint-11 endpoints were partially built in Sp
 >   per-request.
 >
 >   Because it has the identical "what if the event is missed" property, this push rides
->   ADR-022's self-healing mechanism rather than adding its own.
+>   ADR-025's self-healing mechanism rather than adding its own.
 >
 > Rule: never move an enforcement decision onto a delivery channel that can drop messages.
 > ```
 >
-> **`ADR-027-message-retention-fk.md`**
+> **`ADR-030-message-retention-fk.md`**
 > ```
-> # ADR-027 — messages.parent_id keeps ON DELETE NO ACTION
+> # ADR-030 — messages.parent_id keeps ON DELETE NO ACTION
 > Status: Accepted • Pre-Sprint 11 (RECORDED NOW, BUILT SPRINT 12)
-> Cross-refs: NFR §5.2 (12-month retention), ADR-018, 05-BACKEND-SCHEMA (messages)
+> Cross-refs: NFR §5.2 (12-month retention), ADR-021, 05-BACKEND-SCHEMA (messages)
 >
 > Context: messages_parent_id_fkey has no ON DELETE action, so it defaults to NO ACTION.
 >   Nothing hard-deletes messages today; NFR §5.2's retention job will.
@@ -334,7 +345,7 @@ Write down what you find. Several Sprint-11 endpoints were partially built in Sp
 >
 > Decision:
 >   1. Keep NO ACTION. Comment the migration with the reason so nobody "upgrades" it.
->   2. ON DELETE SET NULL is ruled out — it re-orphans bot replies, the exact bug ADR-018
+>   2. ON DELETE SET NULL is ruled out — it re-orphans bot replies, the exact bug ADR-021
 >      exists to fix.
 >   3. ON DELETE CASCADE is ruled out for chat — parent_id doubles as the thread link, so
 >      one hard-deleted parent could silently remove replies still inside their own
@@ -342,7 +353,7 @@ Write down what you find. Several Sprint-11 endpoints were partially built in Sp
 >   4. The Sprint 12 job is SESSION-SCOPED and SINGLE-STATEMENT. Session scoping is not
 >      merely so a turn-pair is not split — it is WHAT GUARANTEES the single-statement
 >      property, which is the only reason NO ACTION lets the delete through. Delete a whole
->      conversation as one IN-list, bounded by bot_sessions.last_activity_at (ADR-018 §4).
+>      conversation as one IN-list, bounded by bot_sessions.last_activity_at (ADR-021 §4).
 >      This is where bot_sessions earns its keep beyond bookkeeping.
 >   5. Chat threads have no session envelope: a reply deletes on age alone (deleting a child
 >      never violates the FK), but a parent deletes only when its NEWEST reply is also past
@@ -360,7 +371,7 @@ Write down what you find. Several Sprint-11 endpoints were partially built in Sp
 
 ```bash
 ls docs/adr/ADR-02{3,4,5,6,7}*.md
-git add docs/adr/ && git commit -m "docs(adr): ADR-023 re-onboarding, 024 async reports, 025 streaming export, 026 permission push, 027 message retention FK"
+git add docs/adr/ && git commit -m "docs(adr): ADR-026 re-onboarding, 024 async reports, 025 streaming export, 026 permission push, 027 message retention FK"
 ```
 
 ### 1.4 — Branch
@@ -379,7 +390,7 @@ git checkout -b sprint-11-settings-reports
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 2. Two migrations. Read `docs/adr/ADR-023` and `ADR-024`, `docs/05-BACKEND-SCHEMA.md` (`staff`, **migration 030** — the partial-index precedent for `holidays`), and `docs/13-NFRS.md` §3.1.
+> Sprint 11, STEP 2. Two migrations. Read `docs/adr/ADR-026` and `ADR-027`, `docs/05-BACKEND-SCHEMA.md` (`staff`, **migration 030** — the partial-index precedent for `holidays`), and `docs/13-NFRS.md` §3.1.
 >
 > My STEP 1.2 census found: **[paste — especially whether a `reports` table exists]**.
 >
@@ -414,7 +425,7 @@ git checkout -b sprint-11-settings-reports
 > **RULES**
 >
 > - Every forward migration gets a reverse (Infra §5).
-> - Do not touch `messages_parent_id_fkey` — ADR-027 explicitly keeps `NO ACTION`, and the job that depends on it is Sprint 12.
+> - Do not touch `messages_parent_id_fkey` — ADR-030 explicitly keeps `NO ACTION`, and the job that depends on it is Sprint 12.
 > - No `CONCURRENTLY` needed at this table size; keep the migration transactional.
 >
 > Show me both migrations, then run them.
@@ -431,13 +442,13 @@ pnpm typecheck
 
 ---
 
-## SPRINT 11 — STEP 3: Re-onboarding (ADR-023) — fixes A4
+## SPRINT 11 — STEP 3: Re-onboarding (ADR-026) — fixes A4
 
 **Prompt:**
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 3. Making soft-deleted identities recoverable. Read `docs/adr/ADR-023` (follow it exactly), `docs/08-AUTH-MATRIX.md` §4 (**`PUT /v1/staff/:id/reactivate` is already specified**), `apps/api/src/services/ClientService.ts` (Sprint 9's `create` — its three-way backfill is what reactivate reuses), and the signup-approval path.
+> Sprint 11, STEP 3. Making soft-deleted identities recoverable. Read `docs/adr/ADR-026` (follow it exactly), `docs/08-AUTH-MATRIX.md` §4 (**`PUT /v1/staff/:id/reactivate` is already specified**), `apps/api/src/services/ClientService.ts` (Sprint 9's `create` — its three-way backfill is what reactivate reuses), and the signup-approval path.
 >
 > **WHAT TO BUILD**
 >
@@ -451,7 +462,7 @@ pnpm typecheck
 >
 > 2. **`StaffService.reactivate(id, currentUser, db)`** — admin only, implementing the endpoint Auth-Matrix §4 already names:
 >    a. Load including soft-deleted.
->    b. **Check for a live row with the same email first** (ADR-023 §5) — now that the index is partial, a dead and a live row can share an email. Collision → `409 ALREADY_PROCESSED` with a clear message, not a Postgres error.
+>    b. **Check for a live row with the same email first** (ADR-026 §5) — now that the index is partial, a dead and a live row can share an email. Collision → `409 ALREADY_PROCESSED` with a clear message, not a Postgres error.
 >    c. `deleted_at = NULL`, `active = true`.
 >    d. **Do not** silently restore MFA state — if `mfa_enrolled` was true, leave it; the returning employee re-enrols or an admin resets. Add a comment saying which you chose and why.
 >    e. Fire `account_reactivated` (the enum value that already exists for exactly this).
@@ -468,7 +479,7 @@ pnpm typecheck
 > **RULES**
 >
 > - Reinstate the original row. Never create a duplicate for a returning employee — the history and audit trail are the reason the row was soft-deleted rather than hard-deleted.
-> - No new notification enum value for client reactivation (ADR-023 §7).
+> - No new notification enum value for client reactivation (ADR-026 §7).
 > - The backfill is shared code, not copied code.
 >
 > **Tests:**
@@ -490,13 +501,13 @@ pnpm typecheck
 
 ---
 
-## SPRINT 11 — STEP 4: Settings backend + the permission push (ADR-026)
+## SPRINT 11 — STEP 4: Settings backend + the permission push (ADR-029)
 
 **Prompt:**
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 4. The settings API surface. Read `docs/08-AUTH-MATRIX.md` §4 (the endpoint map — **build exactly these**), §5–§6 (what the Permissions UI toggles, key naming, the Redis cache), `docs/adr/ADR-026`, `docs/07-API-CONTRACT.md`, `docs/09-ERROR-HANDLING.md` §2, and `docs/11-THIRD-PARTY-INTEGRATIONS.md` §2.2.
+> Sprint 11, STEP 4. The settings API surface. Read `docs/08-AUTH-MATRIX.md` §4 (the endpoint map — **build exactly these**), §5–§6 (what the Permissions UI toggles, key naming, the Redis cache), `docs/adr/ADR-029`, `docs/07-API-CONTRACT.md`, `docs/09-ERROR-HANDLING.md` §2, and `docs/11-THIRD-PARTY-INTEGRATIONS.md` §2.2.
 >
 > My STEP 1.2 census showed these already exist: **[paste]**. Complete what is partial; build what is missing.
 >
@@ -513,7 +524,7 @@ pnpm typecheck
 >    - Upsert into `user_permissions` with `value: boolean`; **delete the row** to fall back to the role default (the three-state model in Auth-Matrix §6.1 — allow / deny / inherit). A UI that can only set true/false can never restore inheritance.
 >    - Validate `:key` against the Auth-Matrix §6.2 convention (`bot.tool.{name}`, `module.{module}.read|write`, `chat.access`, `report.generate`, `months.unlock`) — reject anything else. Never accept free text.
 >    - **Invalidate `perms:{staffId}` immediately** on write (existing behaviour — confirm it fires on *every* path this UI can reach, including the delete-to-inherit case).
->    - **⭐ ADR-026:** emit `permission_changed` to that staffId's room. UX layer only — the invalidation above is the enforcement boundary. Ride ADR-022's self-healing path rather than adding a bespoke one.
+>    - **⭐ ADR-029:** emit `permission_changed` to that staffId's room. UX layer only — the invalidation above is the enforcement boundary. Ride ADR-025's self-healing path rather than adding a bespoke one.
 >
 > 3. **Signup requests** — `GET /v1/settings/signup-requests` (admin), `POST .../approve`, `POST .../reject`:
 >    - **`rejection_note` is stored and admin-visible, and never transmitted to the rejected user in any response** (NFR §4.2). Assert this in a test, not just a comment.
@@ -547,13 +558,13 @@ pnpm --filter @skaly/api dev    # /docs lists every Auth-Matrix §4 endpoint
 
 ---
 
-## SPRINT 11 — STEP 5: Audit log + streaming export (ADR-025)
+## SPRINT 11 — STEP 5: Audit log + streaming export (ADR-028)
 
 **Prompt:**
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 5. The audit log panel's API. Read `docs/adr/ADR-025`, `docs/13-NFRS.md` §2.2 + §4.2 + §5.3, `docs/05-BACKEND-SCHEMA.md` (`audit_log`), and `docs/07-API-CONTRACT.md`.
+> Sprint 11, STEP 5. The audit log panel's API. Read `docs/adr/ADR-028`, `docs/13-NFRS.md` §2.2 + §4.2 + §5.3, `docs/05-BACKEND-SCHEMA.md` (`audit_log`), and `docs/07-API-CONTRACT.md`.
 >
 > **WHAT TO BUILD**
 >
@@ -581,7 +592,7 @@ pnpm --filter @skaly/api dev    # /docs lists every Auth-Matrix §4 endpoint
 > - Real CSV escaping. Hand-rolled `join(',')` produces a file that looks fine in a text editor and is corrupt in Excel.
 > - Never `SELECT *` — pick columns explicitly so a future schema addition doesn't silently widen the export.
 >
-> **Tests:** filters compose correctly (date + actor + table together); keyset paginates with no duplicates or gaps; the export streams (assert the response has no `Content-Length` and arrives in multiple chunks); a JSONB value containing a comma, a double quote **and** a newline round-trips through a CSV parser intact; **10k seeded rows export without the process heap growing materially** (this is the assertion ADR-025 exists for); non-admin → 403.
+> **Tests:** filters compose correctly (date + actor + table together); keyset paginates with no duplicates or gaps; the export streams (assert the response has no `Content-Length` and arrives in multiple chunks); a JSONB value containing a comma, a double quote **and** a newline round-trips through a CSV parser intact; **10k seeded rows export without the process heap growing materially** (this is the assertion ADR-028 exists for); non-admin → 403.
 >
 > Show me the shared predicate builder, then the streaming handler.
 
@@ -596,7 +607,7 @@ curl -sD - "http://localhost:3001/v1/audit-log/export?from=2026-01-01" -H "Autho
 
 ---
 
-## SPRINT 11 — STEP 6: Report generation off the event loop (ADR-024)
+## SPRINT 11 — STEP 6: Report generation off the event loop (ADR-027)
 
 **Goal:** The first CPU-bound work in the product. Get the execution model right; the PDF layout is the easy half.
 
@@ -604,7 +615,7 @@ curl -sD - "http://localhost:3001/v1/audit-log/export?from=2026-01-01" -H "Autho
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 6. Report generation. Read `docs/adr/ADR-024` (follow it exactly), `docs/13-NFRS.md` §1.2 (p95 < 10s / p99 < 20s), `docs/10-INFRA-DEPLOYMENT.md` §4 (`healthcheckTimeout = 30` — the reason this must leave the main thread), `docs/11-THIRD-PARTY-INTEGRATIONS.md` §4.3 (`REPORT_EXPIRY_SECONDS` = 86400), `docs/07-API-CONTRACT.md` (report types + payload), and `docs/03-UIUX.md` (brand — the PDF must look like the portal).
+> Sprint 11, STEP 6. Report generation. Read `docs/adr/ADR-027` (follow it exactly), `docs/13-NFRS.md` §1.2 (p95 < 10s / p99 < 20s), `docs/10-INFRA-DEPLOYMENT.md` §4 (`healthcheckTimeout = 30` — the reason this must leave the main thread), `docs/11-THIRD-PARTY-INTEGRATIONS.md` §4.3 (`REPORT_EXPIRY_SECONDS` = 86400), `docs/07-API-CONTRACT.md` (report types + payload), and `docs/03-UIUX.md` (brand — the PDF must look like the portal).
 >
 > **HARD CONSTRAINT:** `@react-pdf/renderer` renders **synchronously**. Returning 202 while still rendering on the request event loop moves *when* the block happens, not *whether*. The render must leave the main thread. This is the trap and it passes code review.
 >
@@ -627,7 +638,7 @@ curl -sD - "http://localhost:3001/v1/audit-log/export?from=2026-01-01" -H "Autho
 >    - `StyleSheet.create` for the layout; portal-consistent header with the Skaly mark, period label, generated-at timestamp (IST), and page numbers via the `render` prop on a fixed footer.
 >    - `renderToBuffer(<ReportDoc {...data} />)` in the worker.
 >
-> 4. **Completion:** upload to R2 (private) → update the row `status: 'ready'`, `r2_key`, `completed_at` → fire **`report_ready`** with a presigned GET at `REPORT_EXPIRY_SECONDS` (24h). *First real producer for one of ADR-017's six deferred types — update the deferred list assertion from 6 to 5 in the coverage test.*
+> 4. **Completion:** upload to R2 (private) → update the row `status: 'ready'`, `r2_key`, `completed_at` → fire **`report_ready`** with a presigned GET at `REPORT_EXPIRY_SECONDS` (24h). *First real producer for one of ADR-020's six deferred types — update the deferred list assertion from 6 to 5 in the coverage test.*
 >
 > 5. **`GET /v1/reports/:id`** — status poll; when `ready`, returns a **freshly presigned** link (regenerated from `r2_key`, so a user returning within 24h never triggers a re-render). `GET /v1/reports?limit=` for the panel's recent list.
 >
@@ -673,7 +684,7 @@ while true; do curl -so /dev/null -w "%{time_total}\n" http://localhost:3001/v1/
 > 4. **Permission three-state** — allow / deny / inherit; delete-to-inherit restores the role default; `perms:{staffId}` invalidated on all three paths; `permission_changed` emitted.
 > 5. **Report responsiveness** — the `/v1/health` latency assertion from STEP 6.
 > 6. **Export memory** — 10k rows stream without material heap growth.
-> 7. **ADR-017 coverage update** — `report_ready` moves from deferred to tested; the deferred list drops 6 → 5. The set-equality registry↔enum test still passes.
+> 7. **ADR-020 coverage update** — `report_ready` moves from deferred to tested; the deferred list drops 6 → 5. The set-equality registry↔enum test still passes.
 > 8. Full API suite + typecheck + lint.
 >
 > **RULES:** every test fails without its fix. The role matrix is table-driven — seven panels × four roles as data, not 28 hand-written cases.
@@ -685,7 +696,7 @@ while true; do curl -so /dev/null -w "%{time_total}\n" http://localhost:3001/v1/
 ```bash
 pnpm --filter @skaly/api test
 pnpm typecheck && pnpm lint
-git add -A && git commit -m "Sprint 11 backend: re-onboarding (ADR-023, fixes A4), settings API + permission push (ADR-026), streaming audit export (ADR-025), off-loop reports (ADR-024)"
+git add -A && git commit -m "Sprint 11 backend: re-onboarding (ADR-026, fixes A4), settings API + permission push (ADR-029), streaming audit export (ADR-028), off-loop reports (ADR-027)"
 ```
 
 ---
@@ -782,7 +793,7 @@ pnpm dev   # /settings as admin vs manager — different nav, no forbidden panel
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 10. Four more panels, all admin-only except Holidays. Read `docs/08-AUTH-MATRIX.md` §5 + §6, `docs/adr/ADR-026`, `docs/04-APPFLOW.md`, `docs/09-ERROR-HANDLING.md` §2.
+> Sprint 11, STEP 10. Four more panels, all admin-only except Holidays. Read `docs/08-AUTH-MATRIX.md` §5 + §6, `docs/adr/ADR-029`, `docs/04-APPFLOW.md`, `docs/09-ERROR-HANDLING.md` §2.
 >
 > **WHAT TO BUILD**
 >
@@ -794,7 +805,7 @@ pnpm dev   # /settings as admin vs manager — different nav, no forbidden panel
 >    - **⭐ Reinstate flow (STEP 3):** when approve returns the reinstate suggestion, show *"This person previously worked here (deactivated {date}). Reinstate their account?"* with `[Reinstate]` / `[Create new]`, rather than an error toast. This is the user-visible half of A4's fix.
 > 3. **Holidays panel** (admin + manager) — list for the period, add (date + label), remove. Removal's confirmation states that attendance rows for that date revert to working (the H-01 cascade).
 > 4. **Months panel** — period list with lock state. Lock is one click; **unlock requires a reason** (`UNLOCK_REASON_REQUIRED` maps to the field). Locked periods show who locked them and when; unlocked ones show the last unlock reason. Make the consequence explicit: locking makes every module read-only for that period.
-> 5. **ADR-026 consumption** — subscribe to `permission_changed`; on receipt, refetch `/v1/staff/me` and re-derive nav/access. Ride 10.1's self-healing mechanism (ADR-022) rather than adding a bespoke path.
+> 5. **ADR-029 consumption** — subscribe to `permission_changed`; on receipt, refetch `/v1/staff/me` and re-derive nav/access. Ride 10.1's self-healing mechanism (ADR-025) rather than adding a bespoke path.
 > 6. **Frontend tests:** three-state control issues PUT/PUT/DELETE correctly and shows the resolved default on Inherit; reject requires a note and the note never renders outside the admin panel; unlock without a reason blocks with a field error; `permission_changed` triggers exactly one `/v1/staff/me` refetch; the reinstate branch renders on the suggestion response.
 >
 > **RULES**
@@ -821,15 +832,15 @@ pnpm --filter @skaly/web test
 
 > **WHERE WE ARE**
 >
-> Sprint 11, STEP 11. The last two panels. Read `docs/adr/ADR-024` + `ADR-025`, `docs/03-UIUX.md`, `docs/13-NFRS.md` §2.2.
+> Sprint 11, STEP 11. The last two panels. Read `docs/adr/ADR-027` + `ADR-028`, `docs/03-UIUX.md`, `docs/13-NFRS.md` §2.2.
 >
 > **WHAT TO BUILD**
 >
 > 1. **Audit Log panel** (admin only) — filter bar (date range, actor, table, action, source) + a **virtualised** table (TanStack Virtual — 50k rows at 12 months). Infinite scroll on the keyset cursor. Old/new value diffs in an expandable row, DM Mono, with only changed keys highlighted.
->    - **`[Export CSV]`** triggers a **browser download of the streamed response** — an anchor to the export URL, or `fetch` + `ReadableStream` → `Blob`. Do **not** buffer the whole body into memory in JS just to hand it to a Blob; that reintroduces the ceiling ADR-025 removed on the server. Show a progress/indeterminate state, since a 50k export takes seconds.
+>    - **`[Export CSV]`** triggers a **browser download of the streamed response** — an anchor to the export URL, or `fetch` + `ReadableStream` → `Blob`. Do **not** buffer the whole body into memory in JS just to hand it to a Blob; that reintroduces the ceiling ADR-028 removed on the server. Show a progress/indeterminate state, since a 50k export takes seconds.
 >    - **No edit, no delete controls anywhere.** The table is append-only at the DB role level; the UI must reflect that.
 > 2. **Reports panel** (admin + manager) — report type selector, period, optional filters, `[Generate]`.
->    - On 202: show the report as **`pending`** in a recent-reports list with a spinner. Poll `GET /v1/reports/:id`, or — better — let `report_ready` arrive over the socket and patch the row (ADR-019's patch principle; the payload is sufficient).
+>    - On 202: show the report as **`pending`** in a recent-reports list with a spinner. Poll `GET /v1/reports/:id`, or — better — let `report_ready` arrive over the socket and patch the row (ADR-022's patch principle; the payload is sufficient).
 >    - On ready: `[Download]` using the freshly presigned link. On failed: the error message + `[Retry]`.
 >    - Recent reports list with status chips and generated-at timestamps.
 >    - Make the async contract legible: *"We'll notify you when it's ready — you can leave this page."* A user who thinks the tab must stay open will keep it open.
@@ -868,13 +879,13 @@ pnpm dev   # generate a report, leave the page, come back — it is ready with a
 > 1. **Role gating:** admin sees seven panels; manager sees four; direct URL to `/settings/permissions` as manager → **403, not a redirect**; team_member has no Settings entry at all.
 > 2. **⭐ A4 re-hire, end to end:** admin deactivates a staff member → that person submits a signup request with the same email → admin approves → **the reinstate prompt appears** (not a rejection) → `[Reinstate]` → the account is active again with its original id, and the signup request is approved rather than rejected.
 > 3. **Client reactivate:** deactivate a client → it disappears from the grids → reactivate → it returns **and** the current period's shoot slots, pipeline row, and calendar cells are regenerated.
-> 4. **⭐ Permission push (ADR-026), two contexts:** admin grants `chat.access` to a freelancer in context A while the freelancer sits idle on `/home` in context B → **B's sidebar gains Chat without a reload**.
+> 4. **⭐ Permission push (ADR-029), two contexts:** admin grants `chat.access` to a freelancer in context A while the freelancer sits idle on `/home` in context B → **B's sidebar gains Chat without a reload**.
 > 5. **Month lock:** lock the prior period → in another context, a team member's attendance edit for that period fails with the locked copy → unlock **requires** a reason → after unlock, the edit succeeds.
 > 6. **Audit export:** apply filters, click Export, assert a CSV download whose first row is the header and whose row count matches the filtered list.
 >
 > **reports.spec.ts**
 > 1. Generate → 202 → the row appears `pending` → `report_ready` arrives → status flips to `ready` **without a reload** → Download yields a PDF (assert content-type and a non-trivial body length).
-> 2. **⭐ API responsiveness:** while a report renders, `page.request.get('/v1/health')` returns 200 in under 500ms. *ADR-024's whole point, asserted from the outside.*
+> 2. **⭐ API responsiveness:** while a report renders, `page.request.get('/v1/health')` returns 200 in under 500ms. *ADR-027's whole point, asserted from the outside.*
 >
 > **mfa-recovery.spec.ts**
 > 1. Admin enrols MFA → logs out → logs in → "use a recovery code" → a valid code signs them in → the banner shows the remaining count.
@@ -911,7 +922,7 @@ pnpm exec playwright test      # ENTIRE suite green
 5. **Signup:** approve one, reject one with a note. Confirm the note is visible to the admin and **absent from every response body** (DevTools → Network → the raw JSON).
 6. **Months:** lock the prior period → every module read-only, mutations return the locked copy → unlock without a reason (blocked) → with a reason (succeeds, reason stored and displayed).
 7. **Audit:** filter by actor + table + date; expand a diff; export CSV; open it in a spreadsheet and confirm a JSONB value containing a comma and a quote landed in one cell.
-8. **⭐ Reports (ADR-024):** with `while true; do curl -so /dev/null -w "%{time_total}\n" localhost:3001/v1/health; sleep 0.5; done` running, generate a report. **Health latency stays flat.** Report goes pending → notification → ready → download opens a branded PDF. Return an hour later: the link regenerates without a re-render.
+8. **⭐ Reports (ADR-027):** with `while true; do curl -so /dev/null -w "%{time_total}\n" localhost:3001/v1/health; sleep 0.5; done` running, generate a report. **Health latency stays flat.** Report goes pending → notification → ready → download opens a branded PDF. Return an hour later: the link regenerates without a re-render.
 9. **⭐ Recovery codes:** log in as admin with MFA → use a recovery code → works once, not twice → remaining count correct → regenerate → old codes dead.
 10. **NFR measurement (§1.2), numbers not vibes:** report generation p95 < 10s / p99 < 20s over 10 runs; audit export of 10k rows completes without heap growth; settings panels load < 1.5s.
 
@@ -926,7 +937,7 @@ pnpm exec playwright test      # ENTIRE suite green
 | NFR §1.4 scroll 60fps, no long tasks | median **16.7ms**, p95 **16.8ms**, 0 long tasks > 50ms, 2466px scrolled | `content-calendar.spec.ts:437`, same run |
 | 10k-row audit export without heap growth | asserted | `test/routes/audit-log.test.ts:371` (row count through the stream, not a `heapUsed` delta — see its comment) |
 
-The report bar is measured on the **render**, not the HTTP call: ADR-027 made
+The report bar is measured on the **render**, not the HTTP call: ADR-030 made
 `POST /v1/reports/generate` a 202 that returns in milliseconds, so §1.2's 10s/20s can only
 mean generate → `ready`. That is what the harness times.
 
@@ -936,10 +947,10 @@ mean generate → `ready`. That is what the harness times.
 
 ```
 PRE-FLIGHT
-  [ ] A1 hotfix deployed — trustProxy: true AND staffId keyGenerator (ADR-021)
-  [ ] Sprint 10.1 landed (A2 ADR-022 self-healing, A3 env assertion); Sprint 10 merged
+  [ ] A1 hotfix deployed — trustProxy: true AND staffId keyGenerator (ADR-024)
+  [ ] Sprint 10.1 landed (A2 ADR-025 self-healing, A3 env assertion); Sprint 10 merged
   [ ] Full suite + Playwright green BEFORE Sprint 11 code
-  [ ] ADR-023..027 committed
+  [ ] ADR-026..027 committed
 
 MIGRATIONS
   [x] staff_email_unique is now PARTIAL (WHERE deleted_at IS NULL) — mirrors migration 030
@@ -948,9 +959,9 @@ MIGRATIONS
   [ ] Migration comment records: non-additive but non-breaking (relaxes a constraint)
   [ ] reports table created (or confirmed pre-existing) + grants
   [ ] Reverse migrations exist and were exercised
-  [ ] messages_parent_id_fkey UNTOUCHED (ADR-027 — Sprint 12)
+  [ ] messages_parent_id_fkey UNTOUCHED (ADR-030 — Sprint 12)
 
-RE-ONBOARDING (ADR-023 / audit A4)
+RE-ONBOARDING (ADR-026 / audit A4)
   [ ] ClientService.reactivate + the SHARED three-way period backfill (not copied)
   [ ] Internal clients get no period rows on reactivate
   [ ] StaffService.reactivate; live-email collision → 409, not a DB error
@@ -966,11 +977,11 @@ SETTINGS BACKEND
   [ ] Permissions are THREE-state — allow / deny / inherit (delete restores the default)
   [ ] Permission keys validated against the §6.2 convention; free text rejected
   [ ] perms:{staffId} invalidated on all three paths
-  [ ] ⭐ permission_changed emitted; consumed via ADR-022's mechanism, not a bespoke path
+  [ ] ⭐ permission_changed emitted; consumed via ADR-025's mechanism, not a bespoke path
   [ ] Unlock requires a reason (UNLOCK_REASON_REQUIRED); reason stored + displayed
   [ ] ⭐ rejection_note appears in NO response body (asserted on serialised JSON)
 
-AUDIT EXPORT (ADR-025)
+AUDIT EXPORT (ADR-028)
   [ ] pg-query-stream installed; .stream() used
   [ ] One shared predicate feeds both the JSON list and the CSV export
   [ ] Real CSV escaping — JSONB with comma + quote + newline round-trips (TESTED)
@@ -978,7 +989,7 @@ AUDIT EXPORT (ADR-025)
   [ ] 10k rows export without material heap growth (TESTED)
   [ ] No edit/delete controls anywhere in the audit UI
 
-REPORTS (ADR-024)
+REPORTS (ADR-027)
   [ ] 202 + reportId; no PDF in the response
   [ ] ⭐ Render leaves the main thread (worker_threads / worker service)
   [ ] ⭐ /v1/health stays under 100ms during a render (TESTED — the ADR in one assertion)
@@ -987,7 +998,7 @@ REPORTS (ADR-024)
   [ ] Documented concurrency cap
   [ ] Fonts VENDORED, not fetched at render time
   [ ] report_ready fires with a 24h presigned link; links regenerate without re-rendering
-  [ ] ADR-017 coverage updated — deferred list 6 → 5
+  [ ] ADR-020 coverage updated — deferred list 6 → 5
 
 RECOVERY CODES (carried since Sprint 8 STEP 8.4)
   [ ] POST /v1/auth/mfa/recovery redeems a code
@@ -1025,7 +1036,7 @@ FRONTEND
       423 after the user had typed. Invalidates BOTH ['months'] (the five grids)
       and ['settings','months'] (the panel): same endpoint, two keys, and
       TanStack prefix-matching does not bridge them
-  [x] 07-API-CONTRACT §Reports documents the ADR-027 async contract (202 + reportId),
+  [x] 07-API-CONTRACT §Reports documents the ADR-030 async contract (202 + reportId),
       not the superseded synchronous 200-plus-downloadUrl shape
   [x] report_ready's linkBuilder returns /settings/reports?reportId= — never a
       presigned URL (M-08), enforced for all 18 types by the link-durability test
@@ -1091,7 +1102,7 @@ Recorded rather than quietly ticked:
 - **The audit CSV was not opened in a spreadsheet.** The comma/quote/newline round-trip
   rests on `test/routes/audit-log.test.ts`, which asserts it on the produced bytes.
 - **"Return an hour later: the link regenerates without a re-render"** was not waited out;
-  `ReportService.test.ts` covers the cheap-revisit path (ADR-027 §7).
+  `ReportService.test.ts` covers the cheap-revisit path (ADR-030 §7).
 - **Deployment items** (A1 hotfix deployed, reverse migrations exercised) are unchanged from
   when they were ticked; nothing in this session re-proved them.
 
@@ -1099,7 +1110,7 @@ Recorded rather than quietly ticked:
 
 ```bash
 git add -A
-git commit -m "Sprint 11: settings panels + async off-loop reports (ADR-024) + streaming audit export (ADR-025) + re-onboarding (ADR-023, fixes audit A4) + permission push (ADR-026) + recovery-code redeem path"
+git commit -m "Sprint 11: settings panels + async off-loop reports (ADR-027) + streaming audit export (ADR-028) + re-onboarding (ADR-026, fixes audit A4) + permission push (ADR-029) + recovery-code redeem path"
 git push -u origin sprint-11-settings-reports
 ```
 
@@ -1107,13 +1118,13 @@ PR to `main`; CI fully green before merge. Merge, then `git checkout main && git
 
 ### 13.4 — Move to Sprint 12
 
-`MASTER-BUILD-GUIDE-V2-FINAL.md` → PART 9 → **SPRINT 12**: the comment system (+ `new_comment`), the attachment orphan cron, the `coming_shoot_date` rollover recompute (ADR-012 §4), and the message retention job (**ADR-027 — already ruled, build it as specified**).
+`MASTER-BUILD-GUIDE-V2-FINAL.md` → PART 9 → **SPRINT 12**: the comment system (+ `new_comment`), the attachment orphan cron, the `coming_shoot_date` rollover recompute (ADR-012 §4), and the message retention job (**ADR-030 — already ruled, build it as specified**).
 
 ---
 
 ## DECISIONS TO MAKE BEFORE SPRINT 12
 
-- **⚠️ The comment system is the last unbuilt dependency of two shipped features.** Sprint 9's global search has a `comments` category that has returned empty for three sprints (no write path), and `new_comment` is one of ADR-017's remaining deferred notification types. Sprint 12 closes both. Decide the visibility rule **before** building, because search already queries it: API-Contract says a team_member sees *own comments + all manager/admin replies in the same record*. That predicate must be written **once** and shared by `CommentService.list` and `SearchService`'s comments query — if they drift, search leaks or hides comments relative to the module view, and only one of those failures is visible.
+- **⚠️ The comment system is the last unbuilt dependency of two shipped features.** Sprint 9's global search has a `comments` category that has returned empty for three sprints (no write path), and `new_comment` is one of ADR-020's remaining deferred notification types. Sprint 12 closes both. Decide the visibility rule **before** building, because search already queries it: API-Contract says a team_member sees *own comments + all manager/admin replies in the same record*. That predicate must be written **once** and shared by `CommentService.list` and `SearchService`'s comments query — if they drift, search leaks or hides comments relative to the module view, and only one of those failures is visible.
 
   **DECIDED AND BUILT (Sprint 11 close-out).** `apps/api/src/lib/comment-visibility.ts` is
   that one predicate; `SearchService.searchComments` now passes it to `.where()` and has no
@@ -1134,7 +1145,7 @@ PR to `main`; CI fully green before merge. Merge, then `git checkout main && git
 
 - **`coming_shoot_date` rollover recompute vs. Trigger 1 (ADR-012 §4).** The daily recompute at rollover and the live Trigger 1 both write `content_pipelines.coming_shoot_date`. Confirm they are the same code path with different actors (System Actor for the cron, the human for the trigger) — two implementations of one recompute is the ADR-014-era permission-resolver bug in a different table, and it would drift silently because both write a plausible value.
 
-- **Retention job scheduling and the rollover window.** ADR-027's message retention and the 12-month cleanup run monthly; rollover runs nightly at 00:01 IST inside a single atomic transaction (< 5 min expected, NFR §3.1). Decide whether retention runs in the same cron service and, if so, that it runs **after** rollover completes — a long DELETE holding locks while rollover's transaction is open is the one way to turn two safe jobs into an outage. *Recommendation: separate schedule, well clear of the rollover window (e.g. 03:00 IST), monthly.*
+- **Retention job scheduling and the rollover window.** ADR-030's message retention and the 12-month cleanup run monthly; rollover runs nightly at 00:01 IST inside a single atomic transaction (< 5 min expected, NFR §3.1). Decide whether retention runs in the same cron service and, if so, that it runs **after** rollover completes — a long DELETE holding locks while rollover's transaction is open is the one way to turn two safe jobs into an outage. *Recommendation: separate schedule, well clear of the rollover window (e.g. 03:00 IST), monthly.*
 
 - **Still deferred, on schedule:** Socket.io Redis adapter verification (before any second API instance); A6 date-derived test fixtures (opportunistic, likely folded into Sprint 12's test pass).
 
@@ -1152,7 +1163,7 @@ The A1 hotfix isn't deployed. Seven panels each fetching lists is the most reque
 Hand-rolled serialisation. `old_value` / `new_value` are JSONB containing commas, quotes, and newlines. Use `csv-stringify`.
 
 ### `/v1/health` times out while a report renders
-The render is still on the main event loop. The 202 changed *when*, not *whether* — the whole point of ADR-024. Move it to `worker_threads` or a worker service.
+The render is still on the main event loop. The 202 changed *when*, not *whether* — the whole point of ADR-027. Move it to `worker_threads` or a worker service.
 
 ### A report sits `pending` forever
 The worker died without sending a message. Handle `'error'` **and** `'exit'`, not just the success message, and mark the row `failed` from both.
@@ -1164,13 +1175,13 @@ The worker died without sending a message. Handle `'error'` **and** `'exit'`, no
 The control is two-state. Inheritance needs a third state that **deletes** the `user_permissions` row (Auth-Matrix §6.1).
 
 ### A permission change doesn't reach an idle session
-Expected if `permission_changed` was missed — and by design harmless: the next request re-checks server-side and corrects. If it *never* corrects even after navigation, the ADR-022 self-healing path isn't wired, which is a 10.1 regression rather than a Sprint 11 bug.
+Expected if `permission_changed` was missed — and by design harmless: the next request re-checks server-side and corrects. If it *never* corrects even after navigation, the ADR-025 self-healing path isn't wired, which is a 10.1 regression rather than a Sprint 11 bug.
 
 ### Re-approving a returning employee still says "Account already exists"
-Only the index was fixed, not the approval path. A4's real defect is the false rejection (ADR-023 §4) — the index alone lets a *new* row be created but leaves the misleading message and loses the person's history.
+Only the index was fixed, not the approval path. A4's real defect is the false rejection (ADR-026 §4) — the index alone lets a *new* row be created but leaves the misleading message and loses the person's history.
 
 ### Reinstating a staff member fails with a Postgres unique violation
-The pre-check for a **live** row with that email is missing. Once the index is partial, a dead and a live row can share an email; catch it and return 409 with a clear message (ADR-023 §5).
+The pre-check for a **live** row with that email is missing. Once the index is partial, a dead and a live row can share an email; catch it and return 409 with a clear message (ADR-026 §5).
 
 ### A recovery code works twice
 Consumption isn't in the same transaction as session issuance, so a concurrent retry slips through. Mark consumed and issue the session atomically.
@@ -1182,4 +1193,4 @@ A separate counter was added. It must share the TOTP counter, or the lockout is 
 
 ## END OF SPRINT 11 DETAILED GUIDE
 
-*Companion to `MASTER-BUILD-GUIDE-V2-FINAL.md` PART 9 and `SPRINT-1..10-DETAILED.md`. Source-of-truth precedence when documents differ: the numbered spec docs (`01`–`14`) + the schema win, then this guide's reconciliations and the ADRs it executes (011–027), then the Master Build Guide's shorthand. This is the widest sprint by surface area and the shallowest by depth, with two exceptions: report generation is the first CPU-bound work in the product and sets the precedent for every later one, and the audit export is the first response whose size is a function of data volume. Both leave the request path — that is the whole lesson of the sprint. It also closes two long-carried items: the recovery-code redeem path, unspendable since Sprint 8, and audit finding A4, which quietly made every offboarded employee unhireable. Sprint 12 builds the comment system, the two crons, and ADR-027's retention job — read the first decision above before starting, because the comment visibility predicate must be shared with a search query that has been waiting on it since Sprint 9.*
+*Companion to `MASTER-BUILD-GUIDE-V2-FINAL.md` PART 9 and `SPRINT-1..10-DETAILED.md`. Source-of-truth precedence when documents differ: the numbered spec docs (`01`–`14`) + the schema win, then this guide's reconciliations and the ADRs it executes (011–027), then the Master Build Guide's shorthand. This is the widest sprint by surface area and the shallowest by depth, with two exceptions: report generation is the first CPU-bound work in the product and sets the precedent for every later one, and the audit export is the first response whose size is a function of data volume. Both leave the request path — that is the whole lesson of the sprint. It also closes two long-carried items: the recovery-code redeem path, unspendable since Sprint 8, and audit finding A4, which quietly made every offboarded employee unhireable. Sprint 12 builds the comment system, the two crons, and ADR-030's retention job — read the first decision above before starting, because the comment visibility predicate must be shared with a search query that has been waiting on it since Sprint 9.*

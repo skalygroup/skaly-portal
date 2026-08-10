@@ -8,6 +8,20 @@
 
 > **Risk note:** Sprint 10 is the sprint where **everything becomes concurrent**. Every prior sprint's grid was a single-user surface with an optimistic update; this one puts 50 people on the same rows at the same time. The two places that will hurt are reverse infinite scroll (STEP 11) and cache patching under concurrent edits (STEP 9). Neither is hard; both are unforgiving of shortcuts.
 
+
+> **⚠️ ADR NUMBERING CORRECTED.** This guide originally numbered the four ADRs it
+> creates **017/018/019/020**. In `docs/decisions/` they are **020** (notification-type-count),
+> **021** (bot-archive-attribution), **022** (realtime-cache-strategy) and **023** (presence-hash)
+> — every reference has been shifted to match, including the filenames. ADR-017 is
+> client-onboarding-atomicity, an unrelated ruling, so the original numbers sent a reader
+> to the wrong document. Same drift as Sprints 11 and 13; same resolution:
+> `docs/decisions/` wins over a guide's shorthand.
+>
+> Untouched, because they are not this drift: the five `ADR-005` mentions (that ruling
+> lives in `docs/decisions/DECISIONS.md`, not as a numbered ADR file), and one
+> retention/`parent_id` reference in the close-out that may belong to ADR-030 rather
+> than 021 — flagged rather than guessed.
+
 ---
 
 ## USING THE `/ponytail` PLUGIN IN THIS SPRINT
@@ -22,18 +36,18 @@ Placement as established in Sprint 9: **between the build prompt and the test pr
 
 Sprint 8 built the socket client. Sprints 3–7 left `// TODO(Sprint 10)` markers where their grids should have subscribed. This sprint attaches all of it, and adds the two human-facing real-time surfaces: chat and notifications. By the end of this week:
 
-- **The four pre-Sprint-10 decisions are recorded** as **ADR-017** (notification count), **ADR-018** (bot archive attribution), **ADR-019** (grid cache strategy), **ADR-020** (presence).
+- **The four pre-Sprint-10 decisions are recorded** as **ADR-020** (notification count), **ADR-021** (bot archive attribution), **ADR-022** (grid cache strategy), **ADR-023** (presence).
 - **The bot archive is fixed *before* chat touches `messages`** — the user's bot turn persists with `sender_id`, the reply links via `parent_id`, ownership resolves by join, and `bot_sessions` finally holds the session envelope it was created for. This is deliberately the first build step: fixing the bot's write shape while simultaneously adding chat's write path to the same table is how you get two half-right writers.
 - **Presence uses a single Redis hash** with heartbeat timestamps and a freshness filter — `KEYS presence:*` is retired.
 - **All 18 notification types are accounted for**: every one with an MVP producer is tested; the six whose producers land in Sprints 11–13 are enumerated by name with their owning sprint. PRD §4.9 and Impl-Plan §13's stale "14" are patched in the same commit.
 - **The notification bell works** — unread count, `notify:new` live delivery, mark-read, deep links.
 - **Common chat works** — reverse infinite scroll, threads, @mentions with notification fan-out, typing indicators, presence dots, soft delete, and chat search.
 - **`chat.access` is exercised for the first time** — the freelancer 🔧 default-off key from Auth-Matrix §3. Sprint 9 wrote `changed_by_source='bot'` for the first time; this sprint is that key's turn.
-- **Every grid subscribes**, following ADR-019's matrix: patch the cache where the payload fully specifies one addressable entry, invalidate where it doesn't. Every `// TODO(Sprint 10)` marker from Sprints 3–7 is gone.
+- **Every grid subscribes**, following ADR-022's matrix: patch the cache where the payload fully specifies one addressable entry, invalidate where it doesn't. Every `// TODO(Sprint 10)` marker from Sprints 3–7 is gone.
 - **Reconnection UX** matches Error-Handling §5.4 — amber banner, backoff, refetch-on-reconnect.
 - **Tests prove it** under genuine concurrency: two Playwright browser contexts, one editing, one observing.
 
-**Estimated time:** 5 working days (Week 11 per `06-IMPLEMENTATION-PLAN.md` §13; owners TL + D1 + D2). Day 1 pre-flight + ADR-018 + presence; day 2 notifications end-to-end; day 3 chat backend + tests; day 4 grid subscriptions (ADR-019) + chat frontend; day 5 reconnection UX + E2E + close-out.
+**Estimated time:** 5 working days (Week 11 per `06-IMPLEMENTATION-PLAN.md` §13; owners TL + D1 + D2). Day 1 pre-flight + ADR-021 + presence; day 2 notifications end-to-end; day 3 chat backend + tests; day 4 grid subscriptions (ADR-022) + chat frontend; day 5 reconnection UX + E2E + close-out.
 
 **Prerequisites from Sprint 9** (all green — stop and fix if any is not):
 
@@ -54,15 +68,15 @@ Ruled at the pre-Sprint-10 gate; **inputs** to this sprint. STEP 1 records the f
 
 | Decision | Ruling | Executed in |
 |---|---|---|
-| **Notification types = 18** | Schema enum wins over PRD/Impl-Plan's stale 14. The discrepancy is almost certainly `month_ready` + the three `rollover_*` types (18 − 4 = 14) — the PRD counted user-facing events and skipped the system ones. → **ADR-017** | STEP 1 (census + record) + STEP 4 |
+| **Notification types = 18** | Schema enum wins over PRD/Impl-Plan's stale 14. The discrepancy is almost certainly `month_ready` + the three `rollover_*` types (18 − 4 = 14) — the PRD counted user-facing events and skipped the system ones. → **ADR-020** | STEP 1 (census + record) + STEP 4 |
 | **↳ Coverage test asserts MVP producers, enumerates the deferred** | A bare "18 types tested" would force you to invent emitters for types whose producers land in Sprints 11–13. Test what exists; name what doesn't and when it arrives. | STEP 1.3 + STEP 8 |
-| **Bot archive: `parent_id` + `bot_sessions`, both** | Ownership by `COALESCE(sender_id, parent.sender_id)`. `parent_id` owns the message graph; `bot_sessions` owns the session lifecycle. Orthogonal jobs, so no dual-write drift. → **ADR-018** | STEP 1 (record) + **STEP 2** |
+| **Bot archive: `parent_id` + `bot_sessions`, both** | Ownership by `COALESCE(sender_id, parent.sender_id)`. `parent_id` owns the message graph; `bot_sessions` owns the session lifecycle. Orthogonal jobs, so no dual-write drift. → **ADR-021** | STEP 1 (record) + **STEP 2** |
 | **↳ Lands before common-chat writes** | Sprint 10 makes chat a second writer to `messages`. Fix the bot's shape first. | **STEP 2 precedes STEP 6** |
 | **↳ The user's bot turn must persist to `messages` first** | `parent_id` gives ownership *by join* — that only works if the row it points at carries `sender_id`. STEP 1.4 determines whether this already happens. | STEP 1.4 + STEP 2 |
-| **Grid real-time: patch vs invalidate** | Patch when the payload fully specifies one addressable cache entry; invalidate when the change touches a trigger, cascade, aggregate, or row ordering. Correctness-first — the fan-out reduction falls out for free on the hot path. → **ADR-019** | STEP 1 (record) + STEP 9 |
+| **Grid real-time: patch vs invalidate** | Patch when the payload fully specifies one addressable cache entry; invalidate when the change touches a trigger, cascade, aggregate, or row ordering. Correctness-first — the fan-out reduction falls out for free on the hot path. → **ADR-022** | STEP 1 (record) + STEP 9 |
 | **↳ Patch payloads carry the new `version`** | A patch that doesn't update the cached version guarantees the next optimistic write 409s spuriously. | STEP 9 |
 | **↳ Senders excluded from their own broadcast** | The originator already has the optimistic update; re-patching from the echo double-applies or fights the in-flight mutation. | STEP 9 |
-| **Presence: single hash + heartbeat + freshness filter** | `HSET presence {staffId} {lastSeenEpoch}`, `HGETALL` filtered to 60s, swept on read. The freshness filter replaces the per-key TTL that per-staffId keys gave for free. → **ADR-020** | STEP 1 (record) + STEP 3 |
+| **Presence: single hash + heartbeat + freshness filter** | `HSET presence {staffId} {lastSeenEpoch}`, `HGETALL` filtered to 60s, swept on read. The freshness filter replaces the per-key TTL that per-staffId keys gave for free. → **ADR-023** | STEP 1 (record) + STEP 3 |
 
 ---
 
@@ -70,7 +84,7 @@ Ruled at the pre-Sprint-10 gate; **inputs** to this sprint. STEP 1 records the f
 
 | Doc | Sections | Why |
 |---|---|---|
-| `docs/02-TRD.md` | **§8 (socket namespaces, rooms, presence)**, §10 (notification system), §9.4 (bot archive claim — the one ADR-018 corrects) | The real-time architecture |
+| `docs/02-TRD.md` | **§8 (socket namespaces, rooms, presence)**, §10 (notification system), §9.4 (bot archive claim — the one ADR-021 corrects) | The real-time architecture |
 | `docs/04-APPFLOW.md` | **Chat flow (send, thread, mention, typing)**, notification flow (bell → panel → deep link), presence | Every interaction |
 | `docs/07-API-CONTRACT.md` | `/v1/chat/*` (incl. `GET /v1/chat/search`), `/v1/notifications/*`, §1.1 envelopes, §2 rate limits | Exact shapes |
 | `docs/08-AUTH-MATRIX.md` | **§3 (`/chat` — freelancer 🔧 blocked by default)**, §6.2 (`chat.access` key), §6.3 (Redis perms cache) | The key this sprint first exercises |
@@ -78,7 +92,7 @@ Ruled at the pre-Sprint-10 gate; **inputs** to this sprint. STEP 1 records the f
 | `docs/05-BACKEND-SCHEMA.md` | `messages` (**`sender_id` NULL comment**, `parent_id`, `sender_type`, `content_type`, `search_vector`), `message_mentions`, `notifications` (**the 18-value enum**), `bot_sessions`, §11 (grants) | Column truth |
 | `docs/09-ERROR-HANDLING.md` | **§5.4 (network drop + WebSocket reconnect UX)**, §2 | The reconnection contract |
 | `docs/13-NFRS.md` | **§1.3 (WS delivery < 500ms, presence < 2s, reconnect < 30s)**, §4.3 (DOMPurify), §5.2 (12-month message retention), §2.2 (~15k messages) | The numbers you must hit |
-| `docs/11-THIRD-PARTY-INTEGRATIONS.md` | §5.2 (**Redis key registry — `presence:{staffId}` is what ADR-020 replaces**) | Update this doc |
+| `docs/11-THIRD-PARTY-INTEGRATIONS.md` | §5.2 (**Redis key registry — `presence:{staffId}` is what ADR-023 replaces**) | Update this doc |
 | `docs/10-INFRA-DEPLOYMENT.md` | §10 (Socket.io Redis adapter — the scaling prerequisite) | Verify it's actually wired |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §13 | Sprint 10 checklist (**patch its "14"**) |
 | `docs/12-TESTING-STRATEGY.md` | Real-time + concurrency sections | The tests you must reproduce |
@@ -92,14 +106,14 @@ Ruled at the pre-Sprint-10 gate; **inputs** to this sprint. STEP 1 records the f
 2. **There is no generic "new chat message" notification type.** The 18 include `mention` and `new_comment` — not a per-message notify. Chat messages deliver via socket only; **only @mentions create a notification row.** If you find yourself adding an enum value for chat messages, stop — that is scope drift, and the enum is a CHECK constraint that would need a migration.
 3. **ADR-010's amendment already pulled the socket *client* into Sprint 8.** Sprint 10 attaches *consumers*; it does not build the client. Do not create a second socket singleton.
 4. **ADR-005: no fourth namespace.** Bot streaming shares `/ws/notify`. Chat uses the existing TRD §8 namespaces — verify which before wiring, and do not add one for chat.
-5. **`messages.sender_id` is NULL for bot rows by design** (schema comment) — ADR-018 does **not** change that. It adds the `parent_id` link and the `bot_sessions` envelope around it. Do not "fix" the schema comment by backfilling `sender_id` on bot rows; ownership resolves by join.
+5. **`messages.sender_id` is NULL for bot rows by design** (schema comment) — ADR-021 does **not** change that. It adds the `parent_id` link and the `bot_sessions` envelope around it. Do not "fix" the schema comment by backfilling `sender_id` on bot rows; ownership resolves by join.
 6. **`softDelete` lives in `lib/queries.ts`, not on `BaseService`** (as-built correction from Sprint 9). Message deletion uses that helper; `softDeletable` remains the separate SELECT filter.
 7. **Freelancer chat is a *permission* check, not a role check.** Auth-Matrix §3 marks `/chat` 🔧 for freelancers — default-denied, admin-grantable via the `chat.access` key (§6.2). Route guards must call `PermissionService`, not `requireRole`. This is the key's first real use.
 8. **TanStack Query v5 `useInfiniteQuery` requires `initialPageParam`.** Omitting it is a runtime error, not a type error, and the message is unhelpful. Pair it with `getNextPageParam`.
 9. **Chat scrolls *up* for history.** Every prior grid paginated downward. Prepending older messages without scroll-anchoring makes the viewport jump — this is the single most common chat bug and it is not caught by any unit test.
 10. **DOMPurify is belt-and-braces, not the primary defence.** NFR §4.3 mandates it; React already escapes text children. The real exposure is `dangerouslySetInnerHTML`. Render message content as **text** with a linkifier; reach for DOMPurify only where HTML is genuinely rendered, and never introduce `dangerouslySetInnerHTML` to justify it.
 11. **Frontend path `apps/web/app/(portal)/`** (no `src/`), matching Sprints 3–9.
-12. **Presence key registry changes.** Third-Party §5.2 documents `presence:{staffId}` (string, 60s TTL). ADR-020 replaces it with one `presence` hash. **Patch that doc in the same commit** — a Redis key registry that lies is worse than none.
+12. **Presence key registry changes.** Third-Party §5.2 documents `presence:{staffId}` (string, 60s TTL). ADR-023 replaces it with one `presence` hash. **Patch that doc in the same commit** — a Redis key registry that lies is worse than none.
 
 ---
 
@@ -107,10 +121,10 @@ Ruled at the pre-Sprint-10 gate; **inputs** to this sprint. STEP 1 records the f
 
 | ID | What | Where |
 |---|---|---|
-| **ADR-017 (new)** | Notification count = 18; producer census; PRD §4.9 + Impl-Plan §13 patched; coverage test scoped to MVP producers with deferred types named. | STEP 1 + 4 + 8 |
-| **ADR-018 (new)** | Bot archive: user turn persisted with `sender_id`, reply linked by `parent_id`, ownership via `COALESCE`; `bot_sessions` as session envelope. **Before chat writes.** | STEP 1 + **STEP 2** |
-| **ADR-019 (new)** | Patch-vs-invalidate matrix; payloads carry `version`; senders excluded from own broadcast. | STEP 1 + 9 |
-| **ADR-020 (new)** | Presence hash + heartbeat + freshness filter + sweep; `KEYS` retired; Third-Party §5.2 patched. | STEP 1 + 3 |
+| **ADR-020 (new)** | Notification count = 18; producer census; PRD §4.9 + Impl-Plan §13 patched; coverage test scoped to MVP producers with deferred types named. | STEP 1 + 4 + 8 |
+| **ADR-021 (new)** | Bot archive: user turn persisted with `sender_id`, reply linked by `parent_id`, ownership via `COALESCE`; `bot_sessions` as session envelope. **Before chat writes.** | STEP 1 + **STEP 2** |
+| **ADR-022 (new)** | Patch-vs-invalidate matrix; payloads carry `version`; senders excluded from own broadcast. | STEP 1 + 9 |
+| **ADR-023 (new)** | Presence hash + heartbeat + freshness filter + sweep; `KEYS` retired; Third-Party §5.2 patched. | STEP 1 + 3 |
 | **ADR-006 (inherited)** | Mention fan-out is per-mentioned-user, never combined — and **never to the author** (same non-actor rule as task assignment). | STEP 6 |
 | **ADR-011 (inherited)** | Freelancer isolation — chat access is permission-gated; presence must not leak staff a freelancer can't otherwise see. | STEP 3 + 7 |
 | **NFR §1.3** | WS delivery < 500ms, presence propagation < 2s, reconnect < 30s. **Measured, not asserted.** | STEP 13 |
@@ -124,15 +138,15 @@ If you skip the test for any of these, Sprint 10 is not done. They reappear in C
 
 | # | Type | What |
 |---|---|---|
-| 1 | Manual | Pre-flight — Sprint 9 green, **re-verify the E2E clearance**, **notification producer census**, **determine bot-persistence state**, verify the Redis adapter, record ADR-017/018/019/020, branch |
-| 2 | Prompt | **ADR-018 — bot archive attribution (before chat touches `messages`)** |
-| 3 | Prompt | ADR-020 — presence hash + heartbeat + sweep |
+| 1 | Manual | Pre-flight — Sprint 9 green, **re-verify the E2E clearance**, **notification producer census**, **determine bot-persistence state**, verify the Redis adapter, record ADR-020/018/019/020, branch |
+| 2 | Prompt | **ADR-021 — bot archive attribution (before chat touches `messages`)** |
+| 3 | Prompt | ADR-023 — presence hash + heartbeat + sweep |
 | 4 | Prompt | `NotificationService` completion — 18-type registry, `notify:new`, dedup |
 | 5 | Prompt | Notification routes + bell/panel frontend |
 | 6 | Prompt | `ChatService` — send, paginate, threads, mentions, soft delete, search |
 | 7 | Prompt | Chat routes + `chat.access` gate + socket namespace wiring |
 | 8 | Prompt | Backend tests — chat, notifications, mentions, presence, coverage census |
-| 9 | Prompt | **ADR-019 — grid subscriptions; retire every `// TODO(Sprint 10)`** |
+| 9 | Prompt | **ADR-022 — grid subscriptions; retire every `// TODO(Sprint 10)`** |
 | 10 | Prompt | Frontend chat UI — reverse infinite scroll, threads, typing, presence |
 | 11 | Prompt | Frontend — reconnection UX (Error-Handling §5.4) + DOMPurify pass |
 | 12 | Manual + Prompt | Playwright — **two-context concurrency** specs |
@@ -202,7 +216,7 @@ grep -rn "test.skip\|test.fixme\|\.only" tests/e2e/    # expect: nothing
 
 **Both must be clean.** If any of the four was skipped, `fixme`'d, or descoped rather than fixed, that is Sprint 10's first task — this sprint adds a large E2E surface (chat, notifications, presence, two-context concurrency), and inheriting red specs under that load is the same trap one sprint deeper. Fix them here before proceeding.
 
-### 1.3 — ⚠️ Notification producer census (ADR-017)
+### 1.3 — ⚠️ Notification producer census (ADR-020)
 
 Do not lock a number before you know which types have emitters. Reconcile three lists — the enum, the producers in code, and the sprint that owns each.
 
@@ -245,7 +259,7 @@ Note the arithmetic: the six deferred include `month_ready` + the three `rollove
 
 ### 1.4 — ⚠️ Determine the bot-persistence state (scopes STEP 2)
 
-ADR-018's `parent_id` link only works if the row it points at carries `sender_id`. Find out whether bot turns reach `messages` at all, or live only in the Redis session:
+ADR-021's `parent_id` link only works if the row it points at carries `sender_id`. Find out whether bot turns reach `messages` at all, or live only in the Redis session:
 
 ```bash
 grep -rn "channel.*'bot'\|channel: 'bot'" apps/api/src --include=*.ts | grep -v test
@@ -278,7 +292,7 @@ grep -rn "createAdapter\|@socket.io/redis-adapter" apps/api/src
 
 If absent, note it — MVP is single-instance so nothing breaks today, but Infra §10 calls it "the first change before scaling beyond one instance," and a spec claiming it exists when it doesn't is exactly the drift this process catches. Do not build it now; record it.
 
-### 1.6 — Record ADR-017, 018, 019, 020 (Prompt)
+### 1.6 — Record ADR-020, 018, 019, 020 (Prompt)
 
 > **WHERE WE ARE**
 >
@@ -288,9 +302,9 @@ If absent, note it — MVP is single-instance so nothing breaks today, but Infra
 >
 > **WHAT TO BUILD** — four files in `docs/adr/`:
 >
-> **`ADR-017-notification-type-count.md`**
+> **`ADR-020-notification-type-count.md`**
 > ```
-> # ADR-017 — Notification types: 18, sourced from the schema enum
+> # ADR-020 — Notification types: 18, sourced from the schema enum
 > Status: Accepted • Pre-Sprint 10
 > Cross-refs: 05-BACKEND-SCHEMA (notifications_type_check), TRD §10.1,
 >             PRD FR-NOTIF-02 (stale), IMPL-PLAN §13 (stale)
@@ -314,9 +328,9 @@ If absent, note it — MVP is single-instance so nothing breaks today, but Infra
 > Rule: the enum is the count. Any doc that disagrees is patched, not worked around.
 > ```
 >
-> **`ADR-018-bot-archive-attribution.md`**
+> **`ADR-021-bot-archive-attribution.md`**
 > ```
-> # ADR-018 — Bot conversation ownership in the messages archive
+> # ADR-021 — Bot conversation ownership in the messages archive
 > Status: Accepted • Pre-Sprint 10 (build impact: Sprint 10 STEP 2, before chat writes)
 > Cross-refs: TRD §9.4, 05-BACKEND-SCHEMA (messages, bot_sessions), NFR §5.2, ADR-014
 >
@@ -346,9 +360,9 @@ If absent, note it — MVP is single-instance so nothing breaks today, but Infra
 >   answers "whose conversation, and when". Never make them redundant.
 > ```
 >
-> **`ADR-019-realtime-cache-strategy.md`**
+> **`ADR-022-realtime-cache-strategy.md`**
 > ```
-> # ADR-019 — Grid real-time: patch vs invalidate
+> # ADR-022 — Grid real-time: patch vs invalidate
 > Status: Accepted • Pre-Sprint 10 (build impact: Sprint 10 STEP 9, all future grids)
 > Cross-refs: TRD §8, NFR §1.3, ADR-012, ADR-013, Sprint 13 k6
 >
@@ -385,9 +399,9 @@ If absent, note it — MVP is single-instance so nothing breaks today, but Infra
 >   because the hot path (calendar cells) is the patchable one.
 > ```
 >
-> **`ADR-020-presence-hash.md`**
+> **`ADR-023-presence-hash.md`**
 > ```
-> # ADR-020 — Presence via a single Redis hash with heartbeat freshness
+> # ADR-023 — Presence via a single Redis hash with heartbeat freshness
 > Status: Accepted • Pre-Sprint 10
 > Cross-refs: TRD §8, THIRD-PARTY §5.2, NFR §1.3, INFRA §10
 >
@@ -422,7 +436,7 @@ If absent, note it — MVP is single-instance so nothing breaks today, but Infra
 ls docs/adr/ADR-0{17,18,19,20}*.md
 grep -n "14 event types\|all 14 types" docs/01-PRD.md docs/06-IMPLEMENTATION-PLAN.md   # expect: nothing
 grep -n "presence:{staffId}" docs/11-THIRD-PARTY-INTEGRATIONS.md                       # expect: nothing
-git add docs/ && git commit -m "docs(adr): ADR-017 notification count, ADR-018 bot archive, ADR-019 realtime cache, ADR-020 presence hash; patch PRD/IMPL-PLAN/THIRD-PARTY"
+git add docs/ && git commit -m "docs(adr): ADR-020 notification count, ADR-021 bot archive, ADR-022 realtime cache, ADR-023 presence hash; patch PRD/IMPL-PLAN/THIRD-PARTY"
 ```
 
 ### 1.7 — Branch
@@ -435,7 +449,7 @@ git checkout -b sprint-10-chat-notifications
 
 ---
 
-## SPRINT 10 — STEP 2: Bot archive attribution (ADR-018) — **before chat touches `messages`**
+## SPRINT 10 — STEP 2: Bot archive attribution (ADR-021) — **before chat touches `messages`**
 
 **Goal:** Make bot conversations attributable while `messages` still has exactly one writer.
 
@@ -443,7 +457,7 @@ git checkout -b sprint-10-chat-notifications
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 2. Fixing the bot archive before common chat becomes a second writer to `messages`. Read `docs/adr/ADR-018` (follow it exactly), `docs/05-BACKEND-SCHEMA.md` (`messages`, `bot_sessions`), `docs/02-TRD.md` §9.4, `docs/13-NFRS.md` §5.2, and `apps/api/src/services/BotService.ts`.
+> Sprint 10, STEP 2. Fixing the bot archive before common chat becomes a second writer to `messages`. Read `docs/adr/ADR-021` (follow it exactly), `docs/05-BACKEND-SCHEMA.md` (`messages`, `bot_sessions`), `docs/02-TRD.md` §9.4, `docs/13-NFRS.md` §5.2, and `apps/api/src/services/BotService.ts`.
 >
 > My STEP 1.4 finding was **[A: nothing in messages / B: both turns, no parent_id / C: bot replies only]**. Here is the current state: **[paste the SQL output]**.
 >
@@ -452,7 +466,7 @@ git checkout -b sprint-10-chat-notifications
 > 1. **Persist both turns, in order** (adapt to the finding above — if the user turn already persists, keep that write and add the link):
 >    - **User turn**, written before the model is called: `{ channel: 'bot', sender_id: staffId, sender_type: 'user', content, content_type: 'text' }`. Capture the returned id.
 >    - **Bot reply**, written when the terminal turn is finalised: `{ channel: 'bot', sender_id: NULL, sender_type: 'bot', content: <final text>, parent_id: <user turn id> }`.
->    - `sender_id` stays NULL on bot rows — the schema comment is correct and ADR-018 does not change it. Ownership is by join.
+>    - `sender_id` stays NULL on bot rows — the schema comment is correct and ADR-021 does not change it. Ownership is by join.
 >
 > 2. **`bot_sessions` — the session envelope.** One row per conversation, not per message:
 >    - On session start (the same moment the Redis `bot:session:{staffId}` is created): insert `{ id, staff_id, created_at, last_activity_at }`, and carry that `id` in the Redis session blob.
@@ -530,13 +544,13 @@ pnpm typecheck
 
 ---
 
-## SPRINT 10 — STEP 3: Presence (ADR-020)
+## SPRINT 10 — STEP 3: Presence (ADR-023)
 
 **Prompt:**
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 3. Replacing `KEYS presence:*` with a single hash. Read `docs/adr/ADR-020`, `docs/02-TRD.md` §8, `docs/11-THIRD-PARTY-INTEGRATIONS.md` §5.2 (patched in STEP 1.6), and `docs/13-NFRS.md` §1.3 (presence propagation < 2s).
+> Sprint 10, STEP 3. Replacing `KEYS presence:*` with a single hash. Read `docs/adr/ADR-023`, `docs/02-TRD.md` §8, `docs/11-THIRD-PARTY-INTEGRATIONS.md` §5.2 (patched in STEP 1.6), and `docs/13-NFRS.md` §1.3 (presence propagation < 2s).
 >
 > **WHAT TO BUILD** — `apps/api/src/services/PresenceService.ts`:
 >
@@ -585,20 +599,20 @@ redis-cli HGETALL presence
 
 ---
 
-## SPRINT 10 — STEP 4: `NotificationService` completion (ADR-017)
+## SPRINT 10 — STEP 4: `NotificationService` completion (ADR-020)
 
 **Prompt:**
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 4. Completing notifications. Read `docs/adr/ADR-017`, `docs/02-TRD.md` §10, `docs/05-BACKEND-SCHEMA.md` (`notifications` — the 18-value enum), `docs/07-API-CONTRACT.md` (`/v1/notifications/*`), and the existing `NotificationService` from Sprint 2.
+> Sprint 10, STEP 4. Completing notifications. Read `docs/adr/ADR-020`, `docs/02-TRD.md` §10, `docs/05-BACKEND-SCHEMA.md` (`notifications` — the 18-value enum), `docs/07-API-CONTRACT.md` (`/v1/notifications/*`), and the existing `NotificationService` from Sprint 2.
 >
 > My STEP 1.3 census: **[paste the producer table]**.
 >
 > **WHAT TO BUILD**
 >
 > 1. **A type registry** — `packages/shared/src/constants/notifications.ts`: all 18 types as a const map of `{ type → { title, template, linkBuilder, icon, severity } }`, so a new type is one entry and nothing else. Types whose producers land in Sprints 11–13 are present in the registry with a `// producer: Sprint N` comment — the registry mirrors the enum exactly, even where the emitter doesn't exist yet.
-> 2. **`notify:new` delivery**: on create, write the row **then** emit to that recipient's room (persist-then-emit, as established Sprint 2). Payload = the full notification, so the bell can prepend without refetching (ADR-019's patch principle applied to notifications).
+> 2. **`notify:new` delivery**: on create, write the row **then** emit to that recipient's room (persist-then-emit, as established Sprint 2). Payload = the full notification, so the bell can prepend without refetching (ADR-022's patch principle applied to notifications).
 > 3. **Dedup for repeating types.** `task_overdue` runs on a sweep; without a guard the same task notifies daily forever. Suppress a duplicate `(recipient, type, record_id)` within 24h. Do this in the service, not the producer, so every future repeating type inherits it.
 > 4. **Unread count**: `GET /v1/notifications?unread=true&limit=` plus a cheap `count`. Cap the badge display at 99+ in the UI, not the query.
 > 5. **Mark read**: `PATCH /v1/notifications/:id/read` and `POST /v1/notifications/read-all`. Both emit `notify:read` so a second open tab updates its badge.
@@ -640,7 +654,7 @@ pnpm typecheck
 >    - `PATCH /v1/notifications/:id/read`
 >    - `POST /v1/notifications/read-all`
 > 2. **Zod** in `packages/shared/src/schemas/notifications.ts`, `.strict()`.
-> 3. **`NotificationBell`** in the topbar: icon + unread badge (99+ cap). Subscribes to `notify:new` → **prepends from the payload** (no refetch — ADR-019) and increments the badge; subscribes to `notify:read` → syncs across tabs.
+> 3. **`NotificationBell`** in the topbar: icon + unread badge (99+ cap). Subscribes to `notify:new` → **prepends from the payload** (no refetch — ADR-022) and increments the badge; subscribes to `notify:read` → syncs across tabs.
 > 4. **`NotificationPanel`** — Framer Motion popover, grouped Today / Earlier, each row = icon + title + body + DM Mono relative time. Click → mark read → navigate to `linkBuilder`'s URL → close. `[Mark all read]` in the header. Empty state per UI/UX.
 > 5. **Frontend tests:** badge reflects unread count; `notify:new` prepends **without** a refetch (assert the query function was not called again); clicking marks read and navigates; read-all clears the badge; the panel closes on outside click and Escape.
 >
@@ -724,7 +738,7 @@ pnpm typecheck
 >    - `chat:deleted` — `{ id }`, clients tombstone.
 >    - `chat:typing` — `{ staffId, isTyping }`, **ephemeral, never persisted**, server-side throttled to at most one per user per 2s.
 >    - `presence:changed` — from STEP 3.
->    - **Sender exclusion:** use `socket.broadcast.to(room).emit(...)` so the author doesn't receive their own message back (ADR-019 rule b). The author already rendered it optimistically.
+>    - **Sender exclusion:** use `socket.broadcast.to(room).emit(...)` so the author doesn't receive their own message back (ADR-022 rule b). The author already rendered it optimistically.
 > 4. **Route tests:** every role's access matches Auth-Matrix §3 including the freelancer override both ways; cursor pagination; `.strict()` rejects unknown fields; envelopes per §1.1.
 >
 > **RULES:** no new namespace (ADR-005). Typing is never written to the DB. The route does not filter — the service does.
@@ -746,11 +760,11 @@ pnpm --filter @skaly/api test routes/chat
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 8. Rounding out backend tests. Read `docs/12-TESTING-STRATEGY.md` and `docs/adr/ADR-017`.
+> Sprint 10, STEP 8. Rounding out backend tests. Read `docs/12-TESTING-STRATEGY.md` and `docs/adr/ADR-020`.
 >
 > **WHAT TO BUILD**
 >
-> 1. **⭐ Notification coverage test (ADR-017)** — the one that closes the 18-vs-14 question:
+> 1. **⭐ Notification coverage test (ADR-020)** — the one that closes the 18-vs-14 question:
 >    - Assert `Object.keys(NOTIFICATION_REGISTRY)` **exactly equals** the enum's 18 values (set equality, both directions).
 >    - For each of the **12 types with an MVP producer**, trigger the real producer and assert a correctly shaped row lands.
 >    - For the **6 deferred**, a single test listing them by name with their owning sprint and `expect(DEFERRED).toHaveLength(6)` — so the deferral is *asserted*, not merely commented. When Sprint 11 adds `report_ready`, that test fails until the list is updated. That is the intended behaviour.
@@ -769,12 +783,12 @@ pnpm --filter @skaly/api test routes/chat
 ```bash
 pnpm --filter @skaly/api test
 pnpm typecheck && pnpm lint
-git add -A && git commit -m "Sprint 10 backend: bot archive (ADR-018), presence hash (ADR-020), notifications 18-type coverage (ADR-017), chat service"
+git add -A && git commit -m "Sprint 10 backend: bot archive (ADR-021), presence hash (ADR-023), notifications 18-type coverage (ADR-020), chat service"
 ```
 
 ---
 
-## SPRINT 10 — STEP 9: Grid subscriptions (ADR-019) — retire every `// TODO(Sprint 10)`
+## SPRINT 10 — STEP 9: Grid subscriptions (ADR-022) — retire every `// TODO(Sprint 10)`
 
 **Goal:** Attach every deferred consumer, on the patch-vs-invalidate matrix.
 
@@ -782,7 +796,7 @@ git add -A && git commit -m "Sprint 10 backend: bot archive (ADR-018), presence 
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 9. Attaching all deferred grid subscriptions. Read `docs/adr/ADR-019` (follow the matrix exactly), `docs/adr/ADR-012` + `ADR-013` (the triggers whose side effects decide patch-vs-invalidate), `docs/02-TRD.md` §8, and `apps/web/lib/socket.ts`.
+> Sprint 10, STEP 9. Attaching all deferred grid subscriptions. Read `docs/adr/ADR-022` (follow the matrix exactly), `docs/adr/ADR-012` + `ADR-013` (the triggers whose side effects decide patch-vs-invalidate), `docs/02-TRD.md` §8, and `apps/web/lib/socket.ts`.
 >
 > First, find every marker:
 > ```bash
@@ -944,7 +958,7 @@ const admin = await ctxA.newPage();      const member = await ctxB.newPage();
 > 2. `[Mark all read]` clears the badge in **both** of B's open tabs.
 >
 > **realtime.spec.ts**
-> 1. **Patch path:** A edits a calendar cell → B's cell updates **and B issues no new GET** (`page.on('request')` — assert zero matching requests). *This is ADR-019's patch half.*
+> 1. **Patch path:** A edits a calendar cell → B's cell updates **and B issues no new GET** (`page.on('request')` — assert zero matching requests). *This is ADR-022's patch half.*
 > 2. **Invalidate path:** A adds a holiday → B's attendance grid **does** refetch and every staff column for that date flips. *The invalidate half.*
 > 3. **Sender exclusion:** A's own edit is not double-applied (the cell's value and version are each written once).
 > 4. **Reconnect:** kill B's socket (`page.evaluate` disconnect) → banner appears → restore → banner clears and B's data catches up with edits made while it was down.
@@ -972,9 +986,9 @@ pnpm exec playwright test        # ENTIRE suite green
 2. **Scroll:** 100+ messages, scroll up repeatedly — **no jump**. Read history while the other window sends — you stay put, the pill appears.
 3. **Typing + presence:** indicator appears/clears; presence dots reflect a closed window within 60s.
 4. **Notifications:** every producer available today — assign a task, add a holiday, confirm a shoot, approve a signup, mention someone. Each produces the right row and deep link.
-5. **⭐ Patch vs invalidate (ADR-019), with DevTools Network open:** edit a calendar cell → the other window updates with **no new GET**. Add a holiday → it **does** GET. Both correct; the distinction is the ADR.
+5. **⭐ Patch vs invalidate (ADR-022), with DevTools Network open:** edit a calendar cell → the other window updates with **no new GET**. Add a holiday → it **does** GET. Both correct; the distinction is the ADR.
 6. **Version on patch:** after receiving a patched cell update, edit that same cell in the receiving window → it saves **without** a spurious 409. *(This is the check that catches a patch which forgot the version.)*
-7. **Bot archive (ADR-018):**
+7. **Bot archive (ADR-021):**
    ```sql
    SELECT m.id, m.sender_type, COALESCE(m.sender_id, p.sender_id) AS owner
    FROM messages m LEFT JOIN messages p ON p.id = m.parent_id
@@ -982,7 +996,7 @@ pnpm exec playwright test        # ENTIRE suite green
    SELECT staff_id, last_activity_at FROM bot_sessions ORDER BY last_activity_at DESC LIMIT 3;
    ```
    Every row resolves to an owner. Then `DEL bot:session:{yourStaffId}` in Redis and reload `/bot` — **history still loads, from the DB.** That is the whole point of the ADR.
-8. **Presence (ADR-020):** `redis-cli HGETALL presence` → one hash, timestamp values. `redis-cli KEYS 'presence:*'` → **empty**.
+8. **Presence (ADR-023):** `redis-cli HGETALL presence` → one hash, timestamp values. `redis-cli KEYS 'presence:*'` → **empty**.
 9. **Freelancer chat:** blocked by default; admin grants `chat.access`; access appears.
 10. **Reconnection:** DevTools offline → banner, composer disabled → online → clears, catches up.
 11. **NFR measurement (§1.3), numbers not vibes:**
@@ -1001,11 +1015,11 @@ PRE-FLIGHT
   [ ] Notification producer census done — 12 MVP producers, 6 deferred with owning sprints
   [ ] Bot-persistence state determined (A/B/C) and recorded
   [ ] Socket.io Redis adapter status verified and recorded
-  [ ] ADR-017/018/019/020 committed
+  [ ] ADR-020/018/019/020 committed
   [ ] PRD §4.9 + IMPL-PLAN §13 patched 14 → 18
   [ ] THIRD-PARTY §5.2 presence key row patched to the hash
 
-BOT ARCHIVE (ADR-018) — landed BEFORE chat writes
+BOT ARCHIVE (ADR-021) — landed BEFORE chat writes
   [ ] User bot turn persists to messages with sender_id, BEFORE the model call
   [ ] Bot reply persists with sender_id NULL + parent_id = user turn id
   [ ] Ownership resolves via COALESCE(sender_id, parent.sender_id) (TESTED cross-user)
@@ -1014,7 +1028,7 @@ BOT ARCHIVE (ADR-018) — landed BEFORE chat writes
   [ ] No migration added; no sender_id backfill on bot rows
   [ ] Sprint 9's confirmation turns still archive correctly
 
-PRESENCE (ADR-020)
+PRESENCE (ADR-023)
   [ ] Single "presence" hash; value is a TIMESTAMP, not "1"
   [ ] 30s heartbeat; 60s freshness filter; expired fields swept on read (TESTED both)
   [ ] presence:changed fires on transition only, not per heartbeat
@@ -1022,7 +1036,7 @@ PRESENCE (ADR-020)
   [ ] NO KEYS/SCAN on any request path (grep clean)
   [ ] Old presence:* keys cleaned; deploy note added
 
-NOTIFICATIONS (ADR-017)
+NOTIFICATIONS (ADR-020)
   [ ] Registry mirrors the enum — set equality asserted BOTH directions (the drift guard)
   [ ] 12 MVP-producer types tested end-to-end
   [ ] 6 deferred types asserted as a named list with owning sprints
@@ -1042,7 +1056,7 @@ CHAT
   [ ] Content stored RAW; no dangerouslySetInnerHTML anywhere (grep clean)
   [ ] Typing throttled server-side and client-side; never persisted
 
-REAL-TIME (ADR-019)
+REAL-TIME (ADR-022)
   [ ] Every // TODO(Sprint 10) marker deleted (grep clean)
   [ ] Event→action table matches the ADR matrix exactly (TESTED per row)
   [ ] ⭐ Patch path issues NO refetch (TESTED in E2E with request interception)
@@ -1072,7 +1086,7 @@ TESTS + NFRs
 
 ```bash
 git add -A
-git commit -m "Sprint 10: chat + notifications + presence + all grid real-time subscriptions; bot archive attribution (ADR-018), presence hash (ADR-020), notification count 18 (ADR-017), patch-vs-invalidate cache strategy (ADR-019)"
+git commit -m "Sprint 10: chat + notifications + presence + all grid real-time subscriptions; bot archive attribution (ADR-021), presence hash (ADR-023), notification count 18 (ADR-020), patch-vs-invalidate cache strategy (ADR-022)"
 git push -u origin sprint-10-chat-notifications
 ```
 
@@ -1111,16 +1125,16 @@ Scroll anchoring is missing. Capture `scrollHeight` before the prepend and resto
 TanStack Query v5 requires `initialPageParam`. It is a runtime error, not a type error, which is why it survives typecheck.
 
 ### Users see their own messages twice
-Sender exclusion is missing. Use `socket.broadcast.to(room).emit(...)` server-side **and** ignore events whose `actorStaffId` matches the current user client-side. Both, per ADR-019 rule b.
+Sender exclusion is missing. Use `socket.broadcast.to(room).emit(...)` server-side **and** ignore events whose `actorStaffId` matches the current user client-side. Both, per ADR-022 rule b.
 
 ### After receiving a real-time cell update, the next edit 409s
-The patch didn't write the payload's new `version` into the cache. ADR-019 rule a — every patchable payload carries the version, and `setQueryData` must apply it. This presents as a backend bug and is not one.
+The patch didn't write the payload's new `version` into the cache. ADR-022 rule a — every patchable payload carries the version, and `setQueryData` must apply it. This presents as a backend bug and is not one.
 
 ### One holiday change leaves other staff columns stale
 Someone patched instead of invalidating. `attendance:holiday_added/removed` is **invalidate-only** — the H-01 cascade flips every staff column for that date and reverts logs, which no single-cell payload can express.
 
 ### Presence shows ghosts who closed their browser
-The hash value is `"1"` instead of a timestamp, or the freshness filter is missing. A hash field has no per-field TTL — the timestamp plus the 60s filter *is* the expiry mechanism (ADR-020).
+The hash value is `"1"` instead of a timestamp, or the freshness filter is missing. A hash field has no per-field TTL — the timestamp plus the 60s filter *is* the expiry mechanism (ADR-023).
 
 ### The notification coverage test can't pass — a type has no emitter
 Correct, and expected for the six deferred types. Do **not** invent an emitter. Assert the deferred list by name with owning sprints (STEP 8.1); it will fail when Sprint 11 adds `report_ready`, and updating it then is the intended workflow.
@@ -1129,7 +1143,7 @@ Correct, and expected for the six deferred types. Do **not** invent an emitter. 
 The badge is patching from the `notify:new` payload while the panel reads a separate query that was never seeded. Both must read the same cache entry.
 
 ### `/bot` history disappears after 12 hours
-The DB fallback behind `GET /v1/bot/session/current` isn't wired (STEP 2.3). Redis first, then the `COALESCE` ownership query. Without the fallback, ADR-018 makes the archive attributable but still unreachable.
+The DB fallback behind `GET /v1/bot/session/current` isn't wired (STEP 2.3). Redis first, then the `COALESCE` ownership query. Without the fallback, ADR-021 makes the archive attributable but still unreachable.
 
 ### A freelancer with `chat.access` granted still gets 403
 The `perms:{staffId}` cache (5-min TTL). Confirm invalidation fires on the permission write — and note that 8.1 STEP 3.4 deliberately deferred the *push* to open sessions, so their next request picks it up, not their current page.
