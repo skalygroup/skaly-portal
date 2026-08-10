@@ -17,10 +17,20 @@
 > to the wrong document. Same drift as Sprints 11 and 13; same resolution:
 > `docs/decisions/` wins over a guide's shorthand.
 >
-> Untouched, because they are not this drift: the five `ADR-005` mentions (that ruling
-> lives in `docs/decisions/DECISIONS.md`, not as a numbered ADR file), and one
-> retention/`parent_id` reference in the close-out that may belong to ADR-030 rather
-> than 021 — flagged rather than guessed.
+> Three further corrections, each a different problem rather than the same shift:
+>
+> - **`ADR-005` never existed.** There is no ADR-004 or ADR-005 file; the "no fourth
+>   namespace" ruling is a lightweight entry in `docs/decisions/DECISIONS.md`
+>   (*Bot streaming namespace*). Every mention now points there, so a reader looking
+>   for the rule can actually find it.
+> - **The retention bullet held TWO references, only one of which was wrong.** The
+>   12-month delete shape is **ADR-030** (`parent_id` keeps `ON DELETE NO ACTION`,
+>   recorded pre-Sprint 11, built Sprint 12) — it is the FK addendum to ADR-021 §4,
+>   not part of 021 itself. The second mention in the same bullet, about `SET NULL`
+>   re-orphaning bot replies, IS ADR-021 and is deliberately unchanged.
+> - **`docs/adr/` is not a real path.** The READ FIRST table pointed at it; ADRs live
+>   in `docs/decisions/`. Other mentions of that path elsewhere in this guide are
+>   still uncorrected.
 
 ---
 
@@ -96,7 +106,7 @@ Ruled at the pre-Sprint-10 gate; **inputs** to this sprint. STEP 1 records the f
 | `docs/10-INFRA-DEPLOYMENT.md` | §10 (Socket.io Redis adapter — the scaling prerequisite) | Verify it's actually wired |
 | `docs/06-IMPLEMENTATION-PLAN.md` | §13 | Sprint 10 checklist (**patch its "14"**) |
 | `docs/12-TESTING-STRATEGY.md` | Real-time + concurrency sections | The tests you must reproduce |
-| `docs/adr/` | **ADR-005, 006, 010, 011, 013**, + **017/018/019/020** (created STEP 1) | The rulings this sprint must not violate |
+| `docs/decisions/` | **ADR-006, 010, 011, 013** + `DECISIONS.md` § Bot streaming namespace, + **ADR-020/021/022/023** (created STEP 1) | The rulings this sprint must not violate |
 
 ---
 
@@ -105,7 +115,7 @@ Ruled at the pre-Sprint-10 gate; **inputs** to this sprint. STEP 1 records the f
 1. **Notification count is 18, not 14** (schema enum + TRD §10.1). PRD FR-NOTIF-02 and Impl-Plan §13 are stale and get patched this sprint. Do not write a test asserting 14.
 2. **There is no generic "new chat message" notification type.** The 18 include `mention` and `new_comment` — not a per-message notify. Chat messages deliver via socket only; **only @mentions create a notification row.** If you find yourself adding an enum value for chat messages, stop — that is scope drift, and the enum is a CHECK constraint that would need a migration.
 3. **ADR-010's amendment already pulled the socket *client* into Sprint 8.** Sprint 10 attaches *consumers*; it does not build the client. Do not create a second socket singleton.
-4. **ADR-005: no fourth namespace.** Bot streaming shares `/ws/notify`. Chat uses the existing TRD §8 namespaces — verify which before wiring, and do not add one for chat.
+4. **No fourth namespace** (`DECISIONS.md` § Bot streaming namespace). Bot streaming shares `/ws/notify`. Chat uses the existing TRD §8 namespaces — verify which before wiring, and do not add one for chat.
 5. **`messages.sender_id` is NULL for bot rows by design** (schema comment) — ADR-021 does **not** change that. It adds the `parent_id` link and the `bot_sessions` envelope around it. Do not "fix" the schema comment by backfilling `sender_id` on bot rows; ownership resolves by join.
 6. **`softDelete` lives in `lib/queries.ts`, not on `BaseService`** (as-built correction from Sprint 9). Message deletion uses that helper; `softDeletable` remains the separate SELECT filter.
 7. **Freelancer chat is a *permission* check, not a role check.** Auth-Matrix §3 marks `/chat` 🔧 for freelancers — default-denied, admin-grantable via the `chat.access` key (§6.2). Route guards must call `PermissionService`, not `requireRole`. This is the key's first real use.
@@ -722,7 +732,7 @@ pnpm typecheck
 
 > **WHERE WE ARE**
 >
-> Sprint 10, STEP 7. Chat routes and socket events. Read `docs/07-API-CONTRACT.md`, `docs/02-TRD.md` §8 (**namespaces and rooms — use the existing ones; ADR-005 forbids a new namespace**), `docs/08-AUTH-MATRIX.md` §3.
+> Sprint 10, STEP 7. Chat routes and socket events. Read `docs/07-API-CONTRACT.md`, `docs/02-TRD.md` §8 (**namespaces and rooms — use the existing ones; `DECISIONS.md` § Bot streaming namespace forbids a new one**), `docs/08-AUTH-MATRIX.md` §3.
 >
 > **WHAT TO BUILD**
 >
@@ -741,7 +751,7 @@ pnpm typecheck
 >    - **Sender exclusion:** use `socket.broadcast.to(room).emit(...)` so the author doesn't receive their own message back (ADR-022 rule b). The author already rendered it optimistically.
 > 4. **Route tests:** every role's access matches Auth-Matrix §3 including the freelancer override both ways; cursor pagination; `.strict()` rejects unknown fields; envelopes per §1.1.
 >
-> **RULES:** no new namespace (ADR-005). Typing is never written to the DB. The route does not filter — the service does.
+> **RULES:** no new namespace (`DECISIONS.md` § Bot streaming namespace). Typing is never written to the DB. The route does not filter — the service does.
 >
 > Show me the routes, then the socket handlers with sender exclusion.
 
@@ -1063,7 +1073,7 @@ REAL-TIME (ADR-022)
   [ ] ⭐ Invalidate path DOES refetch (H-01 holiday cascade)
   [ ] Patch payloads carry the new version; next edit does not 409 spuriously (TESTED)
   [ ] Sender excluded server-side (socket.broadcast) AND client-side (actorStaffId)
-  [ ] No new namespace (ADR-005)
+  [ ] No new namespace (DECISIONS.md § Bot streaming namespace)
 
 FRONTEND
   [ ] useInfiniteQuery has initialPageParam (v5 requirement)
@@ -1108,7 +1118,7 @@ Open the PR to `main`; CI fully green before merge. Merge, then `git checkout ma
 
 - **The 5-minute permissions cache vs. the Settings → Permissions UI.** `perms:{staffId}` has a 5-minute TTL with invalidation on write (Auth-Matrix §6.3). Sprint 11 gives admins a UI to toggle permissions, so they will change one and immediately test it. Confirm the invalidation actually fires on every write path the new UI uses — and note 8.1 STEP 3.4 deliberately deferred the *push* event, so the affected user's open session still won't learn about it until their next request. Decide whether Sprint 11 adds that push now that there's a UI making changes routine.
 
-- **⚠️ The 12-month retention job's delete shape — ruled in ADR-021's addendum, built in Sprint 12.** Sprint 10's `parent_id` link makes deletion order matter, and the test teardowns already produced a working reproduction of the failure. `messages_parent_id_fkey` is `NO ACTION`, which is **not** `RESTRICT`: Postgres checks it at *statement end*, so a single `DELETE … WHERE id IN (…)` removing parent and children **together** already works with no schema change. What fails is two statements, or parent-first. `SET NULL` is rejected (it re-orphans bot replies — the exact bug ADR-021 fixes); `CASCADE` is rejected (`parent_id` is also the chat thread link, so one hard-deleted parent could take replies still inside their own retention window — data loss adopted to solve an ordering problem). Keep `NO ACTION`; make the job **session-scoped and single-statement**: bot rows age out by `bot_sessions.last_activity_at` so a turn-pair is never split across the cutoff, and chat threads — which have no session envelope — exclude any parent whose replies are newer than the cutoff. **Write the job's test from the teardown's fix** before it expires from memory.
+- **⚠️ The 12-month retention job's delete shape — ruled in **ADR-030** — the `parent_id` FK addendum to ADR-021 §4 — built in Sprint 12.** Sprint 10's `parent_id` link makes deletion order matter, and the test teardowns already produced a working reproduction of the failure. `messages_parent_id_fkey` is `NO ACTION`, which is **not** `RESTRICT`: Postgres checks it at *statement end*, so a single `DELETE … WHERE id IN (…)` removing parent and children **together** already works with no schema change. What fails is two statements, or parent-first. `SET NULL` is rejected (it re-orphans bot replies — the exact bug ADR-021 fixes); `CASCADE` is rejected (`parent_id` is also the chat thread link, so one hard-deleted parent could take replies still inside their own retention window — data loss adopted to solve an ordering problem). Keep `NO ACTION`; make the job **session-scoped and single-statement**: bot rows age out by `bot_sessions.last_activity_at` so a turn-pair is never split across the cutoff, and chat threads — which have no session envelope — exclude any parent whose replies are newer than the cutoff. **Write the job's test from the teardown's fix** before it expires from memory.
 
 - **Still deferred, on schedule:** comment system + `new_comment` producer (Sprint 12), attachment orphan cron + `coming_shoot_date` rollover recompute (Sprint 12), rollover + its four notification types (Sprint 12–13), Socket.io Redis adapter verification if STEP 1.5 found it missing (before any second API instance).
 
