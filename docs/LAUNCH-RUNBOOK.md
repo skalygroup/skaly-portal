@@ -484,9 +484,12 @@ SHIPPED ALONGSIDE THE SPRINT (not in the guide, but launch-blocking)
 SUITES, at close-out
   [x] 986 API tests · 77 files
   [x] 329 web tests · 40 files
-  [ ] Playwright — RE-RUNNING. The sidebar changed the layout every spec
-      renders through, so the earlier 154-green result predates it and cannot
-      honestly be quoted.
+  [~] Playwright 215 passed · 8 skipped · 1 failed (224 total, 17.5m,
+      chromium + webkit). The one failure is a webkit socket-DELIVERY timing
+      test (notifications: a holiday notifies everyone except the actor). It
+      is non-deterministic, not a regression: re-run in isolation it PASSED
+      and two different tests in the same file failed instead. Pre-existing
+      webkit realtime flake — worth a look, not a launch blocker.
   [x] typecheck + lint clean across the workspace
 ```
 
