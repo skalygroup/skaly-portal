@@ -3,8 +3,12 @@
 import * as Icons from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { Suspense } from 'react';
 
 import type { ModuleNavItem } from '@/lib/modules';
+
+import { PeriodSelector } from '@/components/shared/period-selector';
+
 
 /**
  * The portal navigation sidebar (UIUX §4.1).
@@ -48,6 +52,13 @@ export function AppSidebar({ items }: { items: ModuleNavItem[] }) {
         <span className="xl:hidden">S</span>
         <span className="hidden xl:inline">SKALY</span>
       </Link>
+
+      {/* §6.1: top of the sidebar, below the logo. Suspense because it reads
+          ?period= via useSearchParams, which Next 15 requires a boundary for —
+          without one the whole route opts out of static rendering. */}
+      <Suspense fallback={<div className="mb-3 h-8" />}>
+        <PeriodSelector />
+      </Suspense>
 
       {items.map((item) => {
         // Prefix match, so /settings/staff keeps Settings lit and /tasks?period=…

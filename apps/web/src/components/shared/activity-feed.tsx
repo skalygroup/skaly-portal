@@ -5,7 +5,7 @@ import { format, parseISO } from 'date-fns';
 import Link from 'next/link';
 
 import { api } from '@/lib/api';
-import { currentIstPeriod } from '@/lib/hooks/use-month-context';
+import { useMonthContext } from '@/lib/hooks/use-month-context';
 
 /**
  * Home activity feed (UIUX §5 right column, ADR-015).
@@ -15,9 +15,11 @@ import { currentIstPeriod } from '@/lib/hooks/use-month-context';
  * It is NOT the audit log: unmapped audit rows are dropped server-side, so an
  * empty feed is a real answer, not a missing template.
  *
- * The period is the current IST month rather than a URL param — /home has no
- * month switcher, and reading `?period=` here would force a Suspense boundary
- * on the page for a value that never changes.
+ * The period FOLLOWS the sidebar's selector (§6.1). It was pinned to the current
+ * IST month on the grounds that "/home has no month switcher" — true until the
+ * selector landed in the shared sidebar, and now every portal route has one. A
+ * feed still showing August under a banner reading "Viewing 2026-07" is the
+ * inconsistency that argument was protecting against in the first place.
  */
 interface FeedItem {
   id: string;
@@ -30,7 +32,7 @@ interface FeedItem {
 const FEED_LIMIT = 10;
 
 export function ActivityFeed() {
-  const period = currentIstPeriod();
+  const { period } = useMonthContext();
 
   const { data: items = [], isPending, isError } = useQuery({
     queryKey: ['activity-feed', period],

@@ -1,8 +1,11 @@
+import { Suspense } from 'react';
+
 import { AppSidebar } from '@/components/shared/app-sidebar';
 import { CommentPanelHost } from '@/components/shared/comment-panel';
 import { ConnectionBanner } from '@/components/shared/connection-banner';
 import { MonthLockSync } from '@/components/shared/month-lock-sync';
 import { NotificationBell } from '@/components/shared/notification-bell';
+import { PastPeriodBanner } from '@/components/shared/period-selector';
 import { PermissionSync } from '@/components/shared/permission-sync';
 import { RolloverBanner } from '@/components/shared/rollover-banner';
 import { SearchPalette } from '@/components/shared/search-palette';
@@ -42,13 +45,13 @@ export default async function PortalLayout({ children }: { children: React.React
           scrolling <main>; a grid would put the nav inside that scroll context
           and it would slide away up the page on a long attendance grid. */}
       <div className="hidden min-h-screen pl-14 md:block xl:pl-[220px]">
-        {/* The topbar UIUX §16 assumes ("panel slides down from topbar") did not
-            exist — pages render their own <main> and the only shared chrome was the
-            CMD+K palette. This is the minimum that makes the spec true: one row, one
-            bell, mounted ONCE like SearchPalette so there is a single socket
-            subscription and a single notifications cache entry for the whole app.
-            Nav and the topbar search icon are deliberately NOT invented here; they
-            belong to Sprint 11's Settings/Dashboard chrome. */}
+        {/* The shared chrome. The bell is mounted ONCE here (like SearchPalette)
+            so the whole app has a single socket subscription and a single
+            notifications cache entry.
+            The nav was deferred here through Sprints 10–12 as "Sprint 11's
+            Settings/Dashboard chrome" and never built, which left eleven working
+            modules reachable only by typing their URLs. It exists now (§4.1),
+            with the period selector §6.1 puts inside it. */}
         {/* Non-blocking, fixed to the top of the viewport (Error-Handling §5.4). */}
         <ConnectionBanner />
         {/* Informational only (NFR §3.1 — the API stays fully operational through
@@ -68,6 +71,11 @@ export default async function PortalLayout({ children }: { children: React.React
             every portal route, and a per-page copy would drift the moment one
             page forgot it. Items are pre-filtered above. */}
         <AppSidebar items={modules} />
+        {/* §6.1's gold bar. In the CONTENT column, not the sidebar — it has to sit
+            over the grid that looks stale, which is where the question gets asked. */}
+        <Suspense fallback={null}>
+          <PastPeriodBanner />
+        </Suspense>
         <header className="flex h-14 items-center justify-end gap-2 px-8">
           <NotificationBell />
         </header>
