@@ -1,3 +1,4 @@
+import { Analytics } from '@vercel/analytics/next';
 import { Big_Shoulders, DM_Sans, DM_Mono } from 'next/font/google';
 
 import type { Metadata } from 'next';
@@ -53,6 +54,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body suppressHydrationWarning>
         <CursorFollow />
         <Providers>{children}</Providers>
+        {/* Same-origin: script at /_vercel/insights/script.js, beacon to
+            /_vercel/insights/view — covered by the existing script-src 'self'
+            and connect-src 'self' in vercel.json. No CSP change needed. */}
+        <Analytics />
       </body>
     </html>
   );
