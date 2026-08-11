@@ -1,25 +1,4 @@
 {
-  "$comment": [
-    "CSP is ENFORCING as of Sprint 13 (audit H-08). It shipped Report-Only, which reports",
-    "to nobody — there is no report-uri here and never was, so Report-Only was a header that",
-    "did precisely nothing. Enforcing it is the whole point of the item.",
-    "",
-    "script-src keeps 'unsafe-inline' and that is a real hole, named rather than hidden:",
-    "the App Router inlines its hydration payload (self.__next_f.push) into every document,",
-    "so the alternatives are a per-request nonce from middleware — which opts every page out",
-    "of static rendering — or this. What makes it an acceptable one HERE is that the app has",
-    "no dangerouslySetInnerHTML anywhere (asserted by a repo grep in STEP 8) and renders every",
-    "user string as a text node, so there is no injection point for the directive to backstop.",
-    "ponytail: 'unsafe-inline' on script-src; move to a middleware nonce if any page ever",
-    "renders user-controlled markup.",
-    "",
-    "'unsafe-eval' is GONE. Next needs it for the dev overlay's source mapping, never in a",
-    "production build, and it is the directive that turns an XSS into arbitrary code.",
-    "",
-    "connect-src must carry the API over BOTH https and wss — the socket is a separate origin",
-    "scheme and omitting wss: breaks every real-time surface silently, which is the classic",
-    "way a CSP 'passes' review and breaks the app after deploy."
-  ],
   "headers": [
     {
       "source": "/(.*)",

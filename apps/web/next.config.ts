@@ -24,6 +24,37 @@ const r2Hostname = r2PublicUrl ? new URL(r2PublicUrl).hostname : null;
  * directories"). The prod build consumes @skaly/shared as a normal CJS
  * dependency — no hack needed (see commit acf9f6f).
  */
+/**
+ * Security headers live in `vercel.json`, not here. That file is strict JSON and
+ * Vercel's schema rejects unknown keys — a `$comment` array in it failed every
+ * deployment with "should NOT have additional property `$comment`" before the
+ * build even started, so the reasoning behind the CSP lives here instead.
+ *
+ * CSP is ENFORCING as of Sprint 13 (audit H-08). It shipped Report-Only, which
+ * reports to nobody — there is no report-uri and never was, so Report-Only was a
+ * header that did precisely nothing. Enforcing it is the whole point of the item.
+ *
+ * script-src keeps 'unsafe-inline' and that is a real hole, named rather than
+ * hidden: the App Router inlines its hydration payload (self.__next_f.push) into
+ * every document, so the alternatives are a per-request nonce from middleware —
+ * which opts every page out of static rendering — or this. What makes it an
+ * acceptable one HERE is that the app has no dangerouslySetInnerHTML anywhere
+ * (asserted by a repo grep in STEP 8) and renders every user string as a text
+ * node, so there is no injection point for the directive to backstop.
+ * ponytail: 'unsafe-inline' on script-src; move to a middleware nonce if any page
+ * ever renders user-controlled markup.
+ *
+ * 'unsafe-eval' is GONE. Next needs it for the dev overlay's source mapping, never
+ * in a production build, and it is the directive that turns an XSS into arbitrary
+ * code.
+ *
+ * connect-src must carry the API over BOTH https and wss — the socket is a separate
+ * origin scheme and omitting wss: breaks every real-time surface silently, which is
+ * the classic way a CSP "passes" review and breaks the app after deploy.
+ *
+ * Vercel Web Analytics needs no CSP entry: its script (/_vercel/insights/script.js)
+ * and beacon (/_vercel/insights/view) are both same-origin.
+ */
 export default (phase: string): NextConfig => {
   const isDev = phase === PHASE_DEVELOPMENT_SERVER;
 
