@@ -54,9 +54,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body suppressHydrationWarning>
         <CursorFollow />
         <Providers>{children}</Providers>
-        {/* Same-origin: script at /_vercel/insights/script.js, beacon to
-            /_vercel/insights/view — covered by the existing script-src 'self'
-            and connect-src 'self' in vercel.json. No CSP change needed. */}
+        {/* Both the script and the beacon are same-origin — Vercel serves them
+            under a rotating hashed prefix (/<hash>/script.js, /<hash>/view), so
+            script-src 'self' and connect-src 'self' in vercel.json already cover
+            them. No CSP change needed; verified against the deployed preview. */}
         <Analytics />
       </body>
     </html>

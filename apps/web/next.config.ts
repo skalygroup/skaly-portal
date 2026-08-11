@@ -52,8 +52,9 @@ const r2Hostname = r2PublicUrl ? new URL(r2PublicUrl).hostname : null;
  * origin scheme and omitting wss: breaks every real-time surface silently, which is
  * the classic way a CSP "passes" review and breaks the app after deploy.
  *
- * Vercel Web Analytics needs no CSP entry: its script (/_vercel/insights/script.js)
- * and beacon (/_vercel/insights/view) are both same-origin.
+ * Vercel Web Analytics needs no CSP entry: its script and beacon are both served
+ * same-origin under a rotating hashed prefix (/<hash>/script.js, /<hash>/view),
+ * not from a third-party host.
  */
 export default (phase: string): NextConfig => {
   const isDev = phase === PHASE_DEVELOPMENT_SERVER;
