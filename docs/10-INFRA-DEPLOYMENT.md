@@ -316,6 +316,20 @@ app.get('/v1/health', async (_, reply) => {
 });
 ```
 
+**`services.auth` — reported, never enforced.** The live endpoint also probes
+`SUPABASE_JWKS_URL` and reports `auth: { ok }`. It exists because a dead Supabase
+project took down every sign-in *and* every token verification while this check
+still said `"ok"` — it only watched Postgres and Redis, so nothing in the stack
+reported that the portal could not authenticate anyone.
+
+It deliberately does **not** affect `status` or the HTTP code. `healthcheckPath`
+points here with `restartPolicyType = "ON_FAILURE"` (§4), so a 503 would restart
+the container on a loop for the length of a third-party outage — killing
+in-flight requests and report renders to fix nothing. Alert on
+`services.auth.ok === false`; let the orchestrator keep its hands off. The probe
+also runs off the request path (30s TTL, fire-and-forget) so a slow auth host
+cannot add latency to the healthcheck itself.
+
 ---
 
 ## 9. VERCEL CONFIGURATION
