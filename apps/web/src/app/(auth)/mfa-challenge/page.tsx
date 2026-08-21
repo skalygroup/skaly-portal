@@ -11,6 +11,7 @@ import { AuthCanvasCard } from '@/components/auth/auth-canvas-card';
 import { FormBanner } from '@/components/auth/form-controls';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 import { api, ApiError } from '@/lib/api';
+import { authErrorMessage } from '@/lib/auth-errors';
 import { setRecoveryNotice } from '@/lib/recovery-notice';
 import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
@@ -66,8 +67,15 @@ export default function MfaChallengePage() {
       const { data, error } = await supabase.auth.mfa.listFactors();
       const totp = data?.totp?.[0];
       if (error || !totp) {
+        // A transport failure is not a missing factor. If the auth host never
+        // answered, telling someone whose account is fine to go get their MFA
+        // reset sends them to an admin for a problem they do not have — so only
+        // claim "no authenticator" when the call actually came back.
         setLoadError(
-          'We couldn’t find an authenticator on your account. Ask an admin to reset your MFA.',
+          authErrorMessage(
+            error,
+            'We couldn’t find an authenticator on your account. Ask an admin to reset your MFA.',
+          ),
         );
         return;
       }
@@ -106,8 +114,8 @@ export default function MfaChallengePage() {
         }
         // Session is now aal2; the middleware will pass.
         router.push('/');
-      } catch {
-        setVerifyError('Something went wrong verifying that code. Try again.');
+      } catch (err) {
+        setVerifyError(authErrorMessage(err, 'Something went wrong verifying that code. Try again.'));
         setCode('');
       } finally {
         setVerifying(false);
@@ -144,7 +152,7 @@ export default function MfaChallengePage() {
           ? 'Too many failed attempts. Try again in 15 minutes.'
           : code === 'MFA_FAILED'
             ? 'That recovery code isn’t valid, or it has already been used.'
-            : 'Something went wrong. Try again.',
+            : authErrorMessage(err),
       );
       setRecoveryCode('');
     } finally {

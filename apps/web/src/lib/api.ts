@@ -39,18 +39,26 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
   } = await supabase.auth.getSession();
   const token = session?.access_token;
 
-  return fetch(`${process.env.NEXT_PUBLIC_API_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      // Let the browser set the multipart boundary for FormData uploads.
-      ...(init?.body && !(init.body instanceof FormData)
-        ? { 'content-type': 'application/json' }
-        : {}),
-    },
-    credentials: 'include',
-  });
+  try {
+    return await fetch(`${process.env.NEXT_PUBLIC_API_URL}${path}`, {
+      ...init,
+      headers: {
+        ...(init?.headers ?? {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        // Let the browser set the multipart boundary for FormData uploads.
+        ...(init?.body && !(init.body instanceof FormData)
+          ? { 'content-type': 'application/json' }
+          : {}),
+      },
+      credentials: 'include',
+    });
+  } catch {
+    // fetch() rejects only when no response ever arrived — API down, DNS gone,
+    // offline, preflight refused. Every caller switches on ApiError, so letting
+    // a bare TypeError through drops them all into their generic branch and the
+    // user is told to retry a server that is not there. Give it a code instead.
+    throw new ApiError(0, 'NETWORK_ERROR', 'Cannot reach the server.');
+  }
 }
 
 /**

@@ -23,6 +23,7 @@ import {
   FormBanner,
 } from '@/components/auth/form-controls';
 import { api, ApiError } from '@/lib/api';
+import { authErrorMessage } from '@/lib/auth-errors';
 import { currentIstDate } from '@/lib/hooks/use-month-context';
 import {
   buildSignupFormData,
@@ -145,7 +146,9 @@ export default function OAuthCompletePage() {
         setAlreadyExists(true);
         return;
       }
-      setError('root', { message: 'Something went wrong submitting your request. Try again.' });
+      setError('root', {
+        message: authErrorMessage(err, 'Something went wrong submitting your request. Try again.'),
+      });
       return;
     }
 

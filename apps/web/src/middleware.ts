@@ -3,6 +3,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import type { StaffMeResponse } from '@skaly/shared/schemas/auth';
 
+import { isAuthTransportError } from '@/lib/auth-errors';
+
 /**
  * Edge middleware — the server-side gate for every protected route (Sprint 1
  * STEP 14, IMPL-PLAN §4.2). Client-side guards are belt-and-suspenders; this is
@@ -50,10 +52,29 @@ export async function middleware(request: NextRequest) {
   // a. Refresh + validate the session against the auth server.
   const {
     data: { user },
+    error: userError,
   } = await supabase.auth.getUser();
 
-  // b. No session → login.
+  /**
+   * b. No session → login.
+   *
+   * ⚠️ "The auth host never answered" is NOT "you have no session". getUser()
+   * reports both as `user === null`, so a blip used to bounce a signed-in user
+   * to /login — most visibly right after the TOTP challenge, where clearing MFA
+   * correctly and landing back on the login page looks like the code was
+   * rejected.
+   *
+   * Fail open ONLY when the request actually carries a session cookie to
+   * preserve, and only for a transport failure. This grants no data: the API
+   * verifies the JWT on every call and the server-side fetchers forward the same
+   * bearer, so an unverifiable cookie renders a shell with nothing in it. The
+   * alternative — discarding a valid session because a third party was briefly
+   * unreachable — is the worse failure, and it is the one users actually hit.
+   */
   if (!user) {
+    if (userError && isAuthTransportError(userError) && hasSessionCookie(request)) {
+      return response;
+    }
     return redirectTo(request, response, '/login');
   }
 
@@ -71,9 +92,27 @@ export async function middleware(request: NextRequest) {
     });
 
     if (res.status === 401) {
-      // ACCOUNT_DEACTIVATED / NO_STAFF_ROW (both 401) — revoke and bounce out.
-      await supabase.auth.signOut();
-      return redirectTo(request, response, '/login', 'error=deactivated');
+      /**
+       * Only a real authorisation VERDICT may destroy the session.
+       *
+       * This used to sign out on any 401 — but the API also answers 401 with
+       * INVALID_TOKEN when IT could not verify the token, which during a
+       * Supabase outage meant every request. A third-party blip therefore
+       * revoked good sessions and told people their account was deactivated.
+       * (The API now answers 503 for that case — see auth-verify.ts — so this is
+       * also the client half of the same fix, and it keeps an older API safe.)
+       */
+      const code = await res
+        .json()
+        .then((b) => b?.error?.code as string | undefined)
+        .catch(() => undefined);
+
+      if (code === 'ACCOUNT_DEACTIVATED' || code === 'NO_STAFF_ROW') {
+        await supabase.auth.signOut();
+        return redirectTo(request, response, '/login', 'error=deactivated');
+      }
+      // Not attributable to this user's standing — fail open like a 5xx.
+      return response;
     }
 
     if (res.ok) {
@@ -103,6 +142,19 @@ export async function middleware(request: NextRequest) {
 
   // e. Pass, carrying any refreshed Set-Cookie headers.
   return response;
+}
+
+/**
+ * Does the request carry a Supabase session cookie? @supabase/ssr names them
+ * `sb-<project-ref>-auth-token`, chunked as `.0`, `.1`, … past 4KB.
+ *
+ * Used only to decide whether there is a session worth preserving through an
+ * auth-server outage — never as proof of one. The API is the boundary.
+ */
+function hasSessionCookie(request: NextRequest): boolean {
+  return request.cookies
+    .getAll()
+    .some((c) => c.name.startsWith('sb-') && c.name.includes('-auth-token'));
 }
 
 /**

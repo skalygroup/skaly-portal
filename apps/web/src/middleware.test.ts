@@ -32,6 +32,20 @@ function req(path: string) {
   return new NextRequest(new URL(path, 'http://localhost:3000'));
 }
 
+/** Same, but carrying a Supabase session cookie — a session worth preserving. */
+function reqWithSession(path: string) {
+  return new NextRequest(new URL(path, 'http://localhost:3000'), {
+    headers: { cookie: 'sb-testproject-auth-token=base64-abc' },
+  });
+}
+
+/** What auth-js hands back when the auth host never answered. */
+function transportFailure() {
+  const err = new Error('Failed to fetch');
+  err.name = 'AuthRetryableFetchError';
+  return err;
+}
+
 /** A minimal unsigned JWT carrying just the `aal` claim — the middleware reads
  *  the claim without verifying the signature. */
 function jwtWithAal(aal: string): string {
@@ -177,6 +191,86 @@ describe('middleware', () => {
 
     expect(res.status).toBe(307);
     expect(res.headers.get('location')).toContain('/mfa-challenge');
+  });
+
+  /**
+   * ── A third-party blip must not read as a logout ──────────────────────
+   *
+   * The reported bug: enter the TOTP code, get sent back to /login. Two
+   * independent paths did that, and both mistook "could not reach the auth
+   * server" for "this user is not allowed in".
+   */
+  describe('an unreachable auth server is not a logout', () => {
+    it('does NOT bounce a cookie-carrying session to /login when getUser() fails in transit', async () => {
+      auth.getUser.mockResolvedValue({ data: { user: null }, error: transportFailure() });
+
+      const res = await middleware(reqWithSession('/'));
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('location')).toBeNull();
+      expect(auth.signOut).not.toHaveBeenCalled();
+    });
+
+    it('still sends a request with NO session cookie to /login on the same failure', async () => {
+      auth.getUser.mockResolvedValue({ data: { user: null }, error: transportFailure() });
+
+      const res = await middleware(req('/'));
+
+      expect(res.status).toBe(307);
+      expect(res.headers.get('location')).toContain('/login');
+    });
+
+    it('still sends a genuinely session-less request to /login (no error at all)', async () => {
+      auth.getUser.mockResolvedValue({ data: { user: null }, error: null });
+
+      const res = await middleware(reqWithSession('/'));
+
+      expect(res.status).toBe(307);
+      expect(res.headers.get('location')).toContain('/login');
+    });
+
+    it('does NOT sign out on a 401 INVALID_TOKEN — the API could not verify, that is not a verdict', async () => {
+      auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } });
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+        meResponse(401, { error: { code: 'INVALID_TOKEN' } }),
+      );
+
+      const res = await middleware(req('/'));
+
+      expect(auth.signOut).not.toHaveBeenCalled();
+      expect(res.status).toBe(200);
+      expect(res.headers.get('location')).toBeNull();
+    });
+
+    it('does NOT sign out on a 503 AUTH_UNAVAILABLE from the API', async () => {
+      auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } });
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+        meResponse(503, { error: { code: 'AUTH_UNAVAILABLE' } }),
+      );
+
+      const res = await middleware(req('/'));
+
+      expect(auth.signOut).not.toHaveBeenCalled();
+      expect(res.status).toBe(200);
+    });
+
+    /**
+     * The exact reported symptom: an aal2 session, freshly stepped up by a
+     * correct TOTP code, must never land back on /login because /me blipped.
+     */
+    it('keeps a just-verified aal2 admin in the portal when /me answers 503', async () => {
+      auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } });
+      auth.getSession.mockResolvedValue(sessionWith(jwtWithAal('aal2')));
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+        meResponse(503, { error: { code: 'AUTH_UNAVAILABLE' } }),
+      );
+
+      const res = await middleware(reqWithSession('/'));
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('location')).toBeNull();
+      expect(auth.signOut).not.toHaveBeenCalled();
+    });
   });
 
   it('lets an enrolled member through', async () => {

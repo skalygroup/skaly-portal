@@ -15,6 +15,7 @@ import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api';
+import { authErrorMessage } from '@/lib/auth-errors';
 import { createClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
@@ -47,14 +48,10 @@ export default function LoginPage() {
   async function onSubmit({ email, password }: LoginEmailInput) {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
-      // Supabase returns generic messages; map the known ones to friendly copy.
-      if (error.message.includes('Invalid login credentials')) {
-        setError('root', { message: 'Email or password is incorrect.' });
-      } else if (error.message.includes('Email not confirmed')) {
-        setError('root', { message: 'Please confirm your email before logging in.' });
-      } else {
-        setError('root', { message: 'Something went wrong. Try again.' });
-      }
+      // Supabase returns generic messages; authErrorMessage maps the known ones
+      // to friendly copy — including the unreachable-host case, which used to
+      // land on "Something went wrong" and leave the user retrying blind.
+      setError('root', { message: authErrorMessage(error) });
       return;
     }
 
@@ -93,6 +90,12 @@ export default function LoginPage() {
         });
         return;
       }
+      if (err instanceof ApiError && err.code === 'NETWORK_ERROR') {
+        setError('root', {
+          message: 'Signed in, but the portal API is not responding. Try again in a moment.',
+        });
+        return;
+      }
       setError('root', { message: 'Could not load your profile. Try again.' });
     }
   }
@@ -106,7 +109,9 @@ export default function LoginPage() {
     if (error) {
       // On success the browser navigates away to Google; only reset on failure.
       setOauthPending(false);
-      setError('root', { message: 'Could not start Google sign-in. Try again.' });
+      setError('root', {
+        message: authErrorMessage(error, 'Could not start Google sign-in. Try again.'),
+      });
     }
   }
 

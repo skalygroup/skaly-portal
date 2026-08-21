@@ -22,6 +22,7 @@ import {
   FormBanner,
 } from '@/components/auth/form-controls';
 import { api, ApiError } from '@/lib/api';
+import { authErrorMessage } from '@/lib/auth-errors';
 import { currentIstDate } from '@/lib/hooks/use-month-context';
 import { createClient } from '@/lib/supabase/client';
 
@@ -105,7 +106,7 @@ function InviteInner() {
           return;
         }
       }
-      setError('root', { message: 'Could not accept the invite. Try again.' });
+      setError('root', { message: authErrorMessage(err, 'Could not accept the invite. Try again.') });
       return;
     }
 

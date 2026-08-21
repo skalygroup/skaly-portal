@@ -26,6 +26,22 @@ function forbidden(reply: FastifyReply, code: string, message: string) {
 }
 
 /**
+ * 503 — we could not REACH the auth server to check the token.
+ *
+ * Deliberately not 401. A 401 is an authorisation verdict, and the web
+ * middleware acts on one destructively: it calls signOut() and redirects to
+ * /login?error=deactivated. Reporting an unreachable JWKS as 401 therefore
+ * revoked valid sessions during a third-party outage and told people their
+ * account was deactivated — including users who had just cleared TOTP, who
+ * landed straight back on the login page.
+ *
+ * The request still fails closed (no data is served); only the session survives.
+ */
+function authUnavailable(reply: FastifyReply, code: string, message: string) {
+  return reply.status(503).send({ error: { code, message } });
+}
+
+/**
  * preHandler factory: gate a route to one of the given roles. Runs AFTER
  * verifyJwt (which populates request.user).
  *
@@ -77,6 +93,11 @@ async function authPlugin(fastify: FastifyInstance) {
       staff = request.user ?? (await verifySupabaseToken(token));
     } catch (err) {
       if (err instanceof TokenVerificationError) {
+        // Infrastructure, not authorisation — must not read as a rejected token.
+        if (err.code === 'AUTH_UNAVAILABLE') {
+          request.log.error({ err }, 'auth: could not reach the auth server to verify a token');
+          return authUnavailable(reply, err.code, err.message);
+        }
         // INVALID_TOKEN (bad signature / no sub) or NO_STAFF_ROW.
         return unauthorized(reply, err.code, err.message);
       }

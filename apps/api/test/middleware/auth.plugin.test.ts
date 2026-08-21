@@ -7,7 +7,12 @@ const h = vi.hoisted(() => {
   const redisStore = new Map<string, string>();
   return {
     // Public key the mocked createRemoteJWKSet resolves to; set in beforeAll.
-    keyHolder: { publicKey: undefined as unknown as CryptoKey },
+    // `transportError`, when set, makes the key lookup fail the way an
+    // unreachable JWKS host does — jose surfaces that as a plain TypeError.
+    keyHolder: {
+      publicKey: undefined as unknown as CryptoKey,
+      transportError: undefined as Error | undefined,
+    },
     // DB lookup spy — lets us assert how many times the staff row was queried.
     executeTakeFirst: vi.fn(),
     redisStore,
@@ -58,7 +63,13 @@ vi.mock('../../src/lib/redis.js', () => ({
 // of fetching a remote JWKS.
 vi.mock('jose', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, createRemoteJWKSet: () => async () => h.keyHolder.publicKey };
+  return {
+    ...actual,
+    createRemoteJWKSet: () => async () => {
+      if (h.keyHolder.transportError) throw h.keyHolder.transportError;
+      return h.keyHolder.publicKey;
+    },
+  };
 });
 
 // Imported AFTER mocks are declared.
@@ -125,6 +136,61 @@ describe('auth.plugin', () => {
   beforeEach(() => {
     vi.clearAllMocks(); // clears call counts; mock implementations survive
     h.redisStore.clear();
+    h.keyHolder.transportError = undefined;
+  });
+
+  /**
+   * ── "Could not check" is not "checked and rejected" ────────────────────
+   *
+   * jose fetches the JWKS over the network. When that host was unreachable every
+   * request failed here and was answered 401 INVALID_TOKEN — and the web
+   * middleware acts on a 401 by calling signOut() and redirecting to
+   * /login?error=deactivated. A third-party blip therefore revoked valid
+   * sessions and reported them as deactivated accounts; users who had just
+   * cleared the TOTP challenge were thrown straight back to the login page.
+   *
+   * 503 keeps the request failing closed while leaving the session alone.
+   */
+  describe('an unreachable auth server', () => {
+    test('503 AUTH_UNAVAILABLE when the JWKS host cannot be reached', async () => {
+      h.keyHolder.transportError = Object.assign(new TypeError('fetch failed'), {
+        cause: { code: 'ENOTFOUND' },
+      });
+      h.executeTakeFirst.mockResolvedValue(makeStaffRow());
+
+      const app = await buildTestApp();
+      const res = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: auth(await signToken()),
+      });
+
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error.code).toBe('AUTH_UNAVAILABLE');
+    });
+
+    test('a genuinely bad signature is still 401, not 503', async () => {
+      // Regression guard: the fix must not turn real rejections into outages.
+      const { privateKey: otherKey } = await generateKeyPair('RS256');
+      const foreign = await new SignJWT({})
+        .setProtectedHeader({ alg: 'RS256' })
+        .setSubject(UID)
+        .setIssuer(ISSUER)
+        .setAudience('authenticated')
+        .setExpirationTime('1h')
+        .sign(otherKey);
+      h.executeTakeFirst.mockResolvedValue(makeStaffRow());
+
+      const app = await buildTestApp();
+      const res = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: auth(foreign),
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error.code).toBe('INVALID_TOKEN');
+    });
   });
 
   test('401 NO_TOKEN when Authorization header is missing', async () => {

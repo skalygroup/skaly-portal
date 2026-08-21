@@ -5,7 +5,7 @@
  * handshake (sockets/index.ts) call verifySupabaseToken — the token is verified
  * and the staff row resolved in exactly one place, never reimplemented.
  */
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createRemoteJWKSet, errors as joseErrors, jwtVerify } from 'jose';
 
 import { db } from './db.js';
 import { env } from './env.js';
@@ -29,8 +29,14 @@ export interface AuthUser {
   avatar_url: string | null;
 }
 
-/** Reasons verification fails, mapped by callers onto their transport's errors. */
-export type TokenVerificationCode = 'INVALID_TOKEN' | 'NO_STAFF_ROW';
+/**
+ * Reasons verification fails, mapped by callers onto their transport's errors.
+ *
+ * AUTH_UNAVAILABLE is NOT an authorisation outcome. It means we never got to
+ * judge the token because the auth server was unreachable — callers must answer
+ * 503, never 401. See isAuthUnreachable() for why the distinction is load-bearing.
+ */
+export type TokenVerificationCode = 'INVALID_TOKEN' | 'NO_STAFF_ROW' | 'AUTH_UNAVAILABLE';
 
 export class TokenVerificationError extends Error {
   constructor(
@@ -80,6 +86,34 @@ async function fetchStaffByUid(supabaseUid: string): Promise<AuthUser | undefine
 }
 
 /**
+ * Did verification fail because the token is BAD, or because we never got to
+ * CHECK it?
+ *
+ * Collapsing the two cost us a real incident. jose fetches the JWKS over the
+ * network, so when the Supabase host was unreachable every request failed here
+ * and was reported as INVALID_TOKEN — a 401. The web middleware treats a 401 as
+ * an authorisation decision: it calls signOut() and redirects to
+ * /login?error=deactivated. So a third-party blip DESTROYED valid sessions and
+ * told people their account was deactivated. Users who had just cleared the TOTP
+ * challenge were bounced straight back to the login page.
+ *
+ * "I could not reach the authority" is not "the authority said no". Fail closed
+ * on the request (503, no data served) without ever revoking the session.
+ *
+ * The discriminator: jose raises JOSEError subclasses only once it actually has
+ * the key material and evaluates the token. An unreachable JWKS surfaces as a
+ * plain TypeError('fetch failed'), and a slow one as JWKSTimeout — neither is a
+ * verdict on the token.
+ */
+function isAuthUnreachable(err: unknown): boolean {
+  if (err instanceof joseErrors.JWKSTimeout) return true;
+  // A real verification verdict — bad signature, expired, no matching key.
+  if (err instanceof joseErrors.JOSEError) return false;
+  // Anything else in this block came from the network, not from the token.
+  return true;
+}
+
+/**
  * Verify a Supabase JWT (RS256 via JWKS) and resolve its staff row (Redis-first,
  * DB on miss). Throws TokenVerificationError on a bad signature or a missing
  * staff row. Does NOT enforce `active` — each caller decides how to reject a
@@ -99,6 +133,12 @@ export async function verifySupabaseToken(token: string): Promise<AuthUser> {
     supabaseUid = payload.sub;
   } catch (err) {
     if (err instanceof TokenVerificationError) throw err;
+    if (isAuthUnreachable(err)) {
+      throw new TokenVerificationError(
+        'AUTH_UNAVAILABLE',
+        'Could not reach the auth server to verify this token',
+      );
+    }
     throw new TokenVerificationError('INVALID_TOKEN', 'Invalid or expired token');
   }
 

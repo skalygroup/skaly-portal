@@ -14,6 +14,7 @@ import { AuthCanvasCard } from '@/components/auth/auth-canvas-card';
 import { FormBanner } from '@/components/auth/form-controls';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 import { api, ApiError } from '@/lib/api';
+import { authErrorMessage } from '@/lib/auth-errors';
 import { takeRecoveryNotice } from '@/lib/recovery-notice';
 import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
@@ -155,8 +156,8 @@ export default function MfaSetupPage() {
         }
 
         setPhase('recovery');
-      } catch {
-        setVerifyError('Something went wrong verifying that code. Try again.');
+      } catch (err) {
+        setVerifyError(authErrorMessage(err, 'Something went wrong verifying that code. Try again.'));
         setCode('');
       } finally {
         setVerifying(false);

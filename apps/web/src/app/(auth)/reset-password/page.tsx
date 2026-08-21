@@ -15,6 +15,7 @@ import { AuthCanvasCard } from '@/components/auth/auth-canvas-card';
 import { PasswordField, SubmitButton, FormBanner } from '@/components/auth/form-controls';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 import { api, ApiError } from '@/lib/api';
+import { authErrorMessage } from '@/lib/auth-errors';
 import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
 
@@ -238,8 +239,8 @@ export default function ResetPasswordPage() {
         // Session is now aal2 → the password form can complete updateUser.
         setCode('');
         setView('ready');
-      } catch {
-        setMfaError('Something went wrong verifying that code. Try again.');
+      } catch (err) {
+        setMfaError(authErrorMessage(err, 'Something went wrong verifying that code. Try again.'));
         setCode('');
       } finally {
         setVerifying(false);
