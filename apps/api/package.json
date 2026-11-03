@@ -46,7 +46,7 @@
     "pino": "^9",
     "pino-pretty": "^13",
     "socket.io": "^4",
-    "zod": "^3"
+    "zod": "^4"
   },
   "devDependencies": {
     "@types/node": "^22",
